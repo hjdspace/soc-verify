@@ -48,6 +48,7 @@ export interface EventBridgeAPI {
   onProjectClosed: (callback: (projectId: string) => void) => () => void;
   onSessionEvent: (callback: (data: { sessionId: string; event: unknown }) => void) => () => void;
   onApprovalRequest: (callback: (data: { sessionId: string; requestId: string; toolName: string; args: unknown }) => void) => () => void;
+  onTrustRequest: (callback: (data: { sessionId: string; requestId: string; kind: 'project-extension' | 'mcp-server'; name: string; path?: string }) => void) => () => void;
   onAskRequest: (callback: (data: { sessionId: string; requestId: string; questions: unknown[] }) => void) => () => void;
   onSimulationEvent: (callback: (data: { type: string; record: unknown }) => void) => () => void;
   onErrorAnalysisEvent: (callback: (data: { type: string; [key: string]: unknown }) => void) => () => void;

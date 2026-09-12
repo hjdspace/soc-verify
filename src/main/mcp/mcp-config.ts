@@ -1,13 +1,13 @@
 /**
- * MCP configuration reader/writer.
+ * MCP configuration reader/writer (issue 10: omp → pi 生态对齐).
  *
- * Reads MCP server configs from the same locations the omp engine scans:
+ * Reads MCP server configs from the same locations the pi engine stack scans:
+ *   - User-level:    `~/.pi/agent/mcp.json`（pi-mcp-adapter getAgentPath("mcp.json")）
  *   - Project-level: `<projectRoot>/.mcp.json` or `<projectRoot>/mcp.json`
- *   - User-level:    `~/.omp/mcp.json`
  *
- * The omp engine's `mcp-json` discovery provider loads these files and
- * transforms them into canonical MCPServer objects. We mirror that logic here
- * so the settings UI can display configured servers without starting a session.
+ * Legacy note: pre-pi builds stored user-level config at `~/.omp/mcp.json`.
+ * A best-effort one-time migration moves it to the new location on first
+ * read (see migrateLegacyUserConfig).
  */
 
 import { homedir } from 'node:os';
@@ -23,13 +23,39 @@ import type {
   McpTransportType,
 } from '@shared/types';
 
-/** Schema URL for .mcp.json validation (matches omp's MCP_CONFIG_SCHEMA_URL). */
-const MCP_SCHEMA_URL =
-  'https://raw.githubusercontent.com/can1357/oh-my-pi/main/packages/coding-agent/src/config/mcp-schema.json';
-
-/** User-level MCP config path: ~/.omp/mcp.json */
+/** User-level MCP config path: ~/.pi/agent/mcp.json (pi ecosystem standard). */
 function userMcpConfigPath(): string {
+  return join(homedir(), '.pi', 'agent', 'mcp.json');
+}
+
+/** Legacy omp-era user config path, migrated once on first read. */
+function legacyOmpConfigPath(): string {
   return join(homedir(), '.omp', 'mcp.json');
+}
+
+/**
+ * One-time best-effort migration: copy the legacy ~/.omp/mcp.json to
+ * ~/.pi/agent/mcp.json when the latter does not exist yet. Never throws —
+ * a failed migration only means built-in servers get re-registered fresh.
+ */
+async function migrateLegacyUserConfig(): Promise<void> {
+  try {
+    const newPath = userMcpConfigPath();
+    const oldPath = legacyOmpConfigPath();
+    if (existsSync(newPath) || !existsSync(oldPath)) return;
+    const raw = await readFile(oldPath, 'utf-8');
+    // Validate before copying — don't migrate garbage.
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof parsed !== 'object' || parsed === null) return;
+    await mkdir(join(newPath, '..'), { recursive: true });
+    await writeFile(newPath, raw, 'utf-8');
+    console.log('[mcp-config] migrated legacy user MCP config: ~/.omp/mcp.json -> ~/.pi/agent/mcp.json');
+  } catch (err) {
+    console.warn(
+      '[mcp-config] legacy user MCP config migration skipped:',
+      err instanceof Error ? err.message : String(err),
+    );
+  }
 }
 
 /** Candidate project-level MCP config paths: .mcp.json, mcp.json */
@@ -147,6 +173,7 @@ export async function listMcpServers(
   statusMap?: McpStatusMap,
   scope?: 'user' | 'project',
 ): Promise<McpServerInfo[]> {
+  await migrateLegacyUserConfig();
   const merged = new Map<string, { config: McpServerConfig; source: McpConfigSource }>();
   let disabledSet = new Set<string>();
 
@@ -232,7 +259,7 @@ export async function listMcpServers(
 /**
  * Read the MCP config file for a project.
  *
- * @param scope  'user' → read ~/.omp/mcp.json (cross-project, personal)
+ * @param scope  'user' → read ~/.pi/agent/mcp.json (cross-project, personal)
  *               'project' → read <root>/.mcp.json (team-shared, git-tracked)
  *               Defaults to 'user'.
  */
@@ -241,6 +268,7 @@ export async function getMcpConfig(
   scope: 'user' | 'project' = 'user',
 ): Promise<McpConfigFile> {
   if (scope === 'user') {
+    await migrateLegacyUserConfig();
     return readConfigFile(userMcpConfigPath());
   }
   // Project scope: try .mcp.json then mcp.json, then legacy path
@@ -261,7 +289,7 @@ export async function getMcpConfig(
 /**
  * Write the MCP config to the appropriate file based on scope.
  *
- * @param scope  'user' → write ~/.omp/mcp.json (default; personal, not in git)
+ * @param scope  'user' → write ~/.pi/agent/mcp.json (default; personal, not in git)
  *               'project' → write <root>/.mcp.json (team-shared, git-tracked)
  */
 export async function setMcpConfig(
@@ -270,14 +298,10 @@ export async function setMcpConfig(
   scope: 'user' | 'project' = 'user',
 ): Promise<void> {
   const configPath = scope === 'user' ? userMcpConfigPath() : join(projectRoot, '.mcp.json');
-  const configWithSchema: McpConfigFile = {
-    $schema: MCP_SCHEMA_URL,
-    ...config,
-  };
-  // Ensure the target directory exists (~/.omp for user scope)
+  // Ensure the target directory exists (~/.pi/agent for user scope)
   const dir = join(configPath, '..');
   await mkdir(dir, { recursive: true });
-  await writeFile(configPath, JSON.stringify(configWithSchema, null, 2) + '\n', 'utf-8');
+  await writeFile(configPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
 }
 
 /**
@@ -312,7 +336,7 @@ function isStaleBuiltinConfig(existing: McpServerConfig): boolean {
 
 /**
  * Ensure built-in MCP servers (like TraceWeave) are registered in the
- * user-level MCP config (`~/.omp/mcp.json`).
+ * user-level MCP config (`~/.pi/agent/mcp.json`).
  *
  * This merges built-in server configs into the existing user-level config
  * without removing or overriding user-configured servers. If a built-in
@@ -332,6 +356,7 @@ export async function ensureBuiltinMcpServers(
 ): Promise<boolean> {
   if (builtinServers.length === 0) return false;
 
+  await migrateLegacyUserConfig();
   const configPath = userMcpConfigPath();
   const existing = await readConfigFile(configPath);
   const servers = existing.mcpServers ?? {};

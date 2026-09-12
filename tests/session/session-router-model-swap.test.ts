@@ -22,6 +22,8 @@ const {
   sessionManagerMock: {
     getSession: vi.fn(),
     getOmpSessionId: vi.fn((): string | undefined => undefined),
+    getEngineSessionId: vi.fn((): string | undefined => undefined),
+    getEngine: vi.fn((): 'omp' | 'pi' => 'omp'),
     destroySession: vi.fn(async () => {}),
     touchActivity: vi.fn(),
     promptFireAndForget: vi.fn(async () => {}),
@@ -93,6 +95,9 @@ vi.mock('../../src/main/agent/session-persistence', () => ({
   updateSessionModel: vi.fn(async () => {}),
   updateSessionActivity: vi.fn(async () => {}),
   updateSessionContextUsage: vi.fn(async () => {}),
+  updateSessionEngineId: vi.fn(async () => {}),
+  // issue 07: restore/swap 的 cwd 可访问性门控 —— 默认放行
+  isCwdAccessible: vi.fn(() => true),
 }));
 
 vi.mock('../../src/main/agent/skill-discovery', () => ({

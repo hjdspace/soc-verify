@@ -953,6 +953,18 @@ export const useSessionMessagesStore = create<SessionMessagesState>(() => ({
               tokenHistory: prev?.tokenHistory ?? [],
               startedAt: prev?.startedAt ?? Date.now(),
               endedAt: status !== 'running' ? Date.now() : undefined,
+              // issue 05：父子归属 / run 产物目录 / 阻断原因 / Token 用量（终态帧携带）
+              parentSessionId:
+                typeof p.parentSessionId === 'string' ? p.parentSessionId : prev?.parentSessionId,
+              runDir: typeof p.runDir === 'string' ? p.runDir : prev?.runDir,
+              blockedReason:
+                status !== 'running' && typeof p.blockedReason === 'string'
+                  ? p.blockedReason
+                  : prev?.blockedReason,
+              usage:
+                status !== 'running' && p.usage && typeof p.usage === 'object'
+                  ? (p.usage as SubagentActivity['usage'])
+                  : prev?.usage,
             };
             return { ...sess, subagents: { ...sess.subagents, [id]: next } };
           }
@@ -1066,7 +1078,10 @@ export const useSessionMessagesStore = create<SessionMessagesState>(() => ({
                   return {
                     ...m,
                     isStreaming: false,
-                    content: errMsg ? `[错误] ${errMsg}` : (endText || m.content),
+                    // 错误不立即渲染（避免重试期间错误卡片一闪而过）：
+                    // 挂起到 pendingError，由随后的 agent_end 决定展示或丢弃
+                    content: endText || m.content,
+                    pendingError: errMsg ?? undefined,
                     thinking: endThinking || m.thinking,
                   };
                 });
@@ -1165,14 +1180,33 @@ export const useSessionMessagesStore = create<SessionMessagesState>(() => ({
           case 'agent_start':
             return { ...sess, status: 'streaming' };
 
-          case 'agent_end':
+          case 'agent_end': {
+            // 引擎已排程会话级自动重试（willContinue）：丢弃挂起错误的本次尝试消息，
+            // 错误卡片完全不出现（不是隐藏），等重试预算耗尽后的最终 agent_end 定稿展示。
+            // 重试等待期保持 streaming，中止路径会本地复位 idle。
+            if (evt.willContinue === true) {
+              let messages = sess.messages;
+              while (
+                messages.length > 0 &&
+                messages[messages.length - 1].role === 'assistant' &&
+                messages[messages.length - 1].pendingError
+              ) {
+                messages = messages.slice(0, -1);
+              }
+              return { ...sess, status: 'streaming', messages };
+            }
+            // 回合真正结束：把挂起错误定稿为错误卡片（无挂起错误则无变化）
             return {
               ...sess,
               status: 'idle',
-              messages: sess.messages.map((m) =>
-                m.isStreaming ? { ...m, isStreaming: false } : m,
-              ),
+              messages: sess.messages.map((m) => {
+                const next = m.isStreaming ? { ...m, isStreaming: false } : m;
+                return next.pendingError
+                  ? { ...next, content: `[错误] ${next.pendingError}`, pendingError: undefined }
+                  : next;
+              }),
             };
+          }
 
           case 'notice': {
             const rawNoticeText = (evt.message as string) || (evt.text as string);

@@ -36,6 +36,24 @@ const pendingSessionEvents = new Map<string, unknown[]>();
 const messageLoadInflight = new Map<string, Promise<void>>();
 
 /**
+ * 读取用户上次选择的审批模式（localStorage 偏好）。
+ * createSession 与恢复会话（restoreSessions/loadHistorySession）共用，
+ * 保证恢复 entry 不缺 approvalMode —— 缺失时 runner 侧回退 always-ask，
+ * 而 UI 显示回退 yolo，会出现"完全信任下仍弹审批"的不一致（bug 修复）。
+ */
+function readStoredApprovalMode(): ApprovalMode | undefined {
+  try {
+    const saved = localStorage.getItem(APPROVAL_MODE_STORAGE_KEY);
+    if (saved === 'always-ask' || saved === 'write' || saved === 'yolo') {
+      return saved;
+    }
+  } catch {
+    // localStorage might be unavailable — ignore
+  }
+  return undefined;
+}
+
+/**
  * 为恢复的会话 tab 惰性加载持久化消息。
  * messagesUnloaded 标记的会话在首次可见时调用；带去重防并发重复拉取。
  * 加载完成后清标记（无论文件是否存在——空文件表示该会话本就无消息）。
@@ -97,7 +115,13 @@ export function readContextUsage(value: unknown, fallback: ContextUsage): Contex
   const percent = typeof usage.percent === 'number'
     ? usage.percent
     : usage.contextWindow > 0 ? (usage.tokens / usage.contextWindow) * 100 : 0;
-  return { tokens: usage.tokens, contextWindow: usage.contextWindow, percent };
+  // approximate：runner 估算值（pi 原生用量未知时）标记，UI 据此展示「近似」
+  return {
+    tokens: usage.tokens,
+    contextWindow: usage.contextWindow,
+    percent,
+    ...(usage.approximate === true ? { approximate: true } : {}),
+  };
 }
 
 export function readContextBreakdown(value: unknown, fallback?: ContextBreakdown): ContextBreakdown | undefined {
@@ -189,6 +213,11 @@ export interface SessionCoreState {
   fetchHistorySessions: (projectId: string) => Promise<void>;
   loadHistorySession: (historySession: HistorySession, projectId: string, cwd: string) => Promise<void>;
   deleteHistorySession: (sessionId: string, projectId: string) => Promise<void>;
+  /**
+   * issue 07：为 transcript-only 会话显式重绑工作目录并重建运行时会话。
+   * 成功后清除 transcriptOnlyCwd 并返回新的 runtime session id。
+   */
+  rebindSessionCwd: (sessionId: string, newCwd: string) => Promise<string>;
 }
 
 // ─── cwd changed 监听器 ───────────────────────────────────
@@ -365,15 +394,7 @@ export const useSessionCoreStore = create<SessionCoreState>((set, get) => ({
   createSession: async (projectId, cwd) => {
     const sessionId = `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const lastModel = get().lastModel;
-    let storedApprovalMode: ApprovalMode | undefined;
-    try {
-      const saved = localStorage.getItem(APPROVAL_MODE_STORAGE_KEY);
-      if (saved === 'always-ask' || saved === 'write' || saved === 'yolo') {
-        storedApprovalMode = saved;
-      }
-    } catch {
-      // Corrupted localStorage — ignore
-    }
+    const storedApprovalMode = readStoredApprovalMode();
     let storedThinkingLevel: ThinkingLevelSetting | undefined;
     try {
       const saved = localStorage.getItem(THINKING_LEVEL_STORAGE_KEY);
@@ -497,6 +518,21 @@ export const useSessionCoreStore = create<SessionCoreState>((set, get) => ({
           approvalMode: latest.approvalMode,
           thinkingLevel: latest.thinkingLevel,
         });
+
+      // issue 07：持久化 cwd 不可访问 —— 后端拒绝创建运行时会话，只能查看
+      // transcript。标记会话并在发送时给出明确指引（用户 rebind 后恢复）。
+      if (result.sessionId === null) {
+        const degradedCwd = (result as { degraded?: { cwd?: string } }).degraded?.cwd ?? cwd;
+        set((s) => ({
+          sessions: s.sessions.map((sess) =>
+            sess.id === latest.id ? { ...sess, transcriptOnlyCwd: degradedCwd } : sess,
+          ),
+        }));
+        throw new Error(
+          `会话原工作目录（${degradedCwd}）已不可访问，当前仅可查看历史记录。` +
+          '请选择新的工作目录（重新绑定）后才能继续对话。',
+        );
+      }
 
       const runtimeSessionId = result.sessionId;
       const persistedSessionId = latest.persistedSessionId ?? runtimeSessionId;
@@ -794,6 +830,9 @@ export const useSessionCoreStore = create<SessionCoreState>((set, get) => ({
         composer: emptyComposer(),
         createdAt: p.createdAt,
         model: p.model,
+        // 审批模式：持久化值优先，localStorage 偏好兜底（旧 sessions.json 无此字段），
+        // 最后回退 yolo —— 与 UI 显示回退语义一致，避免 runtime 实际为 always-ask
+        approvalMode: p.approvalMode ?? readStoredApprovalMode() ?? 'yolo',
         contextUsage: p.contextUsage ?? emptyContextUsage(),
         contextBreakdown: p.contextBreakdown,
       }));
@@ -869,6 +908,8 @@ export const useSessionCoreStore = create<SessionCoreState>((set, get) => ({
           composer: emptyComposer(),
           createdAt: historySession.createdAt,
           model: historySession.model,
+          // 与 restoreSessions 同一兜底链，防止恢复会话 runtime 实际为 always-ask
+          approvalMode: historySession.approvalMode ?? readStoredApprovalMode() ?? 'yolo',
           contextUsage: historySession.contextUsage ?? emptyContextUsage(),
           contextBreakdown: historySession.contextBreakdown,
         };
@@ -911,6 +952,51 @@ export const useSessionCoreStore = create<SessionCoreState>((set, get) => ({
       useToastStore.getState().success('历史会话已删除');
     } catch (err) {
       useToastStore.getState().error('删除历史会话失败', tRPCError(err));
+    }
+  },
+
+  // ─── issue 07：显式重绑工作目录（transcript-only 会话恢复入口） ──
+
+  rebindSessionCwd: async (sessionId, newCwd) => {
+    const session = get().sessions.find((s) => sessionMatchesId(s, sessionId));
+    if (!session?.persistedSessionId) {
+      throw new Error(`Session not found or has no persisted record: ${sessionId}`);
+    }
+    // 后端 rebindCwd 会销毁旧运行时会话归属并重建；本地运行时句柄先失效
+    const runtimeSessionId = session.runtimeSessionId;
+    if (runtimeSessionId) {
+      void trpc.session.destroy.mutate({ sessionId: runtimeSessionId }).catch(() => {});
+    }
+    set((s) => ({
+      sessions: s.sessions.map((sess) =>
+        sessionMatchesId(sess, sessionId) ? { ...sess, runtimeSessionId: undefined } : sess,
+      ),
+    }));
+
+    try {
+      const result = await trpc.session.rebindCwd.mutate({
+        projectId: session.projectId,
+        sessionId: session.persistedSessionId,
+        newCwd,
+      });
+      set((s) => ({
+        sessions: s.sessions.map((sess) =>
+          sessionMatchesId(sess, sessionId)
+            ? {
+              ...sess,
+              runtimeSessionId: result.sessionId,
+              cwd: newCwd,
+              transcriptOnlyCwd: undefined,
+              model: result.model ?? sess.model,
+            }
+            : sess,
+        ),
+      }));
+      useToastStore.getState().success('工作目录已重新绑定，可以继续对话');
+      return result.sessionId;
+    } catch (err) {
+      useToastStore.getState().error('重新绑定工作目录失败', tRPCError(err));
+      throw err;
     }
   },
 }));

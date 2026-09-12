@@ -19,7 +19,7 @@ interface SettingsStoreState {
   skillInstallInfo: SkillInstallInfo | null;
   mcpServers: McpServerInfo[];
   mcpConfig: McpConfigFile | null;
-  /** Which scope is being edited: 'user' (~/.omp/mcp.json) or 'project' (<root>/.mcp.json). */
+  /** Which scope is being edited: 'user' (~/.pi/agent/mcp.json) or 'project' (<root>/.mcp.json). */
   mcpEditScope: 'user' | 'project';
   /** Tools per MCP server name — populated on demand when a server row is expanded. */
   mcpToolsByServer: Record<string, McpToolInfo[]>;

@@ -2,21 +2,14 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import type { AskAnswer } from '@shared/ask-types';
 
 // ─── Mock path resolvers and heavy dependencies ────────────────────
-// createSession() calls resolveAgentRuntime(), which checks for the
-// runner binary or Bun + engine submodule. In the test environment these
-// are not available, so we mock the resolver to return a fake runtime.
+// issue 10：omp runtime 解析器已删除 —— paths 模块只导出 pi runner 解析。
+// 这里刻意不提供 resolveAgentRuntime 等旧导出：若 session-manager 重新
+// 引用它们，mock 会以 undefined 暴露问题。
 
 vi.mock('../../src/main/agent/paths', () => ({
-  resolveAgentRuntime: vi.fn(() => ({
-    mode: 'binary' as const,
-    runnerPath: '/fake/runner',
-    bunVersionOk: true,
-  })),
-  resolveRunnerBinary: vi.fn(() => '/fake/runner'),
-  resolveRunnerScript: vi.fn(() => null),
-  resolveBunPath: vi.fn(() => null),
+  resolvePiRunnerScript: vi.fn(() => '/fake/pi-runner/index.ts'),
+  resolvePiSessionScanScript: vi.fn(() => '/fake/pi-runner/session-scan.ts'),
   resolveBuiltInExtensionDir: vi.fn(() => null),
-  checkBunVersion: vi.fn(() => ({ ok: true, version: '1.3.14', required: '1.3.14' })),
 }));
 
 vi.mock('../../src/main/agent/officecli-paths', () => ({
@@ -37,7 +30,7 @@ vi.mock('../../src/main/agent/context-settings', () => ({
   },
 }));
 
-// Mock AgentClient — it would otherwise spawn a child process
+// Mock PiAgentClient — it would otherwise spawn a child process
 const { MockAgentClient } = vi.hoisted(() => {
   const { EventEmitter } = require('node:events') as typeof import('node:events');
 
@@ -45,7 +38,7 @@ const { MockAgentClient } = vi.hoisted(() => {
     started = false;
     stopped = false;
     destroyed = false;
-    initResult = { sessionId: 'omp-session-test' };
+    initResult = { engineSessionId: 'omp-session-test' };
     eventListeners: Array<(event: unknown) => void> = [];
     toolCallHandler: unknown = null;
     approvalHandler: unknown = null;
@@ -61,10 +54,16 @@ const { MockAgentClient } = vi.hoisted(() => {
 
     setToolCallHandler(handler: unknown) { this.toolCallHandler = handler; }
     setApprovalHandler(handler: unknown) { this.approvalHandler = handler; }
+    trustHandler: unknown = null;
+    lastTrustResponse: { requestId: string; approved: boolean } | null = null;
+    setTrustHandler(handler: unknown) { this.trustHandler = handler; }
+    sendTrustResponse(requestId: string, approved: boolean) { this.lastTrustResponse = { requestId, approved }; }
     onEvent(listener: (event: unknown) => void) { this.eventListeners.push(listener); }
 
     async start() { this.started = true; }
-    async init(_config: unknown) { return this.initResult; }
+    async init(config: unknown) { this.lastInitConfig = config; return this.initResult; }
+    /** Captures the init config so tests can assert on runner instructions. */
+    lastInitConfig: unknown = undefined;
     async prompt(message: string, images?: unknown) { this.lastPrompt = message; this.lastImages = images; }
     async abort() { this.stop(); }
     async steer(_message: string) {}
@@ -83,9 +82,8 @@ const { MockAgentClient } = vi.hoisted(() => {
   return { MockAgentClient };
 });
 
-vi.mock('../../src/main/agent/agent-client', () => ({
-  AgentClient: MockAgentClient,
-  ToolCallHandler: {},
+vi.mock('../../src/main/agent/pi-agent-client', () => ({
+  PiAgentClient: MockAgentClient,
 }));
 
 // Mock HostToolsRegistry and HostUriRouter (they do real file system operations)
@@ -408,7 +406,7 @@ describe('SessionManager — ask tool routing', () => {
     manager.on('askRequest', (data) => askEvents.push(data));
 
     // Invoke the tool call handler for 'ask'
-    const handler = entry.client['toolCallHandler'] as (toolName: string, args: unknown) => Promise<unknown>;
+    const handler = (entry.client as unknown as Record<string, unknown>)['toolCallHandler'] as (toolName: string, args: unknown) => Promise<unknown>;
 
     // The handler is set on the client — we need to access it through the client
     // Since MockAgentClient stores it, we can invoke it directly
@@ -458,7 +456,7 @@ describe('SessionManager — ask tool routing', () => {
     const id = await createTestSession(manager);
     const entry = manager.getSession(id)!;
 
-    const handler = entry.client['toolCallHandler'] as (toolName: string, args: unknown) => Promise<unknown>;
+    const handler = (entry.client as unknown as Record<string, unknown>)['toolCallHandler'] as (toolName: string, args: unknown) => Promise<unknown>;
 
     const result = await handler('ask', { questions: [] });
 
@@ -471,7 +469,7 @@ describe('SessionManager — ask tool routing', () => {
     const id = await createTestSession(manager);
     const entry = manager.getSession(id)!;
 
-    const handler = entry.client['toolCallHandler'] as (toolName: string, args: unknown) => Promise<unknown>;
+    const handler = (entry.client as unknown as Record<string, unknown>)['toolCallHandler'] as (toolName: string, args: unknown) => Promise<unknown>;
 
     const result = await handler('ask', { questions: 'not an array' });
 
@@ -487,7 +485,7 @@ describe('SessionManager — ask tool routing', () => {
     const askEvents: unknown[] = [];
     manager.on('askRequest', (data) => askEvents.push(data));
 
-    const handler = entry.client['toolCallHandler'] as (toolName: string, args: unknown) => Promise<unknown>;
+    const handler = (entry.client as unknown as Record<string, unknown>)['toolCallHandler'] as (toolName: string, args: unknown) => Promise<unknown>;
 
     const askPromise = handler('ask', {
       questions: [{
@@ -536,7 +534,7 @@ describe('SessionManager — approval routing', () => {
     manager.on('approvalRequest', (data) => approvalEvents.push(data));
 
     // Invoke the approval handler (set on MockAgentClient)
-    const approvalHandler = entry.client['approvalHandler'] as (
+    const approvalHandler = (entry.client as unknown as Record<string, unknown>)['approvalHandler'] as (
       requestId: string,
       toolName: string,
       args: unknown,
@@ -587,7 +585,7 @@ describe('SessionManager — session events', () => {
     manager.on('sessionEvent', (data) => events.push(data));
 
     // Simulate the agent emitting an event
-    const eventListener = entry.client['eventListeners'] as Array<(event: unknown) => void>;
+    const eventListener = (entry.client as unknown as Record<string, unknown>)['eventListeners'] as Array<(event: unknown) => void>;
     eventListener[0]({ type: 'message_start', message: { role: 'assistant' } });
 
     expect(events).toHaveLength(1);
@@ -604,7 +602,7 @@ describe('SessionManager — session events', () => {
     // Before agent_start, session is not active
     expect(manager.getSession(id)?.isActive).toBe(false);
 
-    const eventListener = entry.client['eventListeners'] as Array<(event: unknown) => void>;
+    const eventListener = (entry.client as unknown as Record<string, unknown>)['eventListeners'] as Array<(event: unknown) => void>;
     eventListener[0]({ type: 'agent_start' });
 
     expect(manager.getSession(id)?.isActive).toBe(true);
@@ -617,7 +615,7 @@ describe('SessionManager — session events', () => {
     // Set active first
     manager['setActive'](id, true);
 
-    const eventListener = entry.client['eventListeners'] as Array<(event: unknown) => void>;
+    const eventListener = (entry.client as unknown as Record<string, unknown>)['eventListeners'] as Array<(event: unknown) => void>;
     eventListener[0]({ type: 'agent_end' });
 
     expect(manager.getSession(id)?.isActive).toBe(false);
@@ -761,5 +759,48 @@ describe('SessionManager — credential tracking for holistic-swap no-op detecti
     // Same providerId but a rotated API key must produce a different
     // fingerprint so setModel still performs a real destroy/recreate.
     expect(before).not.toBe(after);
+  });
+});
+
+// ─── issue 07：pi 引擎 agentDir 解耦（原生 session 归用户级目录） ───
+
+describe('SessionManager — pi engine agentDir decoupling (issue 07)', () => {
+  let manager: InstanceType<typeof SessionManagerImpl>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    manager = new SessionManagerImpl(60_000);
+  });
+
+  afterEach(async () => {
+    await manager.destroyAll();
+  });
+
+  async function createPiSession(): Promise<{ id: string; client: InstanceType<typeof MockAgentClient> }> {
+    const id = await manager.createSession({
+      projectId: 'proj_pi',
+      cwd: '/tmp/proj-dv',
+      provider: 'socverify-openai-compatible',
+      model: 'glm-5',
+      apiKey: 'sk-pi',
+      baseUrl: 'http://llm.local/v1',
+      enableMCP: false,
+    });
+    const client = manager.getClient(id) as unknown as InstanceType<typeof MockAgentClient>;
+    return { id, client };
+  }
+
+  it('pi 会话不设置 PI_CODING_AGENT_DIR（原生 session 落在用户级 canonical bucket）', async () => {
+    const { client } = await createPiSession();
+
+    expect(client.capturedEnv?.PI_CODING_AGENT_DIR).toBeUndefined();
+  });
+
+  it('pi 会话通过 initConfig.modelsPath 获得独立 models.json（模型配置隔离保留）', async () => {
+    const { client } = await createPiSession();
+
+    const initConfig = client.lastInitConfig as { modelsPath?: string };
+    expect(initConfig.modelsPath).toBeDefined();
+    expect(initConfig.modelsPath).toContain('models.json');
   });
 });

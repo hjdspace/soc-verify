@@ -18,6 +18,7 @@ import { THINKING_LEVEL_OPTIONS, thinkingLevelLabel } from '@shared/types';
 import { PluginViewHost } from '@renderer/components/plugins/PluginViewHost';
 import { ContextUsageIndicator } from '@renderer/components/chat/ContextUsageIndicator';
 import { ApprovalCard } from '@renderer/components/chat/ApprovalCard';
+import { TrustCard } from '@renderer/components/chat/TrustCard';
 import { AskQuestionCard } from '@renderer/components/chat/AskQuestionCard';
 import { TodoPanel } from '@renderer/components/chat/TodoPanel';
 import { ChangeSummaryBar } from '@renderer/components/chat/ChangeSummaryBar';
@@ -140,6 +141,8 @@ const setThinkingLevel = useSessionCoreStore((s) => s.setThinkingLevel);
 const setApprovalMode = useSessionApprovalStore((s) => s.setApprovalMode);
 const resolveApproval = useSessionApprovalStore((s) => s.resolveApproval);
 const approvalRequests = useSessionApprovalStore((s) => s.approvalRequests);
+const trustRequests = useSessionApprovalStore((s) => s.trustRequests);
+const resolveTrust = useSessionApprovalStore((s) => s.resolveTrust);
 const askRequests = useSessionApprovalStore((s) => s.askRequests);
 const resolveAsk = useSessionApprovalStore((s) => s.resolveAsk);
 
@@ -821,6 +824,19 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
                   key={req.requestId}
                   request={req}
                   onResolve={resolveApproval}
+                />
+              ))}
+            {/* Trust request cards（issue 04：extension/MCP 信任确认） */}
+            {trustRequests
+              .filter((req) => {
+                const sess = currentSession;
+                return sess && (sess.id === req.sessionId || sess.runtimeSessionId === req.sessionId || sess.persistedSessionId === req.sessionId);
+              })
+              .map((req) => (
+                <TrustCard
+                  key={req.requestId}
+                  request={req}
+                  onResolve={resolveTrust}
                 />
               ))}
             {/* Ask question cards */}

@@ -179,7 +179,7 @@ describe('normalizeApiFormat', () => {
 });
 
 describe('reasoning / thinking capability declaration', () => {
-  it('declares thinking efforts for a reasoning model so omp honors thinking levels', () => {
+  it('declares reasoning flag without omp-era thinking block for a reasoning model (pi consumes models.json now)', () => {
     const config = buildOpenAICompatibleModelsWithPerModelContext({
       baseUrl: 'https://gateway.example/v1',
       models: [{ id: 'glm-5.3', name: 'GLM-5.3', contextWindow: 128000, reasoning: true }],
@@ -188,13 +188,10 @@ describe('reasoning / thinking capability declaration', () => {
 
     const model = config.providers['socverify-openai-compatible'].models[0];
     expect(model.reasoning).toBe(true);
-    expect(model.thinking).toEqual({
-      mode: 'effort',
-      efforts: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
-    });
+    expect(Object.keys(model)).not.toContain('thinking');
   });
 
-  it('declares reasoning_content replay compat for a reasoning model (deepseek-style thinking-mode validation)', () => {
+  it('declares pi compat with reasoning_content replay for a reasoning model (deepseek-style thinking-mode validation)', () => {
     const config = buildOpenAICompatibleModelsWithPerModelContext({
       baseUrl: 'https://gateway.example/v1',
       models: [{ id: 'deepseek-v4-flash', name: 'deepseek-v4-flash', contextWindow: 128000, reasoning: true }],
@@ -203,13 +200,15 @@ describe('reasoning / thinking capability declaration', () => {
 
     const model = config.providers['socverify-openai-compatible'].models[0];
     expect(model.compat).toEqual({
-      reasoningContentField: 'reasoning_content',
-      requiresReasoningContentForToolCalls: true,
-      allowsSyntheticReasoningContentForToolCalls: false,
+      maxTokensField: 'max_tokens',
+      supportsStore: false,
+      supportsDeveloperRole: false,
+      supportsStrictMode: false,
+      requiresReasoningContentOnAssistantMessages: true,
     });
   });
 
-  it('omits compat for a non-reasoning model (no thinking-mode replay field on the wire)', () => {
+  it('declares conservative pi compat for a non-reasoning model too (classic chat/completions params only)', () => {
     const config = buildOpenAICompatibleModelsWithPerModelContext({
       baseUrl: 'https://gateway.example/v1',
       models: [{ id: 'chat-model', name: 'chat-model', contextWindow: 128000 }],
@@ -217,7 +216,13 @@ describe('reasoning / thinking capability declaration', () => {
     });
 
     const model = config.providers['socverify-openai-compatible'].models[0];
-    expect(model.compat).toBeUndefined();
+    expect(model.compat).toEqual({
+      maxTokensField: 'max_tokens',
+      supportsStore: false,
+      supportsDeveloperRole: false,
+      supportsStrictMode: false,
+    });
+    expect(model.compat).not.toHaveProperty('requiresReasoningContentOnAssistantMessages');
   });
 
   it('declares non-reasoning explicitly and omits thinking for a plain model', () => {
@@ -229,7 +234,7 @@ describe('reasoning / thinking capability declaration', () => {
 
     const model = config.providers['socverify-openai-compatible'].models[0];
     expect(model.reasoning).toBe(false);
-    expect(model.thinking).toBeUndefined();
+    expect(Object.keys(model)).not.toContain('thinking');
   });
 
   it('treats an unmarked model as non-reasoning in the single-model variant too', () => {
@@ -242,7 +247,7 @@ describe('reasoning / thinking capability declaration', () => {
 
     const model = config.providers['socverify-openai-compatible'].models[0];
     expect(model.reasoning).toBe(false);
-    expect(model.thinking).toBeUndefined();
+    expect(Object.keys(model)).not.toContain('thinking');
   });
 
   it('propagates the reasoning flag per model when several models are configured', () => {

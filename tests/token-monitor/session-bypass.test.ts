@@ -16,6 +16,7 @@ vi.mock('../../src/main/agent/paths', () => ({
     runnerPath: '/fake/runner',
     bunVersionOk: true,
   })),
+  resolvePiRunnerScript: vi.fn(() => '/fake/pi-runner/index.ts'),
   resolveRunnerBinary: vi.fn(() => '/fake/runner'),
   resolveRunnerScript: vi.fn(() => null),
   resolveBunPath: vi.fn(() => null),
@@ -50,7 +51,8 @@ const { MockAgentClient } = vi.hoisted(() => {
     started = false;
     stopped = false;
     destroyed = false;
-    initResult = { sessionId: 'omp-session-test' };
+    engine = 'omp' as const;
+    initResult = { engineSessionId: 'omp-session-test' };
     eventListeners: Array<(event: unknown) => void> = [];
     toolCallHandler: unknown = null;
     approvalHandler: unknown = null;
@@ -64,6 +66,9 @@ const { MockAgentClient } = vi.hoisted(() => {
 
     setToolCallHandler(handler: unknown) { this.toolCallHandler = handler; }
     setApprovalHandler(handler: unknown) { this.approvalHandler = handler; }
+    // issue 04：信任确认 handler（本测试不触发信任流，仅需可装配）
+    setTrustHandler(handler: unknown) { this.trustHandler = handler; }
+    trustHandler: unknown = null;
     onEvent(listener: (event: unknown) => void) { this.eventListeners.push(listener); }
 
     async start() { this.started = true; }
@@ -184,7 +189,7 @@ describe('SessionManager — token monitor bypass', () => {
       },
     };
 
-    const eventListener = entry.client['eventListeners'] as Array<(event: unknown) => void>;
+    const eventListener = (entry.client as unknown as Record<string, unknown>)['eventListeners'] as Array<(event: unknown) => void>;
     eventListener[0](messageEndEvent);
 
     // Verify recordUsageFromEvent was called
@@ -211,7 +216,7 @@ describe('SessionManager — token monitor bypass', () => {
     const entry = manager.getSession(id)!;
 
     // Simulate a non-message_end event
-    const eventListener = entry.client['eventListeners'] as Array<(event: unknown) => void>;
+    const eventListener = (entry.client as unknown as Record<string, unknown>)['eventListeners'] as Array<(event: unknown) => void>;
     eventListener[0]({ type: 'agent_start' });
     eventListener[0]({ type: 'message_update', message: { role: 'assistant' } });
 
@@ -249,7 +254,7 @@ describe('SessionManager — token monitor bypass', () => {
       },
     };
 
-    const eventListener = entry.client['eventListeners'] as Array<(event: unknown) => void>;
+    const eventListener = (entry.client as unknown as Record<string, unknown>)['eventListeners'] as Array<(event: unknown) => void>;
     eventListener[0](messageEndEvent);
 
     // Event should still be forwarded

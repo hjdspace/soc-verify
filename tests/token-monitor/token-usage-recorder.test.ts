@@ -294,3 +294,92 @@ describe('TokenUsageRecorder — 写入失败不抛出异常', () => {
     }).not.toThrow();
   });
 });
+
+// ─── Subagent 父子 Token 归属（issue 05）──────────────────
+
+import {
+  extractSubagentUsageFromEvent,
+  recordSubagentUsageFromEvent,
+} from '../../src/main/token-monitor/token-usage-recorder';
+
+function makeSubagentLifecycleEvent(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    type: 'subagent_lifecycle',
+    payload: {
+      id: 'run-abc',
+      status: 'completed',
+      agent: 'coverage-analyzer',
+      parentSessionId: 'pi-session-0001',
+      usage: {
+        input: 1000,
+        output: 500,
+        cacheRead: 200,
+        cacheWrite: 100,
+        costUsd: 0.038,
+        turns: 3,
+        toolCalls: 7,
+        durationMs: 12000,
+      },
+      ...((overrides.payload as Record<string, unknown>) ?? {}),
+    },
+    ...overrides,
+  };
+}
+
+describe('TokenUsageRecorder — subagent 终态 usage 提取（父子归属）', () => {
+  it('completed 终态提取 usage，messageId 编码 subagent runId（父子关联不丢失）', () => {
+    const ctx = makeContext();
+    const record = extractSubagentUsageFromEvent(makeSubagentLifecycleEvent(), ctx)!;
+
+    expect(record).not.toBeNull();
+    expect(record.engine).toBe(ctx.engine);
+    expect(record.sessionId).toBe(ctx.sessionId);
+    expect(record.messageId).toBe('subagent:run-abc');
+    expect(record.model).toBe('subagent:coverage-analyzer');
+    expect(record.inputTokens).toBe(1000);
+    expect(record.outputTokens).toBe(500);
+    expect(record.cacheReadTokens).toBe(200);
+    expect(record.cacheWriteTokens).toBe(100);
+    expect(record.totalTokens).toBe(1500);
+    expect(record.costUsd).toBeCloseTo(0.038);
+  });
+
+  it('running 状态（非终态）不提取', () => {
+    const evt = makeSubagentLifecycleEvent();
+    (evt.payload as Record<string, unknown>).status = 'running';
+    expect(extractSubagentUsageFromEvent(evt, makeContext())).toBeNull();
+  });
+
+  it('无 usage 字段的终态不提取', () => {
+    const evt = makeSubagentLifecycleEvent();
+    delete (evt.payload as Record<string, unknown>).usage;
+    expect(extractSubagentUsageFromEvent(evt, makeContext())).toBeNull();
+  });
+
+  it('非 subagent_lifecycle 事件不提取', () => {
+    expect(extractSubagentUsageFromEvent({ type: 'message_end' }, makeContext())).toBeNull();
+  });
+
+  it('recordSubagentUsageFromEvent 写入内存 DB 并按 messageId 去重', () => {
+    const db = createMemoryDatabase();
+    const ctx = makeContext();
+    const evt = makeSubagentLifecycleEvent();
+
+    recordSubagentUsageFromEvent(db, evt, ctx);
+    recordSubagentUsageFromEvent(db, evt, ctx);
+
+    const row = db
+      .prepare("SELECT * FROM token_usage WHERE message_id = 'subagent:run-abc'")
+      .get() as Record<string, unknown>;
+    expect(row).toBeDefined();
+    expect(row.input_tokens).toBe(1000);
+    expect(row.session_id).toBe('sess-1');
+    const count = db.prepare('SELECT COUNT(*) as cnt FROM token_usage').get() as { cnt: number };
+    expect(count.cnt).toBe(1);
+    closeDatabase(db);
+  });
+
+  it('db 为 null 时静默跳过', () => {
+    expect(() => recordSubagentUsageFromEvent(null, makeSubagentLifecycleEvent(), makeContext())).not.toThrow();
+  });
+});

@@ -13,6 +13,7 @@ import type {
   ApprovalMode,
   ApprovalRequest,
   AskRequest,
+  TrustRequest,
 } from './session-types';
 import { useSessionCoreStore } from './session-core';
 
@@ -24,16 +25,20 @@ export interface SessionApprovalState {
   approvalRequests: ApprovalRequest[];
   /** Pending ask requests awaiting user answers */
   askRequests: AskRequest[];
+  /** Pending trust requests awaiting user decision（issue 04） */
+  trustRequests: TrustRequest[];
 
   setApprovalMode: (mode: ApprovalMode) => void;
   resolveApproval: (requestId: string, approved: boolean) => Promise<void>;
   resolveAsk: (requestId: string, answers: AskAnswer[]) => Promise<void>;
+  resolveTrust: (requestId: string, approved: boolean) => Promise<void>;
   registerApprovalEventListeners: () => void;
 }
 
-// ─── approval/ask 事件监听器 ──────────────────────────────
+// ─── approval/ask/trust 事件监听器 ─────────────────────────
 let approvalRequestListenerRegistered = false;
 let askRequestListenerRegistered = false;
+let trustRequestListenerRegistered = false;
 
 function registerApprovalRequestListener(): void {
   if (approvalRequestListenerRegistered || !window.eventBridge?.onApprovalRequest) return;
@@ -87,10 +92,32 @@ function registerAskRequestListener(): void {
   });
 }
 
+function registerTrustRequestListener(): void {
+  if (trustRequestListenerRegistered || !window.eventBridge?.onTrustRequest) return;
+  trustRequestListenerRegistered = true;
+  window.eventBridge.onTrustRequest((data: { sessionId: string; requestId: string; kind: 'project-extension' | 'mcp-server'; name: string; path?: string }) => {
+    const request: TrustRequest = {
+      requestId: data.requestId,
+      sessionId: data.sessionId,
+      kind: data.kind,
+      name: data.name,
+      ...(data.path !== undefined ? { path: data.path } : {}),
+      timestamp: Date.now(),
+    };
+    useSessionApprovalStore.setState((s) => ({ trustRequests: [...s.trustRequests, request] }));
+
+    // Auto-expand the right panel if collapsed so the user sees the request
+    if (useUiStore.getState().rightPanelCollapsed) {
+      useUiStore.getState().toggleRightPanel();
+    }
+  });
+}
+
 // ─── Store ─────────────────────────────────────────────────
-export const useSessionApprovalStore = create<SessionApprovalState>((set) => ({
+export const useSessionApprovalStore = create<SessionApprovalState>((set, get) => ({
   approvalRequests: [],
   askRequests: [],
+  trustRequests: [],
 
   setApprovalMode: (mode) => {
     const coreGet = useSessionCoreStore.getState;
@@ -137,8 +164,28 @@ export const useSessionApprovalStore = create<SessionApprovalState>((set) => ({
     }
   },
 
+  resolveTrust: async (requestId, approved) => {
+    // kind 需随请求透传（wire 协议字段）；队列中不存在说明已决议，直接忽略
+    const request = get().trustRequests.find((r) => r.requestId === requestId);
+    if (!request) return;
+    set((s) => ({
+      trustRequests: s.trustRequests.filter((r) => r.requestId !== requestId),
+    }));
+    try {
+      await trpc.session.resolveTrust.mutate({
+        requestId,
+        approved,
+        kind: request.kind,
+        ...(request.path !== undefined ? { path: request.path } : {}),
+      });
+    } catch (err) {
+      useToastStore.getState().error('信任确认失败', tRPCError(err));
+    }
+  },
+
   registerApprovalEventListeners: () => {
     registerApprovalRequestListener();
     registerAskRequestListener();
+    registerTrustRequestListener();
   },
 }));

@@ -1,0 +1,270 @@
+/**
+ * Agent Event Contract — engine-neutral definitions for the event stream an
+ * agent engine emits into the SoC Verify host.
+ *
+ * This module is the single source of truth for:
+ *   1. `AgentEngine`     — identifiers of the engines a session may be bound to.
+ *   2. `AgentEvent`      — the discriminated union every engine runner must map
+ *                          its native events onto (消息 / 工具 / 审批 / 上下文 /
+ *                          压缩 / subagent / 错误 生命周期)。
+ *   3. Type guards       — runtime validation for events that cross the
+ *                          process boundary as untyped JSON.
+ *
+ * Runner-side adapters normalize engine-native events to these types at the
+ * runner boundary — the host side never grows engine-specific event handling.
+ */
+
+import type { ContextBreakdown, ContextUsage } from '@shared/context-management';
+
+// ─── Engine identity ─────────────────────────────────────────
+
+/**
+ * Identifier of the agent engine backing a session.
+ *
+ * issue 10 后运行时会话固定为 'pi'；'omp' 仅作为历史数据标识保留
+ * （旧持久化记录 / Token Monitor 历史行的只读兼容与清理），不再有
+ * omp 运行时。
+ */
+export type AgentEngine = 'omp' | 'pi';
+
+// ─── Message payload ─────────────────────────────────────────
+
+/** Text content block inside an agent message. */
+export type AgentTextBlock = { type: 'text'; text: string };
+
+/** Thinking/reasoning content block inside an agent message. */
+export type AgentThinkingBlock = { type: 'thinking'; thinking: string };
+
+/** A message as carried by message_start/update/end events. */
+export type AgentMessage = {
+  role: string;
+  /** Plain string (user/assistant text) or an array of content blocks. */
+  content: string | Array<Record<string, unknown>>;
+  /** Populated when the LLM round failed (transport errors, provider errors). */
+  errorMessage?: string;
+  stopReason?: string;
+  usage?: unknown;
+};
+
+// ─── Subagent payload（引擎中立；omp 与 pi runner 共用形状）──
+
+/** subagent 活动状态（终态：completed / failed / aborted） */
+export type SubagentActivityStatus = 'running' | 'completed' | 'failed' | 'aborted';
+
+/** subagent 单次运行的 Token 用量汇总（父子归属用，终态事件携带） */
+export type SubagentUsageSummary = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  costUsd: number;
+  turns: number;
+  toolCalls: number;
+  durationMs: number;
+}
+
+/**
+ * subagent_lifecycle 帧负载：启动（running）与终态。
+ * pi runner 从 pi-subagents 事件归一化而来（issue 05）；omp runner 原生形状
+ * 兼容。blockedReason 携带能力不足的显式阻断原因（不允许静默降级）。
+ */
+export type SubagentLifecyclePayload = {
+  /** subagent run id */
+  id: string;
+  status: SubagentActivityStatus;
+  index?: number;
+  /** 角色（agent 定义名） */
+  agent?: string;
+  description?: string;
+  /** 关联的 task/subagent 工具调用 id — 用于挂载到对应 tool card */
+  parentToolCallId?: string;
+  /** 父引擎会话 id（pi 父子归属） */
+  parentSessionId?: string;
+  /** artifacts 目录（归属父会话 bucket，随会话生命周期处理） */
+  artifactsDir?: string;
+  /** 父 run id（工作流父子链路） */
+  ownerRunId?: string;
+  /** 能力不足/失败时的显式阻断原因 */
+  blockedReason?: string;
+  /** 终态 Token 用量（父子归属） */
+  usage?: SubagentUsageSummary;
+}
+
+/** subagent_progress 帧负载：实时进度。 */
+export type SubagentProgressPayload = {
+  id: string;
+  index?: number;
+  agent?: string;
+  assignment?: string;
+  parentToolCallId?: string;
+  parentSessionId?: string;
+  progress: {
+    id?: string;
+    tokens?: number;
+    currentTool?: string;
+    currentToolArgs?: string;
+    lastIntent?: string;
+    recentOutput?: string[];
+    toolCount?: number;
+    requests?: number;
+  };
+}
+
+// ─── Agent Event union ───────────────────────────────────────
+
+/** Events emitted by an agent engine session, keyed by a `type` discriminant. */
+export type AgentEvent =
+  // ── Agent turn lifecycle ──
+  | { type: 'agent_start' }
+  | {
+      type: 'agent_end';
+      messages?: unknown[];
+      /** True when the engine already scheduled an automatic continuation. */
+      willContinue?: boolean;
+    }
+  // ── Message lifecycle ──
+  | { type: 'message_start'; message: AgentMessage }
+  | { type: 'message_update'; message: AgentMessage }
+  | { type: 'message_end'; message: AgentMessage }
+  // ── Tool execution lifecycle ──
+  | { type: 'tool_execution_start'; toolCallId: string; toolName: string; args?: unknown; intent?: string }
+  | {
+      type: 'tool_execution_update';
+      toolCallId: string;
+      toolName: string;
+      args?: unknown;
+      partialResult?: unknown;
+    }
+  | {
+      type: 'tool_execution_end';
+      toolCallId: string;
+      toolName: string;
+      result?: unknown;
+      isError?: boolean;
+    }
+  // ── Approval lifecycle ──
+  | { type: 'approval_request'; id: string; toolName: string; args?: unknown }
+  // ── Context usage ──
+  | {
+      type: 'context_usage';
+      contextUsage?: ContextUsage;
+      contextBreakdown?: ContextBreakdown;
+      isCompacting?: boolean;
+      autoCompactionEnabled?: boolean;
+    }
+  // ── Compaction lifecycle (manual + auto) ──
+  | { type: 'compaction_start' }
+  | { type: 'compaction_end' }
+  | { type: 'auto_compaction_start'; reason?: string; action?: string }
+  | {
+      type: 'auto_compaction_end';
+      result?: unknown;
+      aborted?: boolean;
+      willRetry?: boolean;
+      errorMessage?: string;
+      skipped?: boolean;
+    }
+  // ── Subagent lifecycle / progress ──
+  | { type: 'subagent_lifecycle'; payload: SubagentLifecyclePayload }
+  | { type: 'subagent_progress'; payload: SubagentProgressPayload }
+  // ── Notice / error ──
+  | { type: 'notice'; text?: string; message?: string }
+  | { type: 'error'; error?: string; message?: string };
+
+/** All valid `AgentEvent` discriminants. */
+export const AGENT_EVENT_TYPES = [
+  'agent_start',
+  'agent_end',
+  'message_start',
+  'message_update',
+  'message_end',
+  'tool_execution_start',
+  'tool_execution_update',
+  'tool_execution_end',
+  'approval_request',
+  'context_usage',
+  'compaction_start',
+  'compaction_end',
+  'auto_compaction_start',
+  'auto_compaction_end',
+  'subagent_lifecycle',
+  'subagent_progress',
+  'notice',
+  'error',
+] as const satisfies ReadonlyArray<AgentEvent['type']>;
+
+export type AgentEventType = (typeof AGENT_EVENT_TYPES)[number];
+
+// ─── Type guards ─────────────────────────────────────────────
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isMessagePayload(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return typeof value.role === 'string';
+}
+
+function isMessageEvent(value: Record<string, unknown>): boolean {
+  return isMessagePayload(value.message);
+}
+
+/**
+ * Runtime check whether an untyped frame is a valid `AgentEvent`.
+ * Enforces the discriminant plus the minimal required fields per variant —
+ * engines must not emit malformed events past the process boundary.
+ */
+export function isAgentEvent(value: unknown): value is AgentEvent {
+  if (!isRecord(value)) return false;
+  const type = value.type;
+  if (typeof type !== 'string') return false;
+
+  switch (type) {
+    case 'agent_start':
+    case 'compaction_start':
+    case 'compaction_end':
+      return true;
+    case 'agent_end':
+    case 'auto_compaction_start':
+    case 'auto_compaction_end':
+    case 'context_usage':
+    case 'subagent_lifecycle':
+    case 'subagent_progress':
+    case 'notice':
+    case 'error':
+      return true;
+    case 'message_start':
+    case 'message_update':
+    case 'message_end':
+      return isMessageEvent(value);
+    case 'tool_execution_start':
+    case 'tool_execution_update':
+      return typeof value.toolCallId === 'string' && typeof value.toolName === 'string';
+    case 'tool_execution_end':
+      return (
+        typeof value.toolCallId === 'string' &&
+        typeof value.toolName === 'string' &&
+        typeof value.isError === 'boolean'
+      );
+    case 'approval_request':
+      return typeof value.id === 'string' && typeof value.toolName === 'string';
+    default:
+      return false;
+  }
+}
+
+/**
+ * Narrow an unknown value to a specific `AgentEvent` variant.
+ *
+ * @example
+ * if (isAgentEventOfType(event, 'tool_execution_end')) {
+ *   console.log(event.toolName, event.isError);
+ * }
+ */
+export function isAgentEventOfType<K extends AgentEvent['type']>(
+  value: unknown,
+  type: K,
+): value is Extract<AgentEvent, { type: K }> {
+  return isAgentEvent(value) && value.type === type;
+}

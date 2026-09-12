@@ -15,7 +15,9 @@ export default tseslint.config(
       '.tmp',
       '.cache',
       // 渲染端静态资源（drawio viewer-static.min.js 等第三方打包产物）
-      'src/renderer/public'
+      'src/renderer/public',
+      // 迁移 spike 一次性脚本（issue 01 产物，不入库）
+      '.scratch'
     ]
   },
   js.configs.recommended,
@@ -75,7 +77,7 @@ export default tseslint.config(
   },
   {
     // Runner is a Node.js TypeScript file
-    files: ['runner/**/*'],
+    files: ['runner/**/*', 'runner-pi/**/*'],
     languageOptions: { globals: { ...globals.node } }
   }
 );

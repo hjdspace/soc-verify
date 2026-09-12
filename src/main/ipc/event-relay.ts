@@ -107,6 +107,8 @@ const eventMappings: EventMapping[] = [
   { source: sessionManager, event: 'sessionEvent', channel: 'session:event' },
   // sessionManager → approval request forwarding (approvalRequest → session:approval-request)
   { source: sessionManager, event: 'approvalRequest', channel: 'session:approval-request' },
+  // sessionManager → trust request forwarding (trustRequest → session:trust-request, issue 04)
+  { source: sessionManager, event: 'trustRequest', channel: 'session:trust-request' },
   // sessionManager → ask request forwarding (askRequest → session:ask-request)
   { source: sessionManager, event: 'askRequest', channel: 'session:ask-request' },
 

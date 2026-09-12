@@ -479,7 +479,7 @@ describe('SessionStore — event handling and state machine', () => {
     expect(assistantMsg.content).toBe('Direct response');
   });
 
-  it('handles message_end with error stopReason', async () => {
+  it('defers error display to agent_end: message_end error is held, finalized when the turn truly ends', async () => {
     await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
     await useSessionMessagesStore.getState().sendMessage('Hello');
 
@@ -488,9 +488,75 @@ describe('SessionStore — event handling and state machine', () => {
       message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: 'API key invalid' },
     });
 
-    const assistantMsg = useSessionStore.getState().sessions[0].messages[1];
+    // message_end 阶段错误挂起不渲染（避免重试期间错误卡片一闪而过）
+    let assistantMsg = useSessionStore.getState().sessions[0].messages[1];
     expect(assistantMsg.isStreaming).toBe(false);
+    expect(assistantMsg.content).not.toContain('API key invalid');
+    expect(assistantMsg.pendingError).toContain('API key invalid');
+
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', { type: 'agent_end' });
+
+    // 回合真正结束后才定稿为错误卡片
+    assistantMsg = useSessionStore.getState().sessions[0].messages[1];
     expect(assistantMsg.content).toContain('API key invalid');
+    expect(assistantMsg.pendingError).toBeUndefined();
+  });
+
+  it('never renders the error card during auto-retry; shows it only after retries exhaust', async () => {
+    await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
+    await useSessionMessagesStore.getState().sendMessage('Hello');
+
+    const errorEnd = {
+      type: 'message_end' as const,
+      message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: '429: rate limited' },
+    };
+
+    // 第一次尝试失败，引擎排程自动重试（agent_end.willContinue）
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', {
+      type: 'message_start',
+      message: { role: 'assistant', content: [] },
+    });
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', errorEnd);
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', {
+      type: 'agent_end',
+      willContinue: true,
+    });
+
+    let session = useSessionStore.getState().sessions[0];
+    // 挂起错误的消息被整体丢弃：错误卡片从未出现（不是隐藏）
+    expect(session.messages.some((m) => m.content.startsWith('[错误]'))).toBe(false);
+    expect(session.messages.some((m) => m.pendingError)).toBe(false);
+    expect(session.status).toBe('streaming');
+
+    // 第二次尝试仍失败，继续重试
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', {
+      type: 'message_start',
+      message: { role: 'assistant', content: [] },
+    });
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', errorEnd);
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', {
+      type: 'agent_end',
+      willContinue: true,
+    });
+
+    session = useSessionStore.getState().sessions[0];
+    expect(session.messages.some((m) => m.content.startsWith('[错误]'))).toBe(false);
+    expect(session.messages.some((m) => m.pendingError)).toBe(false);
+
+    // 最后一次尝试失败，不再重试 —— 错误卡片此时才展示
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', {
+      type: 'message_start',
+      message: { role: 'assistant', content: [] },
+    });
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', errorEnd);
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', { type: 'agent_end' });
+
+    session = useSessionStore.getState().sessions[0];
+    expect(session.status).toBe('idle');
+    const errorMsg = session.messages.find((m) => m.content.startsWith('[错误]'));
+    expect(errorMsg).toBeDefined();
+    expect(errorMsg?.content).toContain('429');
+    expect(errorMsg?.pendingError).toBeUndefined();
   });
 
   it('suppresses transient MCP transport errors and keeps streaming placeholder alive', async () => {
@@ -1007,6 +1073,8 @@ describe('SessionStore — event handling and state machine', () => {
       cwd: '/tmp/proj',
       sessionId: 'session_persisted_1',
       name: 'Debug reset failure',
+      // 历史 entry 无持久化 approvalMode → localStorage 偏好兜底 → 'yolo'
+      approvalMode: 'yolo',
     });
     expect(mockSend).toHaveBeenCalledWith({
       sessionId: 'session_runtime_1',
@@ -1304,6 +1372,54 @@ describe('SessionStore — subagent activity (subagent_* frames)', () => {
     store.handleSessionEvent(sessionId, progressFrame('sa-1', ['Y', 'X']));
 
     expect(getSubagent('sa-1')?.recentOutput).toEqual(['A', 'B', 'X', 'Y']);
+  });
+
+  it('merges terminal usage / runDir / parentSessionId from lifecycle frames (issue 05)', () => {
+    const store = useSessionMessagesStore.getState();
+    store.handleSessionEvent(sessionId, progressFrame('sa-2', ['C', 'B', 'A']));
+    store.handleSessionEvent(sessionId, {
+      type: 'subagent_lifecycle',
+      payload: {
+        id: 'sa-2',
+        status: 'completed',
+        agent: 'analyzer',
+        parentSessionId: 'pi-session-0001',
+        runDir: '/tmp/pi/async/run-abc',
+        usage: {
+          input: 100,
+          output: 50,
+          cacheRead: 10,
+          cacheWrite: 5,
+          costUsd: 0.01,
+          turns: 3,
+          toolCalls: 7,
+          durationMs: 1200,
+        },
+      },
+    });
+
+    const sub = getSubagent('sa-2');
+    expect(sub?.status).toBe('completed');
+    expect(sub?.parentSessionId).toBe('pi-session-0001');
+    expect(sub?.runDir).toBe('/tmp/pi/async/run-abc');
+    expect(sub?.usage?.input).toBe(100);
+    expect(sub?.usage?.costUsd).toBeCloseTo(0.01);
+  });
+
+  it('merges blockedReason on failed lifecycle frames（能力不足显式可见）', () => {
+    const store = useSessionMessagesStore.getState();
+    store.handleSessionEvent(sessionId, progressFrame('sa-3', ['A']));
+    store.handleSessionEvent(sessionId, {
+      type: 'subagent_lifecycle',
+      payload: {
+        id: 'sa-3',
+        status: 'failed',
+        blockedReason: 'Subagent extension unavailable: pi-subagents not installed',
+      },
+    });
+
+    expect(getSubagent('sa-3')?.status).toBe('failed');
+    expect(getSubagent('sa-3')?.blockedReason).toContain('pi-subagents not installed');
   });
 });
 

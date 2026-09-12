@@ -1,12 +1,20 @@
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { AgentClient, type ToolCallHandler } from './agent-client';
-import { resolveAgentRuntime, resolveBuiltInExtensionDir, resolveRunnerBinary, resolveRunnerScript, resolveBunPath, checkBunVersion } from './paths';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { type ToolCallHandler } from './agent-client';
+import { PiAgentClient } from './pi-agent-client';
+import type {
+  AgentClientFactory,
+  AgentClientFactoryOptions,
+  IAgentClient,
+} from './agent-contract';
+import { resolveBuiltInExtensionDir, resolvePiRunnerScript } from './paths';
 import { ensureOfficecliOnPath } from './officecli-paths';
-import type { CustomToolDefinition, InitConfig, ApprovalMode, SeedHistoryMessage } from './types';
+import type { CustomToolDefinition, InitConfig, ApprovalMode, SeedHistoryMessage, TrustKind } from './types';
+import { TrustStore } from './trust-store';
+import { resolveSkillLoadPaths } from './skill-discovery';
 import {
   buildModelInputOverrideConfig,
   buildOpenAICompatibleModelsConfig,
@@ -34,7 +42,8 @@ import {
 } from '../mcp/traceweave-paths';
 import { notificationManager } from '../notifications/notification-manager';
 import type { AskAnswer, AskQuestion } from '@shared/ask-types';
-import { recordUsageFromEvent } from '../token-monitor/token-usage-recorder';
+import type { AgentEngine } from '@shared/agent-events';
+import { recordSubagentUsageFromEvent, recordUsageFromEvent } from '../token-monitor/token-usage-recorder';
 import { tokenMonitorRegistry } from '../token-monitor/token-monitor-registry';
 
 const MAX_CONCURRENT_SESSIONS = 10;
@@ -161,7 +170,7 @@ function summarizeEvent(event: unknown): string {
 
 /**
  * Format the answer for a single-question `ask` call as a natural-language
- * response the AI can consume. Matches the omp engine's AskTool format.
+ * response the AI can consume. Matches the engine's ask tool format.
  */
 function formatSingleAnswer(question: AskQuestion, answers: AskAnswer[]): string {
   const ans = answers.find((a) => a.questionId === question.id);
@@ -233,7 +242,7 @@ export interface CreateSessionOptions {
   apiFormat?: OpenAiApiFormat;
   sessionDir?: string;
   resumeSessionId?: string;
-  /** UI 存储对话历史，用于 omp 会话文件缺失/部分覆盖时的上下文种子 */
+  /** UI 存储对话历史，用于引擎原生会话文件缺失/部分覆盖时的上下文种子 */
   seedHistory?: SeedHistoryMessage[];
   persistedSessionId?: string;
   /** 凭据 ID —— 记录会话由哪个凭据创建（setModel 冗余 swap 判定用） */
@@ -241,7 +250,7 @@ export interface CreateSessionOptions {
   env?: Record<string, string>;
   enableMCP?: boolean;
   systemPrompt?: string;
-  /** Model context window advertised to omp. Falls back to the global setting. */
+  /** Model context window advertised to the engine. Falls back to the global setting. */
   contextWindow?: number;
   /** User-configured models for this provider. When provided, createSession
    *  uses these instead of fetching from the API. Each model has its own contextWindow. */
@@ -254,7 +263,7 @@ export interface CreateSessionOptions {
   caseStatsService?: CaseStatsService | null;
   /** 工具审批模式 */
   approvalMode?: ApprovalMode;
-  /** 会话初始思考强度（'default'/缺省 = 跟随 omp 引擎默认） */
+  /** 会话初始思考强度（'default'/缺省 = 跟随引擎默认行为） */
   thinkingLevel?: ThinkingLevelSetting;
 }
 
@@ -262,10 +271,12 @@ export interface SessionEntry {
   id: string;
   /** The SoC Verify session ID stored in .socverify/sessions.json, if this is a restored runtime session. */
   persistedSessionId?: string;
-  /** The omp engine's session ID — needed to resume conversations */
-  ompSessionId?: string;
+  /** Which engine backs this session. issue 10 后运行时会话固定为 'pi'. */
+  engine: AgentEngine;
+  /** The engine's session ID — needed to resume conversations (engine-neutral). */
+  engineSessionId?: string;
   projectId: string;
-  client: AgentClient;
+  client: IAgentClient;
   hostTools: HostToolsRegistry;
   hostUris: HostUriRouter;
   createdAt: number;
@@ -283,6 +294,8 @@ export interface SessionEntry {
   /** Fingerprint of apiKey+baseUrl at creation time — detects edits to a
    *  credential that require an actual destroy/recreate to take effect. */
   credentialSnapshot?: string;
+  /** 审批模式（创建时下发 runner 的值）—— setModel 整体 swap 重建时沿用 */
+  approvalMode?: ApprovalMode;
   /** Whether the agent is currently processing (between agent_start and agent_end).
    *  When true, the idle retirement timer is NOT scheduled — the session
    *  is actively working and must not be destroyed regardless of elapsed time. */
@@ -294,18 +307,41 @@ export interface SessionEventData {
   event: unknown;
 }
 
+/**
+ * Default client factory — builds the `PiAgentClient` (plain Node script
+ * runner via ELECTRON_RUN_AS_NODE=1). issue 10 后运行时引擎固定为 pi；
+ * tests and other engines inject their own factory.
+ */
+export const defaultAgentClientFactory: AgentClientFactory = (options) => {
+  return new PiAgentClient({
+    runnerPath: options.runnerPath,
+    cwd: options.cwd,
+    env: options.env,
+  });
+};
+
 export class SessionManagerImpl extends EventEmitter {
   private sessions = new Map<string, SessionEntry>();
   private projectSessions = new Map<string, Set<string>>();
   private idleTimeoutMs: number;
+  /** Factory seam: creates engine clients so the manager stays engine-neutral. */
+  private clientFactory: AgentClientFactory;
   /** Pending approval requests: requestId → { resolve, sessionId } */
   private pendingApprovals = new Map<string, { resolve: (approved: boolean) => void; sessionId: string }>();
   /** Pending ask requests: requestId → { resolve, sessionId } */
   private pendingAsks = new Map<string, { resolve: (answers: AskAnswer[]) => void; sessionId: string }>();
+  /** Pending trust requests（issue 04）：requestId → 决策上下文（用于持久化） */
+  private pendingTrusts = new Map<
+    string,
+    { resolve: (approved: boolean) => void; sessionId: string; cwd: string; kind: TrustKind; name: string }
+  >();
+  /** host 信任存储（userData/socverify-data/trust.json）；null = 不可用（不持久化） */
+  private trustStore: TrustStore | null | undefined;
 
-  constructor(idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS) {
+  constructor(idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS, clientFactory: AgentClientFactory = defaultAgentClientFactory) {
     super();
     this.idleTimeoutMs = idleTimeoutMs;
+    this.clientFactory = clientFactory;
   }
 
   async createSession(options: CreateSessionOptions): Promise<string> {
@@ -315,20 +351,18 @@ export class SessionManagerImpl extends EventEmitter {
 
     const contextWindow = options.contextWindow ?? await contextSettings.getContextWindow();
 
-    const runtime = resolveAgentRuntime();
-    if (!runtime) {
+    // 引擎路由（issue 10）：运行时会话固定为 pi —— runner-pi 脚本以
+    // Node（ELECTRON_RUN_AS_NODE=1）运行，omp 的 Bun/engine 运行时与
+    // binary/script 双模式已移除。session 记录的 engine 取自
+    // client.engine（defaultAgentClientFactory 只构造 PiAgentClient）。
+    const piScript = resolvePiRunnerScript();
+    if (!piScript) {
       throw new Error(
-        'Agent runtime not found. Please run `npm run setup:agent` to download the agent binary, ' +
-        'or ensure Bun and the engine submodule are available.',
+        'pi runner not found. Expected runner-pi/index.ts in the packaged resources or repository root.',
       );
     }
-    // Version check only applies to script mode (binary mode has Bun embedded)
-    if (runtime.mode === 'script' && !runtime.bunVersionOk) {
-      throw new Error(
-        `Bun runtime must be >= 1.3.14 (found v${runtime.bunVersion}). ` +
-        'Please upgrade: bun upgrade',
-      );
-    }
+    const runtime = { mode: 'script' as const, runnerPath: piScript };
+    console.log(`[agent:session] engine=pi, pi runner script: ${piScript}`);
 
     const sessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
@@ -354,7 +388,7 @@ export class SessionManagerImpl extends EventEmitter {
       approval: 'read',
     }));
 
-    // Register `ask` as a custom host tool so the omp engine routes it to the
+    // Register `ask` as a custom host tool so the engine routes it to the
     // host instead of using its built-in terminal-based AskTool (which requires
     // a TTY not available in the subprocess). The toolCallHandler below
     // intercepts `ask` calls and surfaces them as interactive UI in the renderer.
@@ -430,7 +464,7 @@ export class SessionManagerImpl extends EventEmitter {
       const apiKeyValue = options.apiKey;
       // Use user-configured models when available; otherwise fetch from the API.
       // Each configured model has its own contextWindow — we write them all to
-      // models.json so the omp engine's `set_model` RPC can switch to any of
+      // models.json so the engine's `set_model` RPC can switch to any of
       // them at runtime with the correct context window.
       let allModels: OpenAICompatibleModel[] = [];
       modelContextWindow = contextWindow;
@@ -454,7 +488,7 @@ export class SessionManagerImpl extends EventEmitter {
       } else {
         // Fallback: fetch ALL models from the API so we can write the complete
         // list to models.json. This is essential for runtime model switching via
-        // the omp engine's `set_model` RPC — if a model isn't in models.json,
+        // the engine's `set_model` RPC — if a model isn't in models.json,
         // `set_model` silently fails and messages are still sent with the old
         // model (causing 503 errors when the user switches models in RightPanel).
         try {
@@ -501,10 +535,11 @@ export class SessionManagerImpl extends EventEmitter {
       await writeFile(join(runtimeDir, 'models.yml'), modelsJson, 'utf-8');
       console.log(`[agent:session:${sessionId}] models config: ${modelsJson.slice(0, 500)}`);
       console.log(`[agent:session:${sessionId}] runtimeDir: ${runtimeDir}`);
-      env.PI_CODING_AGENT_DIR = runtimeDir;
-      env.XDG_STATE_HOME = join(runtimeDir, 'state');
+      // issue 07: pi 引擎不劫持 PI_CODING_AGENT_DIR —— 原生 session 必须落在
+      // 用户级 canonical cwd bucket（临时 runtimeDir 会在会话销毁时删除）。
+      // pi 的模型配置经 InitConfig.modelsPath 显式注入。
       env[OPENAI_COMPATIBLE_API_KEY_ENV] = apiKeyValue;
-      // Also set OPENAI_API_KEY / OPENAI_BASE_URL so the omp engine's
+      // Also set OPENAI_API_KEY / OPENAI_BASE_URL so the engine's
       // openai-completions provider can resolve the key via $env fallback
       // (resolveOpenAIRequestSetup checks options.apiKey, then $env.OPENAI_API_KEY).
       // This is critical for packaged builds where the env var might not be
@@ -513,7 +548,7 @@ export class SessionManagerImpl extends EventEmitter {
       // FORCE overwrite: buildEnvForAgent() may have set these from the FIRST
       // credential in the list, but this session uses a SPECIFIC credential
       // (e.g. the user switched providers via setModel). If we don't overwrite,
-      // the omp engine may resolve a stale key/baseUrl from a different provider,
+      // the engine may resolve a stale key/baseUrl from a different provider,
       // causing silent failures (requests go to the wrong endpoint with the
       // wrong API key).
       env.OPENAI_API_KEY = apiKeyValue;
@@ -521,7 +556,7 @@ export class SessionManagerImpl extends EventEmitter {
       provider = OPENAI_COMPATIBLE_PROVIDER;
     } else if (provider && model) {
       // Built-in provider path (e.g. user supplied only an API key, no baseUrl).
-      // Write a models.json with modelOverrides so omp's vision-guard does not
+      // Write a models.json with modelOverrides so the engine's vision-guard does not
       // silently drop images when the internal catalog marks the model as
       // text-only.  Only the `input` field is patched; all other catalog
       // properties (api, cost, contextWindow, ...) remain intact.
@@ -531,34 +566,12 @@ export class SessionManagerImpl extends EventEmitter {
       await writeFile(join(runtimeDir, 'models.json'), modelsJson, 'utf-8');
       await writeFile(join(runtimeDir, 'models.yml'), modelsJson, 'utf-8');
       console.log(`[agent:session:${sessionId}] models.yml (override): ${modelsJson.slice(0, 500)}`);
-      env.PI_CODING_AGENT_DIR = runtimeDir;
-      env.XDG_STATE_HOME = join(runtimeDir, 'state');
-    }
-
-    // Ensure ~/.omp/natives/ exists so the omp engine's native-addon search
-    // doesn't fail with "open dir error: No such file or directory" on first run.
-    try {
-      const ompNativesDir = join(homedir(), '.omp', 'natives');
-      if (!existsSync(ompNativesDir)) {
-        mkdirSync(ompNativesDir, { recursive: true });
-      }
-    } catch {
-      // Best-effort: the runner also searches the binaries directory.
-    }
-
-    // Tell the runner where to find pi_natives.*.node so it doesn't have to
-    // search ~/.omp/natives/<version>/ (which may not exist).
-    const runnerBinary = resolveRunnerBinary();
-    if (runnerBinary) {
-      env.OMP_NATIVES_DIR = dirname(runnerBinary);
     }
 
     // On Linux, detect the system CA certificate bundle path and set
-    // NODE_EXTRA_CA_CERTS so Bun's fetch can verify TLS connections.
-    // Bun's compiled binary may not always find the system's CA store,
-    // especially in packaged environments like AppImage. The omp engine's
-    // `withExtraCaFetch` wrapper reads this env var and merges the CA
-    // bundle into Bun's TLS config.
+    // NODE_EXTRA_CA_CERTS so Node's fetch can verify TLS connections.
+    // Electron's embedded Node may not always find the system's CA store,
+    // especially in packaged environments like AppImage.
     if (process.platform === 'linux' && !env.NODE_EXTRA_CA_CERTS && !process.env.NODE_EXTRA_CA_CERTS) {
       const caCandidates = [
         '/etc/ssl/certs/ca-certificates.crt',   // Debian/Ubuntu
@@ -577,7 +590,7 @@ export class SessionManagerImpl extends EventEmitter {
 
     // 注入 officecli 二进制路径到子进程 PATH（Issue #6）
     // 同步内置 officecli 到 ~/.officecli/bin/ 并将该目录注入 env.PATH 前面，
-    // 使 omp 子进程及其衍生的 Host Tool（create_docx 等）可直接调用 officecli。
+    // 使 agent 子进程及其衍生的 Host Tool（create_docx 等）可直接调用 officecli。
     try {
       await ensureOfficecliOnPath(env);
     } catch (err) {
@@ -585,7 +598,7 @@ export class SessionManagerImpl extends EventEmitter {
     }
 
     // Ensure built-in MCP servers (TraceWeave) are registered in the
-    // user-level MCP config so the omp engine discovers them on init.
+    // user-level MCP config so the engine discovers them on init.
     // This is idempotent: if the server is already in the config, it is
     // not overridden. If TraceWeave or Python is unavailable, it is
     // silently skipped (graceful degradation) with a one-time notification
@@ -626,6 +639,10 @@ export class SessionManagerImpl extends EventEmitter {
       console.warn(`[agent:session:${sessionId}] built-in extension dir not found — built-in skills/agents will not be loaded`);
     }
 
+    // Load host trust store once per manager — provides already-trusted
+    // project dirs / MCP server names to the pi runner (issue 04).
+    const trustStore = await this.getTrustStore();
+
     const initConfig: InitConfig = {
       cwd: options.cwd,
       apiKey: options.apiKey,
@@ -643,24 +660,24 @@ export class SessionManagerImpl extends EventEmitter {
       additionalExtensionPaths,
       approvalMode: options.approvalMode,
       thinkingLevel: options.thinkingLevel,
+      // pi 引擎：独立 models.json（issue 07）—— session 归用户级目录，
+      // 模型配置归临时 runtimeDir，二者经 modelsPath 解耦。
+      ...(runtimeDir ? { modelsPath: join(runtimeDir, 'models.json') } : {}),
+      // 有序 skill 装载列表（issue 09）—— 与 UI 发现同源
+      // （resolveSkillLoadPaths），canonical 优先于 legacy，runner 不自行发现。
+      skillPaths: await resolveSkillLoadPaths(options.cwd),
+      trustedMcpServers: trustStore?.getTrustedMcpServers(options.cwd),
+      trustedProjectDirs: trustStore?.getTrustedProjectDirs(options.cwd),
     };
 
-    // Helper: create an AgentClient configured for the given runtime mode
-    const createClientForRuntime = (rt: { mode: 'binary' | 'script'; runnerPath: string; bunPath?: string }) => {
-      const c = new AgentClient(
-        rt.mode === 'binary'
-          ? {
-              runnerBinaryPath: rt.runnerPath,
-              cwd: options.cwd,
-              env,
-            }
-          : {
-              bunPath: rt.bunPath!,
-              runnerPath: rt.runnerPath,
-              cwd: options.cwd,
-              env,
-            },
-      );
+    // Helper: create an AgentClient for the resolved pi runner
+    const createClientForRuntime = (rt: { runnerPath: string }): IAgentClient => {
+      const factoryOptions: AgentClientFactoryOptions = {
+        runnerPath: rt.runnerPath,
+        cwd: options.cwd,
+        env,
+      };
+      const c = this.clientFactory(factoryOptions);
       c.setToolCallHandler(toolCallHandler);
       c.setApprovalHandler(async (requestId, toolName, args) => {
         const { promise, resolve } = Promise.withResolvers<boolean>();
@@ -668,12 +685,20 @@ export class SessionManagerImpl extends EventEmitter {
         this.emit('approvalRequest', { sessionId, requestId, toolName, args });
         return promise;
       });
+      // Trust handler（issue 04）：extension/MCP 信任确认经 renderer 询问用户，
+      // 批准结果由 resolveTrust 持久化到 host 信任存储（yolo 不跳过此流程）。
+      c.setTrustHandler(async (requestId, kind, name, path) => {
+        const { promise, resolve } = Promise.withResolvers<boolean>();
+        this.pendingTrusts.set(requestId, { resolve, sessionId, cwd: options.cwd, kind, name });
+        this.emit('trustRequest', { sessionId, requestId, kind, name, path });
+        return promise;
+      });
       return c;
     };
 
     // Helper: attach event forwarding to a client
     const debugAllEvents = !!process.env.SOCVERIFY_DEBUG_EVENTS;
-    const attachEventForwarding = (c: AgentClient) => {
+    const attachEventForwarding = (c: IAgentClient) => {
       c.onEvent((event) => {
         const evtType = (event as Record<string, unknown>)?.type as string | undefined;
         if (debugAllEvents || !SILENT_EVENT_TYPES.has(evtType ?? '')) {
@@ -691,6 +716,10 @@ export class SessionManagerImpl extends EventEmitter {
           this.setActive(sessionId, true);
         } else if (evtType === 'agent_end') {
           this.setActive(sessionId, false);
+        } else if (evtType === 'error') {
+          // issue 08: runner 崩溃进入 error —— 会话立即退出活动状态（idle
+          // 计时恢复）；等待用户显式重启，不自动重放可能产生副作用的 turn。
+          this.setActive(sessionId, false);
         } else if (evtType && !SILENT_EVENT_TYPES.has(evtType)) {
           // Secondary safety net: refresh idle timer on other activity events.
           // Normally the timer is cancelled by agent_start, but if agent_start
@@ -707,7 +736,7 @@ export class SessionManagerImpl extends EventEmitter {
                 typeof (b as Record<string, unknown>).text === 'string' &&
                 ((b as Record<string, unknown>).text as string).length > 0);
             if (!hasText && !msg.errorMessage) {
-              console.warn(`[agent:session:${sessionId}] WARNING: empty assistant response (no text, no error). Possible causes: TLS/SSL certificate issues, network errors, or API key problems. Check [agent:stderr] lines above for omp engine errors.`);
+              console.warn(`[agent:session:${sessionId}] WARNING: empty assistant response (no text, no error). Possible causes: TLS/SSL certificate issues, network errors, or API key problems. Check [agent:stderr] lines above for engine errors.`);
             }
           }
           // Token Monitor bypass: extract usage and write to Token Monitor DB.
@@ -716,7 +745,7 @@ export class SessionManagerImpl extends EventEmitter {
             const tokenDb = tokenMonitorRegistry.getOrCreateDb(options.cwd);
             recordUsageFromEvent(tokenDb, event, {
               sessionId,
-              engine: 'omp',
+              engine: c.engine,
               projectId: options.projectId,
               cwd: options.cwd,
             });
@@ -726,6 +755,21 @@ export class SessionManagerImpl extends EventEmitter {
         }
         // Diagnostic: log subagent frames to trace data flow
         if (evtType === 'subagent_lifecycle' || evtType === 'subagent_progress') {
+          // Subagent 父子 Token 归属：终态事件带 usage 时旁路写入 Token Monitor
+          //（messageId=subagent:<runId>，引擎/会话/父子关联均保留）。
+          if (evtType === 'subagent_lifecycle') {
+            try {
+              const tokenDb = tokenMonitorRegistry.getOrCreateDb(options.cwd);
+              recordSubagentUsageFromEvent(tokenDb, event, {
+                sessionId,
+                engine: c.engine,
+                projectId: options.projectId,
+                cwd: options.cwd,
+              });
+            } catch (err) {
+              console.warn(`[agent:session:${sessionId}] subagent token bypass failed:`, err);
+            }
+          }
           const payload = (event as Record<string, unknown>)?.payload as Record<string, unknown> | undefined;
           const subId = payload?.id ?? (payload?.progress as Record<string, unknown> | undefined)?.id ?? '??';
           console.log(`[agent:session:${sessionId}] SUBAGENT ${evtType} id=${subId} — forwarding to renderer`);
@@ -734,7 +778,7 @@ export class SessionManagerImpl extends EventEmitter {
       });
     };
 
-    let client = createClientForRuntime(runtime);
+    const client = createClientForRuntime(runtime);
     attachEventForwarding(client);
 
     // Log env vars being passed (mask API keys)
@@ -749,82 +793,20 @@ export class SessionManagerImpl extends EventEmitter {
     }
     console.log(`[agent:session:${sessionId}] provider=${provider ?? '(default)'}, model=${model ?? '(default)'}`);
 
-    let ompSessionId: string | undefined;
+    let engineSessionId: string | undefined;
 
     try {
       await client.start();
       console.log(`[agent:session:${sessionId}] agent process started successfully`);
       const initResult = await client.init(initConfig);
-      ompSessionId = initResult.sessionId;
-      console.log(`[agent:session:${sessionId}] omp sessionId=${ompSessionId}`);
+      engineSessionId = initResult.engineSessionId;
+      console.log(`[agent:session:${sessionId}] engine (${client.engine}) sessionId=${engineSessionId}`);
     } catch (err) {
       client.stop();
-
-      // If binary mode failed, try script mode (Bun + engine) as fallback.
-      // This handles the case where the pre-compiled runner binary exists
-      // but can't execute (e.g., missing shared libraries on Linux AppImage).
-      if (runtime.mode === 'binary') {
-        const scriptPath = resolveRunnerScript();
-        const bunPath = resolveBunPath();
-        if (scriptPath && bunPath) {
-          const versionCheck = checkBunVersion(bunPath);
-          if (versionCheck.ok) {
-            console.warn(
-              `[agent:session:${sessionId}] Binary runner failed (${err instanceof Error ? err.message : String(err)}). ` +
-              `Falling back to script mode (Bun ${versionCheck.version} + engine).`,
-            );
-            client = createClientForRuntime({
-              mode: 'script',
-              runnerPath: scriptPath,
-              bunPath,
-            });
-            attachEventForwarding(client);
-            try {
-              await client.start();
-              console.log(`[agent:session:${sessionId}] agent process started successfully (script mode)`);
-              const initResult = await client.init(initConfig);
-              ompSessionId = initResult.sessionId;
-              console.log(`[agent:session:${sessionId}] omp sessionId=${ompSessionId} (script mode)`);
-            } catch (scriptErr) {
-              client.stop();
-              if (runtimeDir) {
-                await rm(runtimeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-              }
-              throw new Error(
-                `Failed to initialize agent session. ` +
-                `Binary mode error: ${err instanceof Error ? err.message : String(err)}. ` +
-                `Script mode error: ${scriptErr instanceof Error ? scriptErr.message : String(scriptErr)}.`,
-              );
-            }
-          } else {
-            // Bun version too old
-            if (runtimeDir) {
-              await rm(runtimeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-            }
-            throw new Error(
-              `Failed to initialize agent session: ${err instanceof Error ? err.message : String(err)}. ` +
-              `Script mode fallback unavailable: Bun >= ${versionCheck.required} required (found ${versionCheck.version}).`,
-            );
-          }
-        } else {
-          // No script mode available
-          if (runtimeDir) {
-            await rm(runtimeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-          }
-          throw new Error(
-            `Failed to initialize agent session: ${err instanceof Error ? err.message : String(err)}. ` +
-            `Script mode fallback unavailable: ${!scriptPath ? 'engine submodule not found' : 'Bun not found'}. ` +
-            `On Linux AppImage, the runner binary may have missing shared libraries. ` +
-            `Try running 'ldd <runner-binary>' to diagnose, or install Bun and initialize the engine submodule.`,
-          );
-        }
-      } else {
-        // Script mode failed (no fallback)
-        if (runtimeDir) {
-          await rm(runtimeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-        }
-        throw new Error(`Failed to initialize agent session: ${err instanceof Error ? err.message : String(err)}`);
+      if (runtimeDir) {
+        await rm(runtimeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
       }
+      throw new Error(`Failed to initialize agent session: ${err instanceof Error ? err.message : String(err)}`);
     }
     console.log(`[agent:session:${sessionId}] agent session initialized`);
 
@@ -834,7 +816,8 @@ export class SessionManagerImpl extends EventEmitter {
     const entry: SessionEntry = {
       id: sessionId,
       persistedSessionId: options.persistedSessionId,
-      ompSessionId,
+      engine: client.engine,
+      engineSessionId,
       projectId: options.projectId,
       client,
       hostTools,
@@ -846,6 +829,7 @@ export class SessionManagerImpl extends EventEmitter {
       model,
       providerId: options.providerId,
       credentialSnapshot: credentialSnapshot(options.providerId, options.apiKey, options.baseUrl, options.apiFormat),
+      approvalMode: options.approvalMode,
       isActive: false,
     };
 
@@ -875,9 +859,24 @@ export class SessionManagerImpl extends EventEmitter {
     return this.sessions.get(sessionId) ?? null;
   }
 
-  /** Get the omp engine's session ID for a given SoC Verify session. */
+  /** Get which engine backs a given SoC Verify session. */
+  getEngine(sessionId: string): AgentEngine | undefined {
+    return this.sessions.get(sessionId)?.engine;
+  }
+
+  /** Get the engine's session ID for a given SoC Verify session (engine-neutral). */
+  getEngineSessionId(sessionId: string): string | undefined {
+    return this.sessions.get(sessionId)?.engineSessionId;
+  }
+
+  /**
+   * Get the engine's session ID for a given SoC Verify session.
+   *
+   * @deprecated Use `getEngineSessionId` — kept as a deprecated alias while
+   * callers migrate to the engine-neutral naming.
+   */
   getOmpSessionId(sessionId: string): string | undefined {
-    return this.sessions.get(sessionId)?.ompSessionId;
+    return this.getEngineSessionId(sessionId);
   }
 
   /** Get the model ID that the runtime session was actually initialized with. */
@@ -885,7 +884,7 @@ export class SessionManagerImpl extends EventEmitter {
     return this.sessions.get(sessionId)?.model;
   }
 
-  getClient(sessionId: string): AgentClient | null {
+  getClient(sessionId: string): IAgentClient | null {
     return this.sessions.get(sessionId)?.client ?? null;
   }
 
@@ -899,7 +898,7 @@ export class SessionManagerImpl extends EventEmitter {
    * This method encapsulates the complete agent turn lifecycle that was
    * previously leaked across four domains (TV AI Advisor, Coverage Closure,
    * Deep Reindexer, Error Analysis):
-   *   - Fire-and-forget prompt dispatch (omp's prompt() is async-but-completes-on-agent_end)
+   *   - Fire-and-forget prompt dispatch (the engine's prompt() is async-but-completes-on-agent_end)
    *   - Completion detection via `agent_end` event
    *   - Final assistant text extraction from `message_end` events
    *   - Error detection via `error` events
@@ -1038,11 +1037,11 @@ export class SessionManagerImpl extends EventEmitter {
    *
    * Engine-side this branches the session tree back to the latest user
    * message and re-prompts — the branch FORKS the engine session file, so
-   * the entry's ompSessionId is updated in place (the caller persists it
+   * the entry's engineSessionId is updated in place (the caller persists it
    * with the project root it already has).  The regenerated turn streams
    * back through the normal sessionEvent channel.
    */
-  async regenerateSession(sessionId: string): Promise<{ ompSessionId: string }> {
+  async regenerateSession(sessionId: string): Promise<{ engineSessionId: string }> {
     const entry = this.sessions.get(sessionId);
     if (!entry) {
       throw new Error(`Session not found: ${sessionId}`);
@@ -1051,9 +1050,9 @@ export class SessionManagerImpl extends EventEmitter {
       throw new Error(`Client not started: ${sessionId}`);
     }
     const result = await entry.client.regenerate();
-    if (result.ompSessionId && result.ompSessionId !== entry.ompSessionId) {
-      entry.ompSessionId = result.ompSessionId;
-      console.log(`[agent:session:${sessionId}] omp sessionId=${result.ompSessionId} (branched by regenerate)`);
+    if (result.engineSessionId && result.engineSessionId !== entry.engineSessionId) {
+      entry.engineSessionId = result.engineSessionId;
+      console.log(`[agent:session:${sessionId}] engine sessionId=${result.engineSessionId} (branched by regenerate)`);
     }
     return result;
   }
@@ -1083,6 +1082,9 @@ export class SessionManagerImpl extends EventEmitter {
   async setApprovalMode(sessionId: string, approvalMode: ApprovalMode): Promise<void> {
     const client = this.requireClient(sessionId);
     await client.setApprovalMode(approvalMode);
+    // 同步运行时 entry —— setModel 整体 swap 重建时沿用新值
+    const entry = this.sessions.get(sessionId);
+    if (entry) entry.approvalMode = approvalMode;
     this.touchActivity(sessionId);
   }
 
@@ -1091,6 +1093,14 @@ export class SessionManagerImpl extends EventEmitter {
     const client = this.requireClient(sessionId);
     await client.setThinkingLevel(level);
     this.touchActivity(sessionId);
+  }
+
+  /**
+   * 当前生效的系统提示词（issue 06）。引擎不支持时返回 null。
+   */
+  async getSystemPrompt(sessionId: string): Promise<string | null> {
+    const client = this.requireClient(sessionId);
+    return await client.getSystemPrompt();
   }
 
   /**
@@ -1129,7 +1139,7 @@ export class SessionManagerImpl extends EventEmitter {
   }
 
   /**
-   * Query the omp engine's MCPManager for all known MCP servers and their
+   * Query the engine's MCP manager for all known MCP servers and their
    * runtime connection status. Returns a map of server name → { status, toolCount },
    * or undefined if the session doesn't exist.
    */
@@ -1176,7 +1186,7 @@ export class SessionManagerImpl extends EventEmitter {
     }
   }
 
-  private requireClient(sessionId: string): AgentClient {
+  private requireClient(sessionId: string): IAgentClient {
     const client = this.sessions.get(sessionId)?.client;
     if (!client) {
       throw new Error(`Session not found: ${sessionId}`);
@@ -1360,6 +1370,52 @@ export class SessionManagerImpl extends EventEmitter {
     this.pendingApprovals.delete(requestId);
     pending.resolve(approved);
     return true;
+  }
+
+  /**
+   * Resolve a pending trust request from the user（issue 04）。
+   * 批准时把决策持久化到 host 信任存储（best-effort），使后续会话的
+   * init 直接携带该信任（不再询问）。拒绝则不记录 —— 下次仍会询问。
+   */
+  resolveTrust(requestId: string, approved: boolean): boolean {
+    const pending = this.pendingTrusts.get(requestId);
+    if (!pending) return false;
+    this.pendingTrusts.delete(requestId);
+    pending.resolve(approved);
+    if (approved) {
+      void this.persistTrustDecision(pending.cwd, pending.kind, pending.name);
+    }
+    return true;
+  }
+
+  /** 惰性创建信任存储（app.getPath 在应用 ready 后才可用；测试环境降级为 null）。 */
+  private async getTrustStore(): Promise<TrustStore | null> {
+    if (this.trustStore !== undefined) return this.trustStore;
+    try {
+      const { app } = await import('electron');
+      const trustStore = new TrustStore(join(app.getPath('userData'), 'socverify-data'));
+      await trustStore.load();
+      this.trustStore = trustStore;
+    } catch (err) {
+      console.warn(`[agent:session-manager] trust store unavailable (${err instanceof Error ? err.message : String(err)}) — trust decisions will not persist`);
+      this.trustStore = null;
+    }
+    return this.trustStore;
+  }
+
+  private async persistTrustDecision(cwd: string, kind: TrustKind, name: string): Promise<void> {
+    try {
+      const trustStore = await this.getTrustStore();
+      if (!trustStore) return;
+      if (kind === 'project-extension') {
+        await trustStore.addTrustedProjectDir(cwd, name);
+      } else {
+        await trustStore.addTrustedMcpServer(cwd, name);
+      }
+      console.log(`[agent:session-manager] persisted trust decision: ${kind} "${name}" for ${cwd}`);
+    } catch (err) {
+      console.warn(`[agent:session-manager] failed to persist trust decision: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 }
 

@@ -1,14 +1,15 @@
 /**
- * omp 引擎默认系统提示词模板。
+ * 默认系统提示词模板。
  *
  * 使用 Vite 的 `?raw` import 在**构建时**将模板文件内容嵌入到输出中，
- * 因此在开发模式和打包二进制模式下都能访问（不依赖运行时文件系统）。
+ * 因此在开发模式和打包模式下都能访问（不依赖运行时文件系统）。
  *
- * 模板来源：engine/oh-my-pi/packages/coding-agent/src/prompts/system/
+ * 模板来源：oh-my-pi 引擎时代的提示词快照，随源码托管于
+ * src/main/agent/prompts/（issue 10：omp submodule 移除后本地化）。
  */
 
-import mainPrompt from '../../../engine/oh-my-pi/packages/coding-agent/src/prompts/system/system-prompt.md?raw';
-import personalityPrompt from '../../../engine/oh-my-pi/packages/coding-agent/src/prompts/system/personalities/default.md?raw';
+import mainPrompt from './prompts/system-prompt.md?raw';
+import personalityPrompt from './prompts/personalities/default.md?raw';
 
 /** 主系统提示词模板（system-prompt.md），含 Handlebars 动态片段。 */
 export const DEFAULT_SYSTEM_PROMPT: string = mainPrompt;

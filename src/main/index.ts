@@ -1,7 +1,7 @@
 import { app, BrowserWindow, Tray, protocol } from 'electron';
 import { createIPCHandler } from './ipc/electron-trpc-bridge';
 import { router } from './ipc/router';
-import { resolveAgentRuntime } from './agent/paths';
+import { resolvePiRunnerScript } from './agent/paths';
 import { projectManager } from './project/project-manager';
 import { sessionManager } from './agent/session-manager';
 import { pluginLoader } from './plugins/loader';
@@ -101,18 +101,12 @@ app.whenReady().then(async () => {
   await notificationManager.init();
   wireNotificationSources();
 
-  const agentRuntime = resolveAgentRuntime();
-  if (agentRuntime) {
-    if (agentRuntime.mode === 'binary') {
-      console.log(`[agent] resolved: binary mode, runner=${agentRuntime.runnerPath}`);
-    } else {
-      console.log(`[agent] resolved: script mode, bun=${agentRuntime.bunVersion}, runner=${agentRuntime.runnerPath}`);
-      if (!agentRuntime.bunVersionOk) {
-        console.warn(`[agent] Bun version ${agentRuntime.bunVersion} is below required 1.3.14. Run: bun upgrade`);
-      }
-    }
+  // issue 10：AI 引擎固定为 pi —— 启动时只校验 pi runner 脚本可用性
+  const piRunner = resolvePiRunnerScript();
+  if (piRunner) {
+    console.log(`[agent] resolved: pi runner script=${piRunner}`);
   } else {
-    console.warn('[agent] runtime not found. Run `npm run setup:agent` to download the agent binary.');
+    console.warn('[agent] pi runner not found — expected runner-pi/index.ts in resources or repo root.');
   }
 });
 

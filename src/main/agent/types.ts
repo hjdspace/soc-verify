@@ -49,11 +49,27 @@ export interface InitConfig {
   approvalMode?: ApprovalMode;
   /** 被禁用的工具名列表（host 工具 + omp 内置工具），会话创建时不暴露给 LLM */
   disabledTools?: string[];
+  /** host 信任存储中已确认信任的 MCP server 名（首次启动确认的持久化结果，pi 引擎消费） */
+  trustedMcpServers?: string[];
+  /** host 信任存储中已确认信任的项目目录（extension 首次加载确认的持久化结果，pi 引擎消费） */
+  trustedProjectDirs?: string[];
   /**
    * 会话初始思考强度。'default' 或缺省时不下发，跟随 omp 引擎默认行为。
    * 仅当值有实际语义（非 'default'）时 runner 才会写入 sessionOptions。
    */
   thinkingLevel?: ThinkingLevelSetting;
+  /**
+   * 独立 models.json 路径（仅 pi 引擎消费，issue 07）。pi 引擎不劫持
+   * PI_CODING_AGENT_DIR（原生 session 必须落在用户级 canonical cwd bucket），
+   * 模型配置改由 runner 以 ModelRuntime.create({ modelsPath }) 显式注入。
+   */
+  modelsPath?: string;
+  /**
+   * host 下发的有序 skill 目录（仅 pi 引擎消费，issue 09）。顺序即解析
+   * 优先级（canonical 优先于 legacy，见 skill-discovery.getSkillRootDirs），
+   * 与 UI 技能列表同源，保证列表所见即会话所载。
+   */
+  skillPaths?: string[];
 }
 
 export interface CustomToolDefinition {
@@ -77,6 +93,7 @@ export type Command =
   | { id: string; type: 'listAgentTools' }
   | { id: string; type: 'getMessages' }
   | { id: string; type: 'getState' }
+  | { id: string; type: 'getSystemPrompt' }
   | { id: string; type: 'compact' }
   | { id: string; type: 'getMcpStatus' }
   | { id: string; type: 'getMcpServerTools'; serverName: string }
@@ -152,18 +169,40 @@ export interface ApprovalResponseCommand {
   approved: boolean;
 }
 
+// ─── 信任请求/响应帧（issue 04）────────────────────────────
+
+/** 信任确认类型：项目 extension 首次加载 / MCP server 首次启动 */
+export type TrustKind = 'project-extension' | 'mcp-server';
+
+/** Runner → Host：请求用户信任确认（独立于审批模式，yolo 不跳过） */
+export interface TrustRequestFrame {
+  type: 'trust_request';
+  id: string;
+  kind: TrustKind;
+  /** 项目目录（project-extension）或 server 名（mcp-server） */
+  name: string;
+  /** mcp-server 时可携带的配置来源路径（展示用） */
+  path?: string;
+}
+
+/** Host → Runner：用户信任结果 */
+export interface TrustResponseCommand {
+  type: 'trust_response';
+  id: string;
+  approved: boolean;
+}
+
 // ─── Agent Client 配置 ─────────────────────────────────────
 
 export interface AgentClientOptions {
-  /**
-   * 预编译 runner 二进制路径（binary 模式）。
-   * 设置后直接执行该二进制，不需要 Bun。
-   */
-  runnerBinaryPath?: string;
-  /** Bun 可执行文件路径（script 模式必需） */
-  bunPath?: string;
-  /** runner 脚本路径（script 模式必需） */
+  /** runner 脚本路径（如 runner-pi/index.ts） */
   runnerPath?: string;
+  /**
+   * Node 可执行文件路径（pi runner 脚本模式）。
+   * 缺省使用 process.execPath（Electron 主进程下即 Electron 二进制，
+   * 由 PiAgentClient 注入 ELECTRON_RUN_AS_NODE=1 复用其内置 Node）。
+   */
+  nodePath?: string;
   /** 工作目录 */
   cwd: string;
   /** 环境变量 */
@@ -210,6 +249,16 @@ export function isApprovalRequestFrame(value: unknown): value is ApprovalRequest
     value.type === 'approval_request' &&
     typeof value.id === 'string' &&
     typeof value.toolName === 'string'
+  );
+}
+
+export function isTrustRequestFrame(value: unknown): value is TrustRequestFrame {
+  return (
+    isRecord(value) &&
+    value.type === 'trust_request' &&
+    typeof value.id === 'string' &&
+    (value.kind === 'project-extension' || value.kind === 'mcp-server') &&
+    typeof value.name === 'string'
   );
 }
 

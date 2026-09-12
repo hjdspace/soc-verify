@@ -6,6 +6,7 @@
 import type { ContextBreakdown, ContextUsage } from '@shared/context-management';
 import type { AskQuestion } from '@shared/ask-types';
 import type { ThinkingLevelSetting } from '@shared/types';
+import type { SubagentUsageSummary } from '@shared/agent-events';
 
 export type SessionStatus = 'creating' | 'idle' | 'streaming' | 'tool_executing' | 'error';
 
@@ -23,6 +24,20 @@ export interface AskRequest {
   requestId: string;
   sessionId: string;
   questions: AskQuestion[];
+  timestamp: number;
+}
+
+/**
+ * 信任请求（issue 04）——独立于审批模式的权限边界：
+ * 项目 extension 首次加载（project-extension）与 MCP server 首次启动
+ * （mcp-server）必须经用户确认。
+ */
+export interface TrustRequest {
+  requestId: string;
+  sessionId: string;
+  kind: 'project-extension' | 'mcp-server';
+  name: string;
+  path?: string;
   timestamp: number;
 }
 
@@ -46,6 +61,12 @@ export interface ChatMessage {
   thinking?: string;
   /** Skills attached to a user message — used to render skill chips in the message bubble. */
   skills?: SelectedSkill[];
+  /**
+   * 挂起中的 LLM 错误文本（message_end 捕获、agent_end 定稿）。
+   * 会话级自动重试仍有时不渲染错误卡片；重试预算耗尽后的最终 agent_end
+   * 才把它定稿为 `[错误] ...` 内容展示。
+   */
+  pendingError?: string;
   /** 划选「添加到当前任务」附带的对话引用——气泡内渲染只读引用 chip */
   quotes?: SessionQuote[];
 }
@@ -84,6 +105,14 @@ export interface SubagentActivity {
   tokenHistory: number[];
   startedAt: number;
   endedAt?: number;
+  /** 父引擎会话 id（pi 父子归属，issue 05） */
+  parentSessionId?: string;
+  /** subagent run 生命周期目录（status/events 等 run 产物） */
+  runDir?: string;
+  /** 能力不足/失败的显式阻断原因 */
+  blockedReason?: string;
+  /** 终态 Token 用量汇总（父子归属） */
+  usage?: SubagentUsageSummary;
 }
 
 export interface AvailableModel {
@@ -139,6 +168,11 @@ export interface SessionEntry {
   runtimeSessionId?: string;
   /** The original persisted sessionId — used to match against history entries */
   persistedSessionId?: string;
+  /**
+   * 持久化 cwd 不可访问（issue 07）：会话只能查看 transcript，Agent 不可用。
+   * 恢复时由后端 degraded 结果置位；用户经 rebindSessionCwd 选择新 cwd 后清除。
+   */
+  transcriptOnlyCwd?: string;
   projectId: string;
   /** Project root used when a lazy UI session needs to start/restore its agent. */
   cwd?: string;
@@ -175,13 +209,15 @@ export interface SessionEntry {
 
 export interface HistorySession {
   sessionId: string;
-  ompSessionId?: string;
+  engineSessionId?: string;
   name: string;
   projectId: string;
   createdAt: number;
   lastActivityAt: number;
   model?: { provider: string; id: string; name: string };
   isActive: boolean;
+  /** 会话持久化的审批模式（sessions.json），恢复时沿用 */
+  approvalMode?: ApprovalMode;
   contextUsage?: ContextUsage;
   contextBreakdown?: ContextBreakdown;
 }

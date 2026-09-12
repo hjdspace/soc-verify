@@ -24,11 +24,16 @@ import {
   saveSessions,
   updateSessionModel,
   updateSessionActivity,
+  updateSessionApprovalMode,
   updateSessionContextUsage,
-  updateSessionOmpId,
+  updateSessionEngineId,
+  isCwdAccessible,
   type PersistedSession,
 } from '../../agent/session-persistence';
 import { discoverSkills, readSkillContent, resolveSkillUriPath } from '../../agent/skill-discovery';
+import { adoptExternalPiSession, listExternalPiSessions } from '../../agent/external-pi-sessions';
+import { deleteOwnedSession } from '../../agent/session-deletion';
+import { cleanupLegacyOmpSessions } from '../../agent/omp-legacy-cleanup';
 import { generateSessionTitle } from '../../agent/title-generator';
 import { generateFollowUpSuggestions } from '../../agent/followup-generator';
 import { errorAnalysisCoordinator } from '../../simulation/error-analysis-coordinator';
@@ -36,11 +41,12 @@ import type { ErrorType, ThinkingLevelSetting } from '@shared/types';
 import { normalizeThinkingLevelSetting } from '@shared/types';
 import type { ContextBreakdown, ContextUsage } from '@shared/context-management';
 import type { AskAnswer } from '@shared/ask-types';
+import type { SeedHistoryMessage } from '../../agent/types';
 
 /**
  * In-flight holistic model swaps keyed by the ORIGINAL runtime session ID.
  *
- * setModel's holistic swap destroys the old omp process and recreates it —
+ * setModel's holistic swap destroys the old process and recreates it —
  * a send() that lands in between would be delivered to the doomed process
  * and silently lost (symptom: "message sent, no LLM response ever arrives").
  * send() consults this map, waits for the swap to settle, and retargets the
@@ -56,8 +62,8 @@ const inFlightSwaps = new Map<string, Promise<HolisticSwapResult>>();
 
 /**
  * Holistic config/model switch: destroy the runtime session and recreate it
- * with the target credential's config (the omp engine cannot update
- * apiKey/baseUrl on a live process). The conversation resumes via the omp
+ * with the target credential's config (the engine cannot update
+ * apiKey/baseUrl on a live process). The conversation resumes via the engine
  * session ID so messages are preserved.
  */
 async function performHolisticSwap(input: {
@@ -135,37 +141,46 @@ async function performHolisticSwap(input: {
     }
   }
 
-  // Capture the omp session ID for resume, then destroy the runtime session
-  const ompSessionId = sessionManager.getOmpSessionId(input.sessionId);
+  // Capture the engine session ID for resume, then destroy the runtime session
+  const engineSessionId = sessionManager.getEngineSessionId(input.sessionId);
   const persistedSessionId = existing.persistedSessionId ?? input.sessionId;
 
-  console.log(`[router:session.setModel] destroying session ${input.sessionId} (ompSessionId=${ompSessionId ?? 'none'})`);
+  console.log(`[router:session.setModel] destroying session ${input.sessionId} (engineSessionId=${engineSessionId ?? 'none'})`);
   await sessionManager.destroySession(input.sessionId);
 
   // Recreate with the new credential's config, resuming the conversation.
   // If modelId is not supplied, createSession will auto-fetch the
   // credential's model list and pick the first one.
-  console.log(`[router:session.setModel] recreating session with providerId=${input.providerId}, model=${input.modelId ?? '(auto)'}`);
+  //
+  // issue 07: 重建使用持久化 cwd（引擎据此定位原生 session 的 cwd bucket），
+  // 不可访问时回退项目根；持久化 cwd 绝不被覆写为项目根（不自动重绑定）。
+  const swapCwd = await resolveRestoreCwd(project.rootPath, persistedSessionId);
+  console.log(`[router:session.setModel] recreating session with providerId=${input.providerId}, model=${input.modelId ?? '(auto)'}, cwd=${swapCwd}`);
   const ctx = await createSessionContext({
     projectId: existing.projectId,
-    cwd: project.rootPath,
+    cwd: swapCwd,
     providerId: input.providerId,
     model: input.modelId,
-    resumeSessionId: ompSessionId,
+    resumeSessionId: engineSessionId,
     persistedSessionId,
     includeCaseStats: true,
+    // 整体 swap 重建沿用当前审批模式（否则 runner 回退 always-ask，静默收紧权限）
+    approvalMode: existing.approvalMode,
   });
 
   const { sessionId: newSessionId, provider, model: resolvedModel } = ctx;
 
-  // Persist model info (with providerId) + updated ompSessionId
-  const newOmpSessionId = sessionManager.getOmpSessionId(newSessionId);
+  // Persist model info (with providerId) + updated engineSessionId
+  const newEngineSessionId = sessionManager.getEngineSessionId(newSessionId);
+  const newEngine = sessionManager.getEngine(newSessionId);
   const sessions = await loadSessions(project.rootPath);
   const idx = sessions.findIndex((s) => s.sessionId === persistedSessionId);
   if (idx >= 0) {
     sessions[idx] = {
       ...sessions[idx],
-      ompSessionId: newOmpSessionId,
+      engine: newEngine,
+      engineSessionId: newEngineSessionId,
+      cwd: swapCwd,
       lastActivityAt: Date.now(),
       model: {
         provider: provider ?? '',
@@ -188,6 +203,42 @@ async function performHolisticSwap(input: {
       providerId: input.providerId,
     },
   };
+}
+
+/**
+ * Seed transcript for a persisted session, built from the stored UI messages.
+ * The runner uses it to rebuild engine context when the native session file is
+ * missing, corrupt, or only covers a tail of the conversation (issue 07), and
+ * to validate the first user message before resuming natively.
+ */
+async function buildSeedHistory(projectRoot: string, sessionId: string): Promise<SeedHistoryMessage[]> {
+  const storedMessages = await loadStoredMessages(projectRoot, sessionId);
+  return storedMessages
+    .filter((m): m is { role: 'user' | 'assistant'; content: string; timestamp: number } => {
+      const r = m as Record<string, unknown>;
+      return (
+        (r.role === 'user' || r.role === 'assistant') &&
+        typeof r.content === 'string' &&
+        r.content.trim().length > 0 &&
+        typeof r.timestamp === 'number'
+      );
+    })
+    .map((m) => ({ role: m.role, content: m.content, timestamp: m.timestamp }));
+}
+
+/**
+ * Resolve the working directory a persisted session must run in (issue 07):
+ * recovery uses the persisted creation-time cwd so the engine locates its
+ * native session in the right cwd bucket. Falls back to the project root when
+ * the record has no cwd or the persisted cwd is no longer accessible.
+ */
+async function resolveRestoreCwd(projectRoot: string, persistedSessionId: string): Promise<string> {
+  const sessions = await loadSessions(projectRoot);
+  const record = sessions.find((s) => s.sessionId === persistedSessionId);
+  if (record?.cwd && isCwdAccessible(record.cwd)) {
+    return record.cwd;
+  }
+  return projectRoot;
 }
 
 export const sessionRouter = t.router({
@@ -241,10 +292,13 @@ export const sessionRouter = t.router({
       console.log(`[router:session.create] provider=${provider ?? '(default)'}, model=${input.model ?? '(default)'}, hasApiKey=${!!ctx.apiKey}, hasBaseUrl=${!!ctx.baseUrl}`);
 
       // Persist session metadata
-      const ompSessionId = sessionManager.getOmpSessionId(sessionId);
+      const engineSessionId = sessionManager.getEngineSessionId(sessionId);
+      const engine = sessionManager.getEngine(sessionId);
       const persisted: PersistedSession = {
         sessionId,
-        ompSessionId,
+        engine,
+        engineSessionId,
+        cwd: input.cwd,
         name: '新会话',
         projectId: input.projectId,
         createdAt: Date.now(),
@@ -252,6 +306,7 @@ export const sessionRouter = t.router({
         model: provider && input.model
           ? { provider, id: input.model, name: input.model, providerId }
           : undefined,
+        approvalMode: input.approvalMode,
       };
       await addSession(project.rootPath, persisted);
 
@@ -385,20 +440,21 @@ export const sessionRouter = t.router({
 
       // Branch the engine session back to the latest user message and
       // re-prompt. The branch forks the engine session file — persist the
-      // post-branch ompSessionId so a restart resumes the new branch.
+      // post-branch engineSessionId so a restart resumes the new branch.
       const result = await sessionManager.regenerateSession(targetSessionId);
       const entry = sessionManager.getSession(targetSessionId);
       if (entry) {
         const project = projectManager.getProject(entry.projectId);
         if (project) {
-          await updateSessionOmpId(
+          await updateSessionEngineId(
             project.rootPath,
             entry.persistedSessionId ?? targetSessionId,
-            result.ompSessionId,
+            entry.engine,
+            result.engineSessionId,
           );
         }
       }
-      return { ok: true, ompSessionId: result.ompSessionId };
+      return { ok: true, engineSessionId: result.engineSessionId };
     }),
 
   destroy: t.procedure
@@ -439,6 +495,19 @@ export const sessionRouter = t.router({
     .query(async ({ input }) => {
       const client = requireSession(input.sessionId);
       return client.getState();
+    }),
+
+  getSystemPrompt: t.procedure
+    .input((raw): { sessionId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.sessionId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'sessionId is required' });
+      }
+      return { sessionId: r.sessionId };
+    })
+    .query(async ({ input }) => {
+      // 引擎不支持时返回 null，UI 无差别展示
+      return sessionManager.getSystemPrompt(input.sessionId);
     }),
 
   compact: t.procedure
@@ -546,7 +615,7 @@ export const sessionRouter = t.router({
       // When switching by providerId (holistic config switch), modelId is
       // optional — the backend will auto-pick the first model from the
       // credential's API. When providerId is absent (legacy same-provider
-      // model swap via omp RPC), provider + modelId are required.
+      // model swap via engine RPC), provider + modelId are required.
       if (!providerId) {
         if (typeof r.provider !== 'string' || typeof r.modelId !== 'string') {
           throw new TRPCError({ code: 'BAD_REQUEST', message: 'provider and modelId are required when providerId is not supplied' });
@@ -563,10 +632,10 @@ export const sessionRouter = t.router({
     .mutation(async ({ input }) => {
       // If providerId is supplied, the user wants a holistic config switch:
       // the entire model config (provider + apiKey + baseUrl + model) must change.
-      // Since the omp engine's set_model RPC only switches the model ID (it
+      // Since the engine's set_model RPC only switches the model ID (it
       // cannot update apiKey/baseUrl at runtime), we destroy the current runtime
       // session and recreate it with the new credential's config, resuming the
-      // conversation via the omp session ID so messages are preserved.
+      // conversation via the engine session ID so messages are preserved.
       if (input.providerId) {
         const existingSwap = inFlightSwaps.get(input.sessionId);
         if (existingSwap) {
@@ -694,7 +763,7 @@ export const sessionRouter = t.router({
     .mutation(async ({ input }) => {
       const project = requireProject(input.projectId);
 
-      // Load persisted session to restore model info and omp sessionId
+      // Load persisted session to restore model info, engine and engineSessionId
       const persistedSessions = await loadSessions(project.rootPath);
       const persisted = persistedSessions.find(
         (s) => s.sessionId === input.sessionId && s.projectId === input.projectId,
@@ -703,40 +772,49 @@ export const sessionRouter = t.router({
         throw new TRPCError({ code: 'NOT_FOUND', message: `Session not found in project: ${input.sessionId}` });
       }
 
-      // Build a seed transcript from the stored UI messages. The runner uses
-      // it to rebuild engine context when the omp JSONL is missing or only
-      // covers a tail of the conversation (amnesia recovery).
-      const storedMessages = await loadStoredMessages(project.rootPath, input.sessionId);
-      const seedHistory = storedMessages
-        .filter((m): m is { role: 'user' | 'assistant'; content: string; timestamp: number } => {
-          const r = m as Record<string, unknown>;
-          return (
-            (r.role === 'user' || r.role === 'assistant') &&
-            typeof r.content === 'string' &&
-            r.content.trim().length > 0 &&
-            typeof r.timestamp === 'number'
-          );
-        })
-        .map((m) => ({ role: m.role, content: m.content, timestamp: m.timestamp }));
+      // issue 07: 恢复使用持久化 cwd（创建时目录，引擎据此进入正确的原生
+      // session cwd bucket）。目录不存在或不可访问时只能查看 transcript ——
+      // 不创建运行时会话；用户在 UI 明确选择新 cwd（rebindCwd）后才能重建。
+      const persistedCwd = persisted.cwd ?? project.rootPath;
+      if (!isCwdAccessible(persistedCwd)) {
+        console.warn(
+          `[router:session.restore] persisted cwd not accessible: ${persistedCwd} — degrading to transcript-only view`,
+        );
+        return {
+          sessionId: null,
+          degraded: { reason: 'cwd-unavailable' as const, cwd: persistedCwd },
+          name: input.name ?? persisted.name,
+          model: persisted.model,
+        };
+      }
+
+      const seedHistory = await buildSeedHistory(project.rootPath, input.sessionId);
 
       const ctx = await createSessionContext({
         projectId: input.projectId,
-        cwd: input.cwd,
+        cwd: persistedCwd,
         providerId: input.providerId,
         model: persisted?.model?.id,
         persistedModel: persisted?.model,
-        // Use the omp sessionId for resume — this is what the runner matches against
-        resumeSessionId: persisted.ompSessionId ?? input.sessionId,
+        // Resume by the persisted engine session id — the runner locates the
+        // native session file in the persisted cwd bucket (issue 07). Legacy
+        // records without one fall back to the runtime session id (rebuild path).
+        resumeSessionId: persisted.engineSessionId ?? input.sessionId,
         seedHistory,
         persistedSessionId: input.sessionId,
         includeCaseStats: true,
-        approvalMode: input.approvalMode,
+        // 审批模式：UI 入参优先（用户刚切换过），否则沿用 sessions.json 持久化值。
+        // 修复：恢复会话此前只依赖 UI 入参，而恢复 entry 未携带 approvalMode
+        // （undefined）→ runner 回退 always-ask，与 UI 显示的 yolo 不一致，
+        // 导致 host 工具（如 get_project_overview）在"完全信任"下仍弹审批。
+        approvalMode: input.approvalMode ?? persisted.approvalMode,
         thinkingLevel: input.thinkingLevel,
       });
       const { sessionId, provider, model: resolvedModelId, providerId } = ctx;
 
       // Persist the latest runtime resume handle and activity timestamp.
-      const ompSessionId = sessionManager.getOmpSessionId(sessionId);
+      const engineSessionId = sessionManager.getEngineSessionId(sessionId);
+      const engine = sessionManager.getEngine(sessionId);
       const resolvedModel = provider && resolvedModelId
         ? {
             provider,
@@ -750,7 +828,10 @@ export const sessionRouter = t.router({
       if (idx >= 0) {
         sessions[idx] = {
           ...sessions[idx],
-          ompSessionId,
+          engine,
+          engineSessionId,
+          // 重建后 engineSessionId 已更新；cwd 始终保持持久化值（不覆写为项目根）
+          cwd: persistedCwd,
           lastActivityAt: Date.now(),
           model: resolvedModel,
         };
@@ -763,6 +844,89 @@ export const sessionRouter = t.router({
         sessionId,
         name: input.name ?? `Session ${input.sessionId.slice(-6)}`,
         model: resolvedModel,
+      };
+    }),
+
+  /**
+   * Rebind a session to a user-selected working directory (issue 07).
+   *
+   * The explicit user choice required before a session whose persisted cwd is
+   * inaccessible can be rebuilt and execute tools again. The old native
+   * session file is NOT rebound: the new cwd bucket cannot contain it, so the
+   * runner rebuilds from the UI transcript — a fresh engine session in a new
+   * bucket (project move / rename semantics, no silent re-parenting).
+   */
+  rebindCwd: t.procedure
+    .input((raw): { projectId: string; sessionId: string; newCwd: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.sessionId !== 'string' || typeof r.newCwd !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, sessionId and newCwd are required' });
+      }
+      return { projectId: r.projectId, sessionId: r.sessionId, newCwd: r.newCwd };
+    })
+    .mutation(async ({ input }) => {
+      const project = requireProject(input.projectId);
+
+      if (!isCwdAccessible(input.newCwd)) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: `New working directory is not accessible: ${input.newCwd}`,
+        });
+      }
+
+      const persistedSessions = await loadSessions(project.rootPath);
+      const persisted = persistedSessions.find(
+        (s) => s.sessionId === input.sessionId && s.projectId === input.projectId,
+      );
+      if (!persisted) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: `Session not found in project: ${input.sessionId}` });
+      }
+
+      const seedHistory = await buildSeedHistory(project.rootPath, input.sessionId);
+
+      const ctx = await createSessionContext({
+        projectId: input.projectId,
+        cwd: input.newCwd,
+        providerId: persisted.model?.providerId,
+        model: persisted.model?.id,
+        persistedModel: persisted.model,
+        // 旧原生 session 在旧 bucket 中 —— 新 bucket 找不到即由 runner 重建
+        resumeSessionId: persisted.engineSessionId ?? input.sessionId,
+        seedHistory,
+        persistedSessionId: input.sessionId,
+        includeCaseStats: true,
+        approvalMode: persisted.approvalMode,
+      });
+      const { sessionId, provider, model: resolvedModelId, providerId } = ctx;
+
+      const engineSessionId = sessionManager.getEngineSessionId(sessionId);
+      const engine = sessionManager.getEngine(sessionId);
+      const resolvedModel = provider && resolvedModelId
+        ? { provider, id: resolvedModelId, name: persisted.model?.name ?? resolvedModelId, providerId }
+        : persisted.model;
+
+      const idx = persistedSessions.findIndex((s) => s.sessionId === input.sessionId);
+      if (idx >= 0) {
+        persistedSessions[idx] = {
+          ...persistedSessions[idx],
+          engine,
+          engineSessionId,
+          cwd: input.newCwd,
+          lastActivityAt: Date.now(),
+          model: resolvedModel,
+        };
+        await saveSessions(project.rootPath, persistedSessions);
+      }
+
+      console.log(
+        `[router:session.rebindCwd] session ${input.sessionId} rebound to ${input.newCwd} (engineSessionId=${engineSessionId ?? 'none'})`,
+      );
+
+      return {
+        sessionId,
+        name: persisted.name,
+        model: resolvedModel,
+        rebound: true,
       };
     }),
 
@@ -826,9 +990,91 @@ export const sessionRouter = t.router({
       for (const activeSessionId of activeSessionIds) {
         await sessionManager.destroySession(activeSessionId);
       }
-      await removeSession(project.rootPath, input.sessionId);
-      await rm(storedMessagesPath(project.rootPath, input.sessionId), { force: true });
-      return { ok: true };
+      // issue 08: 统一清理（应用索引 / UI transcript / 原生 JSONL / artifacts），
+      // 部分失败在 report.residual 中报告残留状态，不静默吞错。
+      const sessions = await loadSessions(project.rootPath);
+      const target = sessions.find((s) => s.sessionId === input.sessionId);
+      const report = await deleteOwnedSession(
+        project.rootPath,
+        target ?? { sessionId: input.sessionId },
+      );
+      return { ok: true, report };
+    }),
+
+  // ─── 外部 pi session 扫描与接管（issue 08）──────────────
+
+  /**
+   * 只读扫描 cwd bucket 中不属于应用的外部 pi session（已排除应用索引中
+   * 的 engineSessionId 及其 parentSessionPath 祖先链）。不写入任何状态。
+   * 确认提示（首次打开外部 session 需用户确认接管）由 UI 层在调用
+   * adoptExternalPiSession 之前完成。
+   */
+  listExternalPiSessions: t.procedure
+    .input((raw): { projectId: string; cwd: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.cwd !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and cwd are required' });
+      }
+      return { projectId: r.projectId, cwd: r.cwd };
+    })
+    .query(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      return listExternalPiSessions(project.rootPath, input.cwd);
+    }),
+
+  /**
+   * 显式接管一个外部 pi session：注册应用会话（engine='pi'，恢复走原生
+   * 路径获得应用的 extension/MCP/工具信任边界）+ 种子 UI transcript。
+   * 幂等：重复接管返回已有索引项。
+   */
+  adoptExternalPiSession: t.procedure
+    .input(
+      (raw): { projectId: string; cwd: string; nativeSessionId: string; sessionFilePath: string; name?: string } => {
+        const r = raw as Record<string, unknown>;
+        if (
+          typeof r.projectId !== 'string' ||
+          typeof r.cwd !== 'string' ||
+          typeof r.nativeSessionId !== 'string' ||
+          typeof r.sessionFilePath !== 'string'
+        ) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'projectId, cwd, nativeSessionId and sessionFilePath are required',
+          });
+        }
+        return {
+          projectId: r.projectId,
+          cwd: r.cwd,
+          nativeSessionId: r.nativeSessionId,
+          sessionFilePath: r.sessionFilePath,
+          name: typeof r.name === 'string' && r.name.length > 0 ? r.name : undefined,
+        };
+      },
+    )
+    .mutation(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const { session, transcriptCount } = await adoptExternalPiSession(project.rootPath, input);
+      return { ok: true, session, transcriptCount };
+    }),
+
+  /**
+   * 清理 SoC Verify 明确拥有的旧 omp 原生 session 与 artifacts（迁移完成
+   * 后调用，issue 08）：只删除 header id 精确匹配本项目已索引 omp
+   * engineSessionId 的文件；保留 UI transcript 与应用索引；绝不递归删除
+   * 用户全局 ~/.omp。触发时机由迁移流程（issue 11）编排。
+   */
+  cleanupLegacyOmpSessions: t.procedure
+    .input((raw): { projectId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      return { projectId: r.projectId };
+    })
+    .mutation(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const report = await cleanupLegacyOmpSessions(project.rootPath);
+      return { ok: true, report };
     }),
 
   listSkills: t.procedure
@@ -856,7 +1102,7 @@ export const sessionRouter = t.router({
       return readSkillContent(input.filePath);
     }),
 
-  // 将 omp 内部 URI（skill://<name>[/<rel>]）解析为磁盘上的真实文件路径。
+  // 将引擎内部 URI（skill://<name>[/<rel>]）解析为磁盘上的真实文件路径。
   // 渲染层工具卡片点击技能路径时调用，避免把 URI 当文件路径打开报"文件不存在"。
   resolveSkillUri: t.procedure
     .input((raw): { projectId: string; uri: string } => {
@@ -880,7 +1126,7 @@ export const sessionRouter = t.router({
    * 为仿真失败用例创建独立的 AI Agent 会话。
    *
    * 内部流程：
-   * 1. 复用 sessionManager.createSession() 创建 omp 进程
+   * 1. 复用 sessionManager.createSession() 创建引擎子进程
    * 2. 注入错误类型相关的 system prompt
    * 3. 自动发送错误上下文作为首条消息
    * 4. 持久化会话元数据
@@ -924,13 +1170,16 @@ export const sessionRouter = t.router({
 
       // Persist session metadata
       const project = requireProject(input.projectId);
-      const ompSessionId = sessionManager.getOmpSessionId(sessionId);
+      const engineSessionId = sessionManager.getEngineSessionId(sessionId);
+      const engine = sessionManager.getEngine(sessionId);
       const sessionName = input.errorType === 'compile_error'
         ? `[编译修复] ${input.caseName}`
         : `[仿真分析] ${input.caseName}`;
       const persisted: PersistedSession = {
         sessionId,
-        ompSessionId,
+        engine,
+        engineSessionId,
+        cwd: input.cwd ?? project.rootPath,
         name: sessionName,
         projectId: input.projectId,
         createdAt: Date.now(),
@@ -955,6 +1204,43 @@ export const sessionRouter = t.router({
       const resolved = sessionManager.resolveApproval(input.requestId, input.approved);
       if (!resolved) {
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Approval request not found or already resolved' });
+      }
+      return { ok: true };
+    }),
+
+  resolveTrust: t.procedure
+    .input((raw): {
+      requestId: string;
+      approved: boolean;
+      kind: 'project-extension' | 'mcp-server';
+      name?: string;
+      path?: string;
+    } => {
+      const r = raw as Record<string, unknown>;
+      const validKinds = ['project-extension', 'mcp-server'];
+      if (
+        typeof r.requestId !== 'string' ||
+        typeof r.approved !== 'boolean' ||
+        typeof r.kind !== 'string' ||
+        !validKinds.includes(r.kind)
+      ) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: `requestId (string), approved (boolean) and kind (one of: ${validKinds.join(', ')}) are required`,
+        });
+      }
+      return {
+        requestId: r.requestId,
+        approved: r.approved,
+        kind: r.kind as 'project-extension' | 'mcp-server',
+        ...(typeof r.name === 'string' ? { name: r.name } : {}),
+        ...(typeof r.path === 'string' ? { path: r.path } : {}),
+      };
+    })
+    .mutation(async ({ input }) => {
+      const resolved = sessionManager.resolveTrust(input.requestId, input.approved);
+      if (!resolved) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Trust request not found or already resolved' });
       }
       return { ok: true };
     }),
@@ -994,6 +1280,14 @@ export const sessionRouter = t.router({
       // applied when the session is created via ensureRuntimeSession.
       try {
         await sessionManager.setApprovalMode(input.sessionId, input.approvalMode);
+        // 持久化到 sessions.json —— 运行时 entry 携带 persistedSessionId +
+        // projectId，据此定位 sessions 记录；重启恢复/换模型 swap 时沿用。
+        const entry = sessionManager.getSession(input.sessionId);
+        const persistedId = entry?.persistedSessionId ?? input.sessionId;
+        const project = entry ? projectManager.getProject(entry.projectId) : undefined;
+        if (project) {
+          await updateSessionApprovalMode(project.rootPath, persistedId, input.approvalMode);
+        }
       } catch {
         // Session not running — mode will be applied on next session create/restore.
       }
@@ -1010,7 +1304,7 @@ export const sessionRouter = t.router({
     })
     .mutation(async ({ input }) => {
       // Dynamically update the thinking level on the running session (persisted
-      // into the omp session file so omp-native resume keeps it). If the
+      // into the engine session file so native resume keeps it). If the
       // session isn't running yet, the level stored in the renderer session
       // state is applied at create time via InitConfig.thinkingLevel.
       try {

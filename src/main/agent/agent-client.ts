@@ -10,6 +10,8 @@ import type {
   ToolResultCommand,
   ApprovalRequestFrame,
   ApprovalResponseCommand,
+  TrustRequestFrame,
+  TrustResponseCommand,
 } from './types';
 import {
   isEventFrame,
@@ -18,23 +20,24 @@ import {
   isSubagentFrame,
   isToolCallFrame,
   isApprovalRequestFrame,
+  isTrustRequestFrame,
 } from './types';
+import type {
+  AgentInitResult,
+  AgentRegenerateResult,
+  ApprovalHandler,
+  EventListener,
+  IAgentClient,
+  ToolCallHandler,
+  TrustHandler,
+} from './agent-contract';
+import type { AgentEngine } from '@shared/agent-events';
 import type { ContextBreakdown, ContextUsage } from '@shared/context-management';
 import type { ThinkingLevelSetting } from '@shared/types';
 
-export type ToolCallHandler = (
-  toolName: string,
-  args: unknown,
-) => Promise<unknown>;
-
-export type EventListener = (event: unknown) => void;
-
-/** 审批请求处理器——返回 true 表示用户同意，false 表示拒绝 */
-export type ApprovalHandler = (
-  requestId: string,
-  toolName: string,
-  args: unknown,
-) => Promise<boolean>;
+// Re-exported for backward compatibility — these types now live on the
+// engine-neutral contract (agent-contract.ts).
+export type { ToolCallHandler, EventListener, ApprovalHandler } from './agent-contract';
 
 /**
  * Diagnose why a binary spawn failed. Returns a diagnostic string to append
@@ -95,7 +98,18 @@ export function diagnoseSpawnFailure(binaryPath: string, err: Error): string {
   return parts.join('\n');
 }
 
-export class AgentClient {
+/**
+ * Engine-neutral JSONL client base class.
+ *
+ * 持有与引擎无关的客户端机制：ready 握手、请求/响应关联、tool_call/
+ * approval/trust 桥、事件转发、进程树清理。引擎身份（`engine`）与
+ * 启动方式（`resolveSpawn`）由子类决定 —— issue 10 移除 omp 运行时后，
+ * 基类不再提供 binary（预编译二进制）或 Bun 脚本两种启动模式。
+ */
+export abstract class AgentClient implements IAgentClient {
+  /** Engine identity — declared by the concrete engine subclass. */
+  abstract readonly engine: AgentEngine;
+
   private process: ChildProcess | null = null;
   /** The PID captured at spawn time, used for process-tree kill on Windows. */
   private processPid: number | null = null;
@@ -107,14 +121,33 @@ export class AgentClient {
   private pendingToolCalls = new Map<string, AbortController>();
   private toolCallHandler: ToolCallHandler | null = null;
   private approvalHandler: ApprovalHandler | null = null;
+  private trustHandler: TrustHandler | null = null;
   private eventListeners: EventListener[] = [];
   private stderrBuffer = '';
   private readyTimeoutMs: number;
   /** Guards against double-kill: once stop() runs, subsequent calls are no-ops. */
   private stopping = false;
+  /** Set when the child emits 'exit' — makes isRunning() truthful after a crash. */
+  private exited = false;
+  /** Set when the ready handshake completed — crash detection needs it (issue 08). */
+  private readyAchieved = false;
 
-  constructor(private options: AgentClientOptions) {
+  constructor(protected readonly options: AgentClientOptions) {
     this.readyTimeoutMs = options.readyTimeoutMs ?? 30000;
+  }
+
+  /**
+   * Resolve the runner spawn command.
+   *
+   * Template-method seam: engine subclasses override this to launch their
+   * runner (e.g. PiAgentClient runs the runner-pi script with Node via
+   * ELECTRON_RUN_AS_NODE=1). The base class has no default launch mode —
+   * omp 时代的 binary/Bun 双模式已随运行时移除（issue 10）。
+   */
+  protected resolveSpawn(): { cmd: string; args: string[] } {
+    throw new Error(
+      'Engine-neutral AgentClient subclass must override resolveSpawn() to launch its runner',
+    );
   }
 
   async start(): Promise<void> {
@@ -123,23 +156,7 @@ export class AgentClient {
       throw new Error(`Agent working directory does not exist: ${this.options.cwd}`);
     }
 
-    // Determine spawn mode: binary (direct execution) or script (bun run)
-    let spawnCmd: string;
-    let spawnArgs: string[];
-
-    if (this.options.runnerBinaryPath) {
-      // Binary mode: directly execute the pre-compiled runner
-      spawnCmd = this.options.runnerBinaryPath;
-      spawnArgs = [];
-    } else if (this.options.bunPath && this.options.runnerPath) {
-      // Script mode: use Bun to run the runner script
-      spawnCmd = this.options.bunPath;
-      spawnArgs = ['run', this.options.runnerPath];
-    } else {
-      throw new Error(
-        'Agent client requires either runnerBinaryPath (binary mode) or bunPath + runnerPath (script mode)',
-      );
-    }
+    const { cmd: spawnCmd, args: spawnArgs } = this.resolveSpawn();
 
     const child = spawn(spawnCmd, spawnArgs, {
       cwd: this.options.cwd,
@@ -156,20 +173,15 @@ export class AgentClient {
     const { promise: readyPromise, resolve: readyResolve, reject: readyReject } = Promise.withResolvers<void>();
     let readySettled = false;
 
-    // Handle spawn errors (e.g. binary not found, missing shared library,
-    // wrong ELF format).  Without this listener, Node.js treats the 'error'
+    // Handle spawn errors (e.g. runner not found, incompatible binary).
+    //  Without this listener, Node.js treats the 'error'
     // event as an uncaught exception and crashes the Electron main process
     // with a "A JavaScript error occurred in the main process" dialog.
-    //
-    // On Linux AppImage, this is the primary failure mode when the
-    // socverify-runner binary can't execute (missing system libs, wrong
-    // architecture, or the binary simply wasn't packaged for thi platform).
     child.on('error', (err: Error) => {
       const diagnostic = diagnoseSpawnFailure(spawnCmd, err);
       const enriched = new Error(
         `Failed to spawn agent process '${spawnCmd}': ${err.message}. ` +
-        `This usually means the runner binary is missing, not executable, ` +
-        `or has missing shared libraries on this system.${diagnostic}`,
+        `This usually means the runner is missing or not executable on this system.${diagnostic}`,
       );
       if (!readySettled) {
         readySettled = true;
@@ -197,6 +209,7 @@ export class AgentClient {
 
       if (!readySettled && isReadyFrame(parsed)) {
         readySettled = true;
+        this.readyAchieved = true;
         readyResolve();
         return;
       }
@@ -217,6 +230,8 @@ export class AgentClient {
     });
 
     child.on('exit', (code, signal) => {
+      this.exited = true;
+
       for (const [, pending] of this.pendingRequests) {
         clearTimeout(pending.timeoutId);
         pending.reject(new Error(`Process exited (code=${code}, signal=${signal})`));
@@ -227,6 +242,18 @@ export class AgentClient {
         controller.abort();
       }
       this.pendingToolCalls.clear();
+
+      // issue 08: runner 崩溃（ready 已达成且非主动 stop）→ 合成 error 事件
+      // 分发给监听者。渲染层据 error 事件把会话置为 error 状态，等待用户
+      // 显式重启 —— 绝不自动重放可能产生副作用的 turn。主动 stop（destroy/
+      // abort/模型热切换）与 ready 前退出（start() 拒绝路径）都不算崩溃。
+      if (this.readyAchieved && !this.stopping) {
+        const reason = `Agent process crashed (code=${code}, signal=${signal})`;
+        console.error(`[agent:client] ${reason}`);
+        for (const listener of this.eventListeners) {
+          listener({ type: 'error', error: reason, message: reason });
+        }
+      }
 
       if (!readySettled) {
         readySettled = true;
@@ -257,7 +284,7 @@ export class AgentClient {
    *
    * On POSIX (Linux/macOS): sends SIGTERM to the process group (negative
    * PID), then escalates to SIGKILL after a 1s grace period. This catches
-   * subagents spawned by the omp engine that would otherwise survive.
+   * any descendants the engine spawned that would otherwise survive.
    *
    * On Windows: uses `taskkill /F /T /PID` which recursively terminates
    * all child processes. Windows has no process groups in the POSIX sense,
@@ -342,7 +369,7 @@ export class AgentClient {
   }
 
   isRunning(): boolean {
-    return this.process !== null && !this.stopping && !this.process.killed;
+    return this.process !== null && !this.stopping && !this.exited && !this.process.killed;
   }
 
   // ─── 事件订阅 ─────────────────────────────────────────
@@ -376,11 +403,28 @@ export class AgentClient {
     } satisfies ApprovalResponseCommand);
   }
 
+  // ─── 信任 Handler 注册（issue 04）──────────────────────
+
+  setTrustHandler(handler: TrustHandler): void {
+    this.trustHandler = handler;
+  }
+
+  /** 发送信任响应到 runner */
+  sendTrustResponse(requestId: string, approved: boolean): void {
+    this.writeFrame({
+      type: 'trust_response',
+      id: requestId,
+      approved,
+    } satisfies TrustResponseCommand);
+  }
+
   // ─── 命令方法 ─────────────────────────────────────────
 
-  async init(config: import('./types').InitConfig): Promise<{ sessionId: string }> {
+  async init(config: import('./types').InitConfig): Promise<AgentInitResult> {
     const response = await this.send({ type: 'init', config });
-    return this.getData<{ sessionId: string }>(response);
+    const data = this.getData<{ sessionId: string }>(response);
+    // Map the runner's omp-native `sessionId` onto the engine-neutral name.
+    return { engineSessionId: data.sessionId };
   }
 
   async prompt(message: string, images?: string[]): Promise<void> {
@@ -403,17 +447,10 @@ export class AgentClient {
   /**
    * Regenerate the last assistant response.
    *
-   * The runner branches the engine session back to the latest user message
-   * (which forks the engine session file — the omp session id changes) and
-   * re-prompts with that message. The response frame arrives right after the
-   * branch and carries the post-branch ompSessionId so the host can
-   * re-persist it; the regenerated turn itself streams back via the normal
-   * event channel.
+   * 分支语义由各引擎子类实现（如 PiAgentClient 分支到最后一条 user
+   * message 之前并返回新的 engineSessionId）；基类不提供默认实现。
    */
-  async regenerate(): Promise<{ ompSessionId: string }> {
-    const response = await this.send({ type: 'regenerate' }, 60_000);
-    return this.getData<{ ompSessionId: string }>(response);
-  }
+  abstract regenerate(): Promise<AgentRegenerateResult>;
 
   /**
    * Abort the current agent turn.
@@ -477,6 +514,19 @@ export class AgentClient {
   async getState(): Promise<unknown> {
     const response = await this.send({ type: 'getState' });
     return this.getData<{ state: unknown }>(response).state;
+  }
+
+  /**
+   * 当前生效的系统提示词（issue 06）。引擎未实现该命令时返回失败响应 ——
+   * 这里优雅降级为 null，调用方（设置/会话 UI）无需感知引擎差异。
+   */
+  async getSystemPrompt(): Promise<string | null> {
+    try {
+      const response = await this.send({ type: 'getSystemPrompt' });
+      return this.getData<{ systemPrompt: string }>(response).systemPrompt;
+    } catch {
+      return null;
+    }
   }
 
   async compact(): Promise<{
@@ -559,7 +609,9 @@ export class AgentClient {
     this.writeFrame(fullCommand);
   }
 
-  private send<T extends Omit<Command, 'id'>>(command: T, timeoutMs = 120000): Promise<ResponseFrame> {
+  // protected：引擎子类（PiAgentClient）覆写 regenerate 等命令时复用
+  // 请求/响应关联与响应解包机制。
+  protected send<T extends Omit<Command, 'id'>>(command: T, timeoutMs = 120000): Promise<ResponseFrame> {
     if (!this.process?.stdin) throw new Error('Client not started');
 
     const id = `req_${++this.requestId}`;
@@ -617,6 +669,11 @@ export class AgentClient {
 
     if (isApprovalRequestFrame(data)) {
       void this.handleApprovalRequest(data);
+      return;
+    }
+
+    if (isTrustRequestFrame(data)) {
+      void this.handleTrustRequest(data);
       return;
     }
 
@@ -694,7 +751,22 @@ export class AgentClient {
     }
   }
 
-  private getData<T>(response: ResponseFrame): T {
+  private async handleTrustRequest(frame: TrustRequestFrame): Promise<void> {
+    if (!this.trustHandler) {
+      // 无 handler 时 fail closed：信任确认绝不自动放行（安全边界，
+      // 与审批的 fail open 语义相反 —— 误拒无害，误信有风险）。
+      this.sendTrustResponse(frame.id, false);
+      return;
+    }
+    try {
+      const approved = await this.trustHandler(frame.id, frame.kind, frame.name, frame.path);
+      this.sendTrustResponse(frame.id, approved);
+    } catch {
+      this.sendTrustResponse(frame.id, false);
+    }
+  }
+
+  protected getData<T>(response: ResponseFrame): T {
     if (!response.success) {
       throw new Error(response.error ?? 'Unknown error');
     }

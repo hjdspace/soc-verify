@@ -291,7 +291,7 @@ export function McpTab() {
               ? 'bg-background text-foreground shadow-sm'
               : 'text-muted-foreground hover:text-foreground',
           )}
-          title="保存到 ~/.omp/mcp.json，跨项目可用，不进入 git"
+          title="保存到 ~/.pi/agent/mcp.json，跨项目可用，不进入 git"
         >
           用户级
         </button>
@@ -310,7 +310,7 @@ export function McpTab() {
       </div>
 
       {/* TraceWeave built-in diagnostic (user-level: the built-in server
-          lives in ~/.omp/mcp.json; python/pip deps are user provisions) */}
+          lives in ~/.pi/agent/mcp.json; python/pip deps are user provisions) */}
       {mcpEditScope === 'user' && <TraceweaveDiagnosticCard />}
 
       {/* Server List */}

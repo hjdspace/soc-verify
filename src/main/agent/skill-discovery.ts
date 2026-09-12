@@ -1,12 +1,34 @@
 /**
- * Skill discovery: scans for SKILL.md files in known directories.
+ * Skill discovery — pi canonical 来源与旧 omp 只读兼容（issue 09）。
  *
- * Skill directories (mirroring the omp engine's discovery):
- *   Built-in:       <app>/resources/built-in-extension/skills  (随应用打包)
- *   Project-level:  <root>/.omp/skills, <root>/.claude/skills, <root>/.agents/skills, <root>/.github/skills
- *   User-level:     ~/.omp/agent/skills, ~/.omp/agent/managed-skills, ~/.claude/skills, ~/.agents/skills, ~/.codex/skills
+ * 引擎迁移到 pi 后，skill 的发现、创建与解析对齐 pi canonical 布局：
  *
- * Each SKILL.md has YAML-like frontmatter:
+ *   项目级 canonical:  <root>/.pi/skills          （pi 默认项目来源）
+ *   用户级 canonical:  ~/.pi/agent/skills          （pi 默认用户来源，可管理）
+ *   内置:              <app>/resources/built-in-extension/skills（随应用打包）
+ *
+ * 旧 omp 布局只读兼容一个版本周期（只发现、不创建、不修改、不删除）：
+ *
+ *   项目级 legacy:     <root>/.omp/skills
+ *   用户级 legacy:     ~/.omp/agent/skills
+ *
+ * managed-skills（omp 自动学习产物）不迁移：不再发现，应用任何代码路径
+ * 都不写入该目录。omp 时代的镜像目录（.claude/.github/.codex）是旧引擎的
+ * 发现规则，pi 不加载，随之停止扫描。
+ *
+ * 注意：.agents/skills（项目级 <root>/.agents/skills 与用户级
+ * ~/.agents/skills）**不是** omp 镜像，而是 pi 原生 canonical 来源之一
+ * （pi DefaultResourceLoader 默认发现，见 pi SDK package-manager 的
+ * collectAncestorAgentsSkillDirs / userAgentsSkillsDir），必须扫描以保持
+ * 与 pi-tui 斜杠命令技能发现一致。
+ *
+ * 同名 skill 解析优先级（first-wins，只暴露一个确定结果）：
+ *   project .pi > project .agents > project .omp > builtin >
+ *   user .pi > user .agents > user .omp
+ * （作用域优先 project > builtin > user；同作用域内 .pi canonical 优先，
+ *   .agents 次之，omp legacy 最后）
+ *
+ * 每个技能是 <skills-dir>/<skill-name>/SKILL.md，frontmatter：
  *   ---
  *   name: skill-name
  *   description: Skill description text
@@ -24,34 +46,80 @@ import type { SkillInfo, SkillSource, SkillDirectoryInfo, CreateSkillInput, Skil
 
 export type { SkillInfo, SkillSource, SkillDirectoryInfo, CreateSkillInput, SkillInstallInfo };
 
-/** Directories to scan for project-level skills */
-const PROJECT_SKILL_DIRS = [
-  '.omp/skills',
-  '.claude/skills',
-  '.agents/skills',
-  '.github/skills',
-];
+// ─── 来源定义（有序 = 解析优先级） ───────────────────────
+
+/** 一个被扫描的技能根目录及其来源语义。 */
+export type SkillRootDir = {
+  /** 绝对路径 */
+  path: string;
+  /** UI 展示用的来源分类 */
+  source: SkillSource;
+  /** 是否为 pi canonical 来源（相对旧 omp legacy 而言） */
+  canonical: boolean;
+  /** 应用是否可在该目录创建/删除技能 */
+  manageable: boolean;
+};
+
+/** 内置技能子目录名（位于 built-in-extension 包内）。 */
+const BUILTIN_SKILLS_SUBDIR = 'skills';
 
 /**
- * User-level skill directory descriptors.
- * Mirrors omp engine's discovery: native omp uses ~/.omp/agent/skills (not ~/.omp/skills).
+ * 组装项目级 + 用户级 + 内置的有序技能根目录列表。
+ * 顺序即同名解析优先级：project .pi > project .agents > project .omp >
+ * builtin > user .pi > user .agents > user .omp。
+ *
+ * 与 pi DefaultResourceLoader 默认发现的差异说明：pi 还会沿 cwd 向上遍历
+ * 至 git 根收集各级 .agents/skills（需 project trusted）；host 侧只扫
+ * projectRoot 一层（桌面单项目场景 cwd 即项目根），不做祖先遍历。
  */
-interface UserSkillDirEntry {
-  /** Path relative to home directory */
-  relPath: string;
-  /** Human-readable label */
-  label: string;
-  /** Whether skills here can be created/deleted by the app */
-  manageable: boolean;
+export function getSkillRootDirs(projectRoot: string | null): SkillRootDir[] {
+  const home = homedir();
+  const dirs: SkillRootDir[] = [];
+
+  if (projectRoot) {
+    dirs.push(
+      { path: join(projectRoot, '.pi', 'skills'), source: 'project', canonical: true, manageable: false },
+      // pi agents 标准目录（pi 默认项目来源之一，"agents" 模式）
+      { path: join(projectRoot, '.agents', 'skills'), source: 'project', canonical: true, manageable: false },
+      { path: join(projectRoot, '.omp', 'skills'), source: 'project', canonical: false, manageable: false },
+    );
+  }
+
+  const builtInExtDir = resolveBuiltInExtensionDir();
+  if (builtInExtDir) {
+    dirs.push({
+      path: join(builtInExtDir, BUILTIN_SKILLS_SUBDIR),
+      source: 'builtin',
+      canonical: true,
+      manageable: false,
+    });
+  }
+
+  dirs.push(
+    { path: join(home, '.pi', 'agent', 'skills'), source: 'user', canonical: true, manageable: true },
+    // pi agents 标准用户目录（pi 默认用户来源之一）；应用不在此创建，仅发现
+    { path: join(home, '.agents', 'skills'), source: 'user', canonical: true, manageable: false },
+    // 只读兼容一个版本周期（移除期限：v0.6.0，见 spec「Further Notes」——
+    // 历史兼容读取点应有明确注释和移除期限）：仅发现，不创建/修改/删除
+    { path: join(home, '.omp', 'agent', 'skills'), source: 'user', canonical: false, manageable: false },
+  );
+
+  return dirs;
 }
 
-const USER_SKILL_DIRS: UserSkillDirEntry[] = [
-  { relPath: '.omp/agent/skills', label: 'OMP 用户级', manageable: true },
-  { relPath: '.omp/agent/managed-skills', label: 'OMP 自动学习', manageable: true },
-  { relPath: '.claude/skills', label: 'Claude 用户级', manageable: true },
-  { relPath: '.agents/skills', label: 'Agents 用户级', manageable: true },
-  { relPath: '.codex/skills', label: 'Codex 用户级', manageable: true },
-];
+/**
+ * runner 装载用的有序 skill 目录列表（仅含磁盘上存在的目录）。
+ *
+ * host 与 runner 的单一事实来源：UI 发现（discoverSkills）与 pi 会话
+ * 实际装载（DefaultResourceLoader additionalSkillPaths）使用同一份列表，
+ * 保证"列表里看到的"就是"会被加载的"。旧 omp 目录在兼容期内仍会装载
+ * （只读可用），canonical 目录优先。
+ */
+export async function resolveSkillLoadPaths(projectRoot: string): Promise<string[]> {
+  return getSkillRootDirs(projectRoot)
+    .map((d) => d.path)
+    .filter((p) => existsSync(p));
+}
 
 /**
  * Parse YAML-like frontmatter from SKILL.md content.
@@ -111,7 +179,11 @@ async function scanSkillDir(
     // Scan subdirectories
     const entries = await readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
+      // 目录或指向目录的 symlink：Windows 上 symlink 的 Dirent.isDirectory()
+      // 恒为 false（~/.agents/skills 下常见 mklink/ln -s 镜像布局），需与
+      // pi SDK（skills.js collectSkillEntries）一致地放行链接条目。
+      // existsSync 跟随 symlink，断链或指向文件的链接自然返回 false 跳过。
+      if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
       const skillPath = join(dir, entry.name, 'SKILL.md');
       if (existsSync(skillPath)) {
         const skill = await tryParseSkill(skillPath, source);
@@ -152,86 +224,39 @@ async function tryParseSkill(
 }
 
 /**
- * Discover all available skills for a given project root.
- * Scans built-in, project-level, and user-level skill directories.
- * Deduplicates by skill name with priority: project > builtin > user.
+ * 按有序目录列表扫描并去重（first-wins）。
+ * 调用方保证 dirs 的顺序即解析优先级（见 getSkillRootDirs）。
  */
-export async function discoverSkills(projectRoot: string): Promise<SkillInfo[]> {
-  const home = homedir();
-  const allSkills: SkillInfo[] = [];
-
-  // Scan built-in extension skills (shipped with the app)
-  const builtInExtDir = resolveBuiltInExtensionDir();
-  if (builtInExtDir) {
-    const builtInSkillsDir = join(builtInExtDir, 'skills');
-    const found = await scanSkillDir(builtInSkillsDir, 'builtin');
-    allSkills.push(...found);
-  }
-
-  // Scan project-level skill directories
-  for (const relDir of PROJECT_SKILL_DIRS) {
-    const dir = join(projectRoot, relDir);
-    const found = await scanSkillDir(dir, 'project');
-    allSkills.push(...found);
-  }
-
-  // Scan user-level skill directories
-  for (const entry of USER_SKILL_DIRS) {
-    const dir = join(home, entry.relPath);
-    const found = await scanSkillDir(dir, 'user');
-    allSkills.push(...found);
-  }
-
-  // Deduplicate by name — priority: project > builtin > user
-  const sourcePriority: Record<SkillSource, number> = { project: 0, builtin: 1, user: 2 };
+async function discoverFromDirs(dirs: SkillRootDir[]): Promise<SkillInfo[]> {
   const seen = new Set<string>();
   const deduped: SkillInfo[] = [];
-  allSkills.sort((a, b) => sourcePriority[a.source] - sourcePriority[b.source]);
-  for (const skill of allSkills) {
-    if (seen.has(skill.name)) continue;
-    seen.add(skill.name);
-    deduped.push(skill);
+  for (const dir of dirs) {
+    const found = await scanSkillDir(dir.path, dir.source);
+    for (const skill of found) {
+      if (seen.has(skill.name)) continue;
+      seen.add(skill.name);
+      deduped.push(skill);
+    }
   }
-
   return deduped;
+}
+
+/**
+ * Discover all available skills for a given project root.
+ * Scans project-level, built-in, and user-level skill directories.
+ * 同名 skill 按 project > builtin > user 解析（同作用域 canonical 优先），
+ * 只暴露一个确定结果。
+ */
+export async function discoverSkills(projectRoot: string): Promise<SkillInfo[]> {
+  return discoverFromDirs(getSkillRootDirs(projectRoot));
 }
 
 /**
  * Discover all available skills WITHOUT a project root.
  * Used by the settings page — scans built-in and user-level directories only.
- * Deduplicates by skill name with priority: builtin > user.
  */
 export async function discoverAllSkills(): Promise<SkillInfo[]> {
-  const home = homedir();
-  const allSkills: SkillInfo[] = [];
-
-  // Scan built-in extension skills (shipped with the app)
-  const builtInExtDir = resolveBuiltInExtensionDir();
-  if (builtInExtDir) {
-    const builtInSkillsDir = join(builtInExtDir, 'skills');
-    const found = await scanSkillDir(builtInSkillsDir, 'builtin');
-    allSkills.push(...found);
-  }
-
-  // Scan user-level skill directories
-  for (const entry of USER_SKILL_DIRS) {
-    const dir = join(home, entry.relPath);
-    const found = await scanSkillDir(dir, 'user');
-    allSkills.push(...found);
-  }
-
-  // Deduplicate by name — priority: builtin > user
-  const sourcePriority: Record<SkillSource, number> = { project: 0, builtin: 1, user: 2 };
-  const seen = new Set<string>();
-  const deduped: SkillInfo[] = [];
-  allSkills.sort((a, b) => sourcePriority[a.source] - sourcePriority[b.source]);
-  for (const skill of allSkills) {
-    if (seen.has(skill.name)) continue;
-    seen.add(skill.name);
-    deduped.push(skill);
-  }
-
-  return deduped;
+  return discoverFromDirs(getSkillRootDirs(null));
 }
 
 /**
@@ -245,15 +270,14 @@ export async function readSkillContent(filePath: string): Promise<string> {
 /**
  * Resolve a `skill://` internal URI to the real file path on disk.
  *
- * omp 引擎在会话内用 `skill://<name>` 读写技能（见 engine 的
- * internal-urls/skill-protocol.ts），但 UI 层（工具卡片路径点击等）拿到的是
- * 原始 URI 字符串——直接当文件路径打开必然失败（"文件不存在"）。
- * 此函数将其解析为磁盘上的绝对路径：
+ * 会话内用 `skill://<name>[/<rel>]` 引用技能文件，UI 层（工具卡片路径点击
+ * 等）拿到的是原始 URI 字符串——直接当文件路径打开必然失败。此函数将其
+ * 解析为磁盘上的绝对路径：
  *   skill://<name>            → 该技能的 SKILL.md
  *   skill://<name>/<rel-path> → 技能 baseDir 下的相对文件（如 references/foo.md）
  *
- * 与引擎的 SkillProtocolHandler 保持一致的约束：拒绝绝对路径与 `..` 穿越；
- * 目标必须存在。解析不到（技能不存在 / 文件不存在）返回 null。
+ * 安全约束（与 pi 加载语义一致）：拒绝绝对路径与 `..` 穿越；目标必须
+ * 存在。解析不到（技能不存在 / 文件不存在）返回 null。
  */
 export async function resolveSkillUriPath(projectRoot: string, uri: string): Promise<string | null> {
   if (!uri.startsWith('skill://')) return null;
@@ -277,7 +301,7 @@ export async function resolveSkillUriPath(projectRoot: string, uri: string): Pro
   } catch {
     // keep raw
   }
-  // 与引擎 validateRelativePath 一致：拒绝绝对路径与 .. 穿越
+  // 拒绝绝对路径与 .. 穿越（Windows 盘符路径与 POSIX 绝对路径均拦截）
   if (isAbsolute(decoded) || decoded.split(/[\\/]/).includes('..')) return null;
 
   const target = join(skill.baseDir, decoded);
@@ -287,37 +311,25 @@ export async function resolveSkillUriPath(projectRoot: string, uri: string): Pro
 /**
  * Get information about all scanned skill directories.
  * Used by the settings page to show users where skills are discovered from.
+ * 从 getSkillRootDirs(null) 派生 —— 目录清单与 manageable 语义只有这一份
+ * 定义，UI 展示不会与实际扫描/写入点漂移。
  */
 export async function getSkillDirectoryInfo(): Promise<SkillDirectoryInfo[]> {
-  const home = homedir();
-  const dirs: SkillDirectoryInfo[] = [];
+  const dirLabel = (dir: SkillRootDir): string => {
+    if (dir.source === 'builtin') return '内置技能（随应用打包）';
+    if (dir.path.includes(join(homedir(), '.agents', 'skills'))) {
+      return '用户级（pi agents 标准，只读）';
+    }
+    return dir.canonical ? '用户级（pi canonical）' : '旧版 OMP 用户级（只读兼容）';
+  };
 
-  // Built-in directory
-  const builtInExtDir = resolveBuiltInExtensionDir();
-  if (builtInExtDir) {
-    const builtInSkillsDir = join(builtInExtDir, 'skills');
-    dirs.push({
-      path: builtInSkillsDir,
-      source: 'builtin',
-      label: '内置技能（随应用打包）',
-      exists: existsSync(builtInSkillsDir),
-      manageable: false,
-    });
-  }
-
-  // User-level directories
-  for (const entry of USER_SKILL_DIRS) {
-    const dir = join(home, entry.relPath);
-    dirs.push({
-      path: dir,
-      source: 'user',
-      label: entry.label,
-      exists: existsSync(dir),
-      manageable: entry.manageable,
-    });
-  }
-
-  return dirs;
+  return getSkillRootDirs(null).map((dir) => ({
+    path: dir.path,
+    source: dir.source,
+    label: dirLabel(dir),
+    exists: existsSync(dir.path),
+    manageable: dir.manageable,
+  }));
 }
 
 /**
@@ -326,27 +338,24 @@ export async function getSkillDirectoryInfo(): Promise<SkillDirectoryInfo[]> {
 export async function getSkillInstallInfo(): Promise<SkillInstallInfo> {
   const directories = await getSkillDirectoryInfo();
   const guidance = [
-    '技能以 SKILL.md 文件的形式存在，omp 会自动发现以下目录中的技能：',
+    '技能以 SKILL.md 文件的形式存在，pi 引擎会自动发现以下目录中的技能：',
     '',
     '1. 内置技能：随应用打包，不可修改。',
-    '2. 用户级技能：放在用户主目录下，可在此页面创建和管理。',
-    '3. 项目级技能：放在项目根目录的 .omp/skills/ 等目录下，随项目分发。',
+    '2. 用户级技能（pi canonical）：~/.pi/agent/skills/，可在此页面创建和管理。',
+    '3. 项目级技能（pi canonical）：项目根目录 .pi/skills/，随项目分发。',
+    '4. pi agents 标准目录：~/.agents/skills/ 与项目根 .agents/skills/，',
+    '   与 pi-tui 斜杠命令共享的技能位置（只发现，不在此页面管理）。',
     '',
-    'SKILL.md 格式：',
-    '  ---',
-    '  name: my-skill          # 技能名称（kebab-case）',
-    '  description: 技能描述     # 一行描述，用于技能发现',
-    '  ---',
-    '  # 技能内容',
-    '  Markdown 格式的技能正文...',
-    '',
-    '技能目录结构：<skills-dir>/<skill-name>/SKILL.md',
+    '旧版兼容（只读，移除期限 v0.6.0）：',
+    '  - 项目根目录 .omp/skills/ 与用户目录 ~/.omp/agent/skills/ 中的旧技能',
+    '    在一个版本周期内仍会被发现和加载，但不再支持创建、修改和删除；',
+    '    请将仍在使用的技能迁移到上方的 canonical 目录。',
   ].join('\n');
 
   return { directories, guidance };
 }
 
-/** Validate a kebab-case skill name (matches omp's managed-skill pattern). */
+/** Validate a kebab-case skill name. */
 function validateSkillName(name: string): void {
   const pattern = /^[a-z0-9][a-z0-9-]{0,63}$/;
   if (!pattern.test(name)) {
@@ -356,9 +365,15 @@ function validateSkillName(name: string): void {
   }
 }
 
+/** pi canonical 用户级技能根目录（应用创建/删除技能的唯一写入点）。 */
+function canonicalUserSkillsDir(): string {
+  return join(homedir(), '.pi', 'agent', 'skills');
+}
+
 /**
  * Create a new user-level skill.
- * Writes SKILL.md to ~/.omp/agent/skills/<name>/SKILL.md.
+ * 写入 pi canonical 用户级目录 ~/.pi/agent/skills/<name>/SKILL.md。
+ * 旧 omp 目录（含 managed-skills）在迁移后不被创建或修改。
  */
 export async function createUserSkill(input: CreateSkillInput): Promise<SkillInfo> {
   const name = input.name.trim().toLowerCase();
@@ -371,9 +386,7 @@ export async function createUserSkill(input: CreateSkillInput): Promise<SkillInf
     throw new Error('技能内容不能为空');
   }
 
-  const home = homedir();
-  // Create in the primary user-level omp skills directory
-  const skillDir = join(home, '.omp/agent/skills', name);
+  const skillDir = join(canonicalUserSkillsDir(), name);
   const skillFilePath = join(skillDir, 'SKILL.md');
 
   // Check if skill already exists
@@ -401,7 +414,8 @@ export async function createUserSkill(input: CreateSkillInput): Promise<SkillInf
 
 /**
  * Delete a user-level skill by name.
- * Only allows deleting skills from user-level directories (not built-in or project-level).
+ * 只允许删除 pi canonical 用户级目录中的技能；旧 omp 只读兼容目录中的
+ * 技能拒绝删除（一个版本周期内只读可用，请先迁移到 canonical 目录）。
  *
  * Node.js v22 `fs.rm({ recursive: true, force: true })` 在 Windows 上存在 bug：
  * 报告成功但目录实际未被删除。因此删除后会验证目录确实不存在；
@@ -411,10 +425,17 @@ export async function deleteUserSkill(name: string): Promise<void> {
   const safeName = name.trim().toLowerCase();
   validateSkillName(safeName);
 
-  const home = homedir();
-  const skillDir = join(home, '.omp/agent/skills', safeName);
+  const skillDir = join(canonicalUserSkillsDir(), safeName);
 
   if (!existsSync(skillDir)) {
+    // 区分「存在于只读旧目录」与「不存在」，给出可操作的错误信息
+    const legacyDir = join(homedir(), '.omp', 'agent', 'skills', safeName);
+    if (existsSync(join(legacyDir, 'SKILL.md'))) {
+      throw new Error(
+        `技能 "${safeName}" 位于旧版 OMP 只读兼容目录，不支持删除。` +
+          '请将该技能迁移到 ~/.pi/agent/skills 后再管理。',
+      );
+    }
     throw new Error(`技能 "${safeName}" 不存在于用户级目录中`);
   }
 

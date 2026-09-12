@@ -123,7 +123,7 @@ export function AgentToolsTab() {
       ))}
 
       <section className="space-y-2">
-        <h4 className="text-xs font-semibold text-foreground">omp 引擎内置工具</h4>
+        <h4 className="text-xs font-semibold text-foreground">引擎内置工具</h4>
         <div className="grid grid-cols-2 gap-1.5">
           {builtinTools.map((tool) => (
             <ToolToggle

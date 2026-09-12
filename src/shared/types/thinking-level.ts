@@ -1,8 +1,8 @@
 /**
  * 思考强度（thinking level）配置。
  *
- * 值域与 omp 引擎的 `ThinkingLevel` / `ConfiguredThinkingLevel` 对齐
- * （engine/oh-my-pi/packages/agent/src/thinking.ts 与 coding-agent/src/thinking.ts）：
+ * 值域与 pi 引擎的 `ThinkingLevel` / `ConfiguredThinkingLevel` 对齐
+ * （@earendil-works/pi-coding-agent 的 thinking 类型）：
  *  - auto    引擎逐轮根据 prompt 自动选择思考强度
  *  - off     关闭推理
  *  - minimal ~1k tokens

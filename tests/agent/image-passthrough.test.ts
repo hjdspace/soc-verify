@@ -5,44 +5,24 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 // ─── Mock paths module ──────────────────────────────────────────────
-// In vitest, source files are imported directly (not bundled), so __dirname
-// inside paths.ts resolves to src/main/agent/ (3 levels deep) instead of
-// out/main/ (2 levels deep). This makes devBinariesDir() resolve to
-// src/resources/binaries (wrong) instead of <root>/resources/binaries.
-// We mock the resolver functions to look in the right place.
+// The real spawn path (resolvePiRunnerScript) resolves runner-pi/index.ts
+// from the repo root, which is correct under vitest. Only the built-in
+// extension dir needs mocking: under vitest, __dirname inside paths.ts
+// resolves to src/main/agent/ instead of out/main/, so the bundled
+// extension lookup would look in the wrong place.
 //
 // vi.hoisted ensures the path computation runs before the mock factory,
 // which itself is hoisted above all imports by vitest.
 const mockPaths = vi.hoisted(() => {
   const { existsSync } = require('node:fs') as typeof import('node:fs');
   const { join, resolve } = require('node:path') as typeof import('node:path');
-  const { execFileSync } = require('node:child_process') as typeof import('node:child_process');
   // __dirname in the test file = <root>/tests/agent
   const projectRoot = resolve(__dirname, '..', '..');
-  const binaryPath = join(projectRoot, 'resources', 'binaries', 'socverify-runner.exe');
   const builtInExtDir = join(projectRoot, 'resources', 'built-in-extension');
-  const runnerScript = join(projectRoot, 'runner', 'index.ts');
-  const engineSdk = join(projectRoot, 'engine', 'oh-my-pi', 'packages', 'coding-agent', 'src', 'sdk.ts');
-
-  // Find Bun in PATH
-  let bunPath: string | null = null;
-  try {
-    const out = execFileSync('where', ['bun'], { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] });
-    bunPath = out.trim().split(/\r?\n/)[0] || null;
-  } catch {
-    bunPath = null;
-  }
-
-  const useScriptMode = existsSync(runnerScript) && existsSync(engineSdk) && bunPath !== null;
 
   return {
-    binaryPath,
     builtInExtDir,
-    binaryExists: existsSync(binaryPath),
     extExists: existsSync(join(builtInExtDir, 'skills')),
-    useScriptMode,
-    runnerScript,
-    bunPath,
   };
 });
 
@@ -50,14 +30,6 @@ vi.mock('../../src/main/agent/paths', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/main/agent/paths')>();
   return {
     ...actual,
-    resolveAgentRuntime: () => {
-      // Use binary mode (script mode requires engine submodule deps)
-      if (mockPaths.binaryExists) {
-        return { mode: 'binary' as const, runnerPath: mockPaths.binaryPath };
-      }
-      return null;
-    },
-    resolveRunnerBinary: () => (mockPaths.binaryExists ? mockPaths.binaryPath : null),
     resolveBuiltInExtensionDir: () =>
       mockPaths.extExists ? mockPaths.builtInExtDir : null,
   };
