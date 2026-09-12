@@ -30,7 +30,7 @@ vi.mock('@earendil-works/pi-coding-agent', () => ({
   },
   getAgentDir: () => '/fake/agent-dir',
   hasTrustRequiringProjectResources: () => false,
-  SettingsManager: { create: () => ({ __fakeSettingsManager: true }) },
+  SettingsManager: { create: () => ({ __fakeSettingsManager: true, applyOverrides: () => {} }) },
 }));
 
 // issue 05：subagent 扩展经 jiti 加载，测试中替换为受控 fake

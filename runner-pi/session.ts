@@ -512,6 +512,31 @@ async function resolveSessionManager(
 	return { manager, recovery: "new" };
 }
 
+// ─── provider 层 HTTP 重试（瞬时限流/网络错误的兜底） ───
+
+/**
+ * pi 有两层重试，此处显式开启 HTTP 层：
+ *  - 会话级 auto retry（默认开启，3 次 × 2s 指数退避）按 errorMessage 文本
+ *    分类，pi-ai 把 `insufficient_quota` 归为"配额/计费耗尽"类永久错误、
+ *    fail fast 不重试 —— 而内部 OpenAI 兼容网关把 TPM/RPM 限流误用该 code
+ *    上报，导致瞬时限流直接把错误抛给用户。
+ *  - HTTP 层 provider retry（pi 默认关闭：settings `retry.provider.maxRetries`
+ *    未配置时为 0）按 HTTP 状态码判定（408/409/429/5xx），不受响应体里误导性
+ *    code 的影响，并遵循 retry-after / retry-after-ms 头（超过 maxRetryDelayMs
+ *    的服务端延迟仍立即失败，避免长时间卡死）。
+ *
+ * 经 SettingsManager.applyOverrides 内存覆盖开启，不落盘、不改用户级
+ * settings.json。maxRetries=3：退避序列约 0.5s/1s/2s（有 retry-after 头时
+ * 按服务端指示等待），覆盖大多数 TPM/RPM 窗口。
+ */
+const PROVIDER_HTTP_MAX_RETRIES = 3;
+
+function applyProviderRetryOverride(settingsManager: SettingsManager): void {
+	settingsManager.applyOverrides({
+		retry: { provider: { maxRetries: PROVIDER_HTTP_MAX_RETRIES } },
+	});
+}
+
 // ─── init ───────────────────────────────────────────────
 
 export async function handleInit(
@@ -549,10 +574,14 @@ export async function handleInit(
 	const mcp = await assembleMcp(config, ctx);
 	const subagents = await assembleSubagents(config, ctx);
 	const agentDir = getAgentDir();
+	// 单一 SettingsManager 实例同时供 loader 与 createAgentSession 使用
+	// （createAgentSession 不传 settingsManager 时会自建新实例，override 会丢失）。
+	const settingsManager = SettingsManager.create(config.cwd, agentDir);
+	applyProviderRetryOverride(settingsManager);
 	const loader = new DefaultResourceLoader({
 		cwd: config.cwd,
 		agentDir,
-		settingsManager: SettingsManager.create(config.cwd, agentDir),
+		settingsManager,
 		extensionFactories: [buildApprovalExtension(ctx), ...mcp.factories, ...subagents.factories],
 		appendSystemPrompt: buildAppendSystemPrompt(config.systemPrompt),
 		// skill 装载（issue 09）：host 下发有序 skillPaths（与 UI 发现同源），
@@ -592,6 +621,7 @@ export async function handleInit(
 	const result = await createAgentSession({
 		cwd: config.cwd,
 		sessionManager: manager,
+		settingsManager,
 		...(modelRuntime ? { modelRuntime } : {}),
 		resourceLoader: loader,
 		customTools: buildCustomTools(

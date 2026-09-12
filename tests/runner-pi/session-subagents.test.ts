@@ -59,7 +59,7 @@ vi.mock('@earendil-works/pi-coding-agent', () => ({
   },
   getAgentDir: () => '/fake/agent-dir',
   hasTrustRequiringProjectResources: () => false,
-  SettingsManager: { create: () => ({ __fakeSettingsManager: true }) },
+  SettingsManager: { create: () => ({ __fakeSettingsManager: true, applyOverrides: () => {} }) },
 }));
 
 const { handleInit, handleSetApprovalMode, handleCancelSubagent } = await import(

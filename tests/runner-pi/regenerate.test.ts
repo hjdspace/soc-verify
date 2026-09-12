@@ -40,7 +40,7 @@ vi.mock('@earendil-works/pi-coding-agent', () => ({
   },
   getAgentDir: () => '/fake/agent-dir',
   hasTrustRequiringProjectResources: () => false,
-  SettingsManager: { create: () => ({}) },
+  SettingsManager: { create: () => ({ applyOverrides: () => {} }) },
 }));
 
 vi.mock('jiti', () => ({
