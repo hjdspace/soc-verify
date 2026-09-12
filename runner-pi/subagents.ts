@@ -2,14 +2,14 @@
  * pi-subagents 扩展集成（issue 05 — Subagent 父子工作流）。
  *
  * 纯逻辑部分：pi-subagents 在 pi.events 上发布的扩展事件归一化为 host
- * SubagentFrame 契约（omp renderer 兼容形状）、终态映射、Token usage 提取、
+ * SubagentFrame 契约、终态映射、Token usage 提取、
  * 审批继承 → capability ceiling、RPC stop 帧、活动 run 跟踪。
  * pi 侧接线（扩展加载、pi.events 订阅、ceiling 注册）在 session.ts 完成。
  *
  * 契约边界（spec）：
  *   - pi-subagents 的原生通道名/事件形状只在 runner 进程内出现；
- *   - renderer 收到的 payload 与 omp runner 的 subagent_lifecycle /
- *     subagent_progress 帧形状一致（id/status/agent/progress）；
+ *   - renderer 只接收稳定的 subagent_lifecycle / subagent_progress 帧，
+ *     不感知 pi-subagents 的原生事件通道与字段差异；
  *   - Token usage 在终态事件中携带 usage（父子归属：payload.parentSessionId
  *     + id），host 侧写入 Token Monitor 时保留引擎、会话与父子关联；
  *   - 能力不足（扩展加载失败、invalid_request 等）以 blockedReason 显式
@@ -96,7 +96,7 @@ export type SubagentFrame = {
 export type SubagentNormalizeContext = {
 	/** 父 pi 会话 id（父子归属关键字段） */
 	parentSessionId: string | null;
-	/** 发起本次运行的 task/subagent 工具调用 id（UI 卡片关联） */
+	/** 发起本次运行的 subagent 工具调用 id（UI 卡片关联） */
 	parentToolCallId?: string;
 }
 
@@ -208,7 +208,9 @@ export function normalizeSubagentFrame(
 		case SUBAGENT_DELEGATION_RESPONSE_CHANNEL:
 		case SUBAGENT_ASYNC_COMPLETE_CHANNEL:
 		case SUBAGENT_FOREGROUND_COMPLETE_CHANNEL: {
-			const id = str(p.runId) ?? str(p.requestId) ?? str(p.id);
+			const id = channel === SUBAGENT_FOREGROUND_COMPLETE_CHANNEL
+				? str(p.id) ?? str(p.runId)
+				: str(p.runId) ?? str(p.requestId) ?? str(p.id);
 			if (!id) return [];
 			const status = channel === SUBAGENT_DELEGATION_RESPONSE_CHANNEL
 				? mapTerminalStatus(p.status)
@@ -220,6 +222,7 @@ export function normalizeSubagentFrame(
 			return [
 				lifecycleFrame(id, status, ctx, {
 					agent: str(p.agent),
+					index: num(p.taskIndex),
 					usage: extractSubagentUsage(p.usage) ?? undefined,
 					blockedReason: status !== "completed" ? (str(p.error) ?? str(p.reason)) : undefined,
 					ownerRunId: str(p.ownerRunId),

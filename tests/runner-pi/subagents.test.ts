@@ -17,6 +17,7 @@ import {
   SUBAGENT_DELEGATION_RESPONSE_CHANNEL,
   SUBAGENT_DELEGATION_UPDATE_CHANNEL,
   SUBAGENT_ASYNC_STARTED_CHANNEL,
+  SUBAGENT_FOREGROUND_COMPLETE_CHANNEL,
   trackSubagentRun,
   type SubagentRunRegistry,
 } from '../../runner-pi/subagents';
@@ -160,6 +161,31 @@ describe('normalizeSubagentFrame', () => {
         id: 'run-async-1',
         status: 'completed',
         parentToolCallId: 'call-1',
+      },
+    });
+  });
+
+  it('foreground-complete 使用 child id 和 taskIndex 保留同一 run 内的子代理身份', () => {
+    const frames = normalizeSubagentFrame(
+      SUBAGENT_FOREGROUND_COMPLETE_CHANNEL,
+      {
+        id: 'run-foreground-1:2',
+        runId: 'run-foreground-1',
+        taskIndex: 2,
+        agent: 'reviewer',
+        success: true,
+        state: 'complete',
+      },
+      { parentSessionId: 'p', parentToolCallId: 'call-foreground-1' },
+    );
+
+    expect(frames[0]).toMatchObject({
+      type: 'subagent_lifecycle',
+      payload: {
+        id: 'run-foreground-1:2',
+        index: 2,
+        status: 'completed',
+        parentToolCallId: 'call-foreground-1',
       },
     });
   });

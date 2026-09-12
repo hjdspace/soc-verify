@@ -19,7 +19,6 @@ import {
 import type { OrbState } from '@renderer/components/visual';
 import { ThinkingOrb } from '@renderer/components/visual';
 import type { ChatMessage, SubagentActivity } from '@renderer/stores/session-types';
-import { SubagentCard } from './SubagentCard';
 import {
   isMCPTool,
   extractResultText,
@@ -30,9 +29,6 @@ import {
   countLines,
   tryParseJSON,
   parseJsonArray,
-  parseTaskItemsFromResult,
-  isTaskAsyncRunning,
-  buildSubagentsFromResult,
   parseJobItems,
   parseTodoItems,
   extractRpivTodoTasks,
@@ -42,7 +38,6 @@ import {
   extractSkillName,
   parseMCPToolName,
   getToolDetails,
-  SUBAGENT_TOOLS,
 } from './tool-helpers';
 import { GenericBody } from './tool-bodies/shared/GenericBody';
 import { McpBody } from './tool-bodies/shared/McpBody';
@@ -57,7 +52,11 @@ import { GlobBody } from './tool-bodies/exec/GlobBody';
 import { WebSearchBody } from './tool-bodies/exec/WebSearchBody';
 import { WebFetchBody, GetSearchContentBody } from './tool-bodies/exec/WebFetchBody';
 import { SourceCheckBody } from './tool-bodies/exec/SourceCheckBody';
-import { TaskBody } from './tool-bodies/agent/TaskBody';
+import {
+  getPiSubagentPresentation,
+  resolvePiSubagentActivities,
+  SubagentBody,
+} from './tool-bodies/agent/SubagentBody';
 import { JobBody } from './tool-bodies/agent/JobBody';
 import { TodoBody } from './tool-bodies/agent/TodoBody';
 import { SimRunBody } from './tool-bodies/host/SimRunBody';
@@ -69,10 +68,10 @@ import { AskBody } from './tool-bodies/interactive/AskBody';
 
 // ── Types ──────────────────────────────────────────────
 
-export type ToolBodyProps = { message: ChatMessage; taskAgents: SubagentActivity[] };
+export type ToolBodyProps = { message: ChatMessage; subagents: SubagentActivity[] };
 
 export type ToolEntry = {
-  summary: (message: ChatMessage, taskAgents: SubagentActivity[]) => ReactNode;
+  summary: (message: ChatMessage, subagents: SubagentActivity[]) => ReactNode;
   Body: ComponentType<ToolBodyProps>;
 };
 
@@ -138,24 +137,22 @@ function globSummary(message: ChatMessage): ReactNode {
   return <><span className="text-foreground">{pattern}</span> {' \u00b7 '} {isExecuting ? 'finding...' : `${fileCount} files`}</>;
 }
 
-function taskSummary(message: ChatMessage, taskAgents: SubagentActivity[]): ReactNode {
-  const isExecuting = !message.toolResult;
-  if (taskAgents.length > 0) {
-    const running = taskAgents.filter((a) => a.status === 'running').length;
-    if (running > 0) return <>{taskAgents.length} 个子代理 {' \u00b7 '}{running} 运行中</>;
-    const done = taskAgents.filter((a) => a.status === 'completed').length;
-    const failed = taskAgents.filter((a) => a.status === 'failed').length;
-    return <>{taskAgents.length} 个子代理 {' \u00b7 '}{done} 成功{failed > 0 ? ` / ${failed} 失败` : ''}</>;
+function subagentSummary(message: ChatMessage, liveSubagents: SubagentActivity[]): ReactNode {
+  const presentation = getPiSubagentPresentation(message);
+  if (presentation.mode === 'management') {
+    const action = argStr(message.toolArgs, 'action') ?? 'management';
+    const target = argStr(message.toolArgs, 'id', 'runId', 'agent');
+    return <><span className="text-foreground">{action}</span>{target ? ` ${target}` : ''} {' \u00b7 '} {message.toolResult === undefined ? 'executing...' : 'done'}</>;
   }
-  const taskItems = parseTaskItemsFromResult(message.toolResult);
-  if (isExecuting) return <>dispatching sub-agents...</>;
-  if (isTaskAsyncRunning(message.toolResult)) {
-    const running = taskItems.filter((t) => t.status === 'running').length;
-    return <>{taskItems.length} 个子代理 {' \u00b7 '}{running} 运行中</>;
-  }
-  const done = taskItems.filter((t) => t.status === 'done').length;
-  const failed = taskItems.filter((t) => t.status === 'error').length;
-  return <>{taskItems.length} 个子代理 {' \u00b7 '}{done} 成功{failed > 0 ? ` / ${failed} 失败` : ''}</>;
+
+  const subagents = resolvePiSubagentActivities(presentation, liveSubagents);
+  if (subagents.length === 0) return <>{presentation.mode} {' \u00b7 '} done</>;
+  const running = subagents.filter((agent) => agent.status === 'running').length;
+  if (running > 0) return <>{subagents.length} 个子代理 {' \u00b7 '}{running} 运行中</>;
+  const completed = subagents.filter((agent) => agent.status === 'completed').length;
+  const failed = subagents.filter((agent) => agent.status === 'failed').length;
+  const aborted = subagents.filter((agent) => agent.status === 'aborted').length;
+  return <>{subagents.length} 个子代理 {' \u00b7 '}{completed} 成功{failed > 0 ? ` / ${failed} 失败` : ''}{aborted > 0 ? ` / ${aborted} 中止` : ''}</>;
 }
 
 function jobSummary(message: ChatMessage): ReactNode {
@@ -360,8 +357,8 @@ function GetSearchContentBodyWrap({ message }: ToolBodyProps) {
 function SourceCheckBodyWrap({ message }: ToolBodyProps) {
   return <SourceCheckBody args={message.toolArgs} result={message.toolResult} resultText={extractResultText(message.toolResult)} />;
 }
-function TaskBodyWrap({ message }: ToolBodyProps) {
-  return <TaskBody result={message.toolResult} resultText={extractResultText(message.toolResult)} />;
+function SubagentBodyWrap({ message, subagents }: ToolBodyProps) {
+  return <SubagentBody message={message} liveSubagents={subagents} />;
 }
 function JobBodyWrap({ message }: ToolBodyProps) {
   return <JobBody resultText={extractResultText(message.toolResult)} />;
@@ -435,8 +432,7 @@ export const TOOL_REGISTRY: Record<string, ToolEntry> = {
   fetch_content:           { summary: fetchContentSummary, Body: WebFetchBodyWrap },
   get_search_content:      { summary: getSearchContentSummary, Body: GetSearchContentBodyWrap },
   source_check:            { summary: sourceCheckSummary, Body: SourceCheckBodyWrap },
-  task:                    { summary: taskSummary, Body: TaskBodyWrap },
-  subagent:                { summary: taskSummary, Body: TaskBodyWrap },
+  subagent:                { summary: subagentSummary, Body: SubagentBodyWrap },
   job:                     { summary: jobSummary, Body: JobBodyWrap },
   todo:                    { summary: todoSummary, Body: TodoBodyWrap },
   ask:                     { summary: askSummary, Body: AskBodyWrap },
@@ -480,7 +476,7 @@ export function toolToOrbState(toolName: string): OrbState {
   return 'working';
 }
 
-/** Module-level empty array: non-task tools return stable reference, avoid re-renders */
+/** Module-level empty array: tools without subagents return a stable reference. */
 export const NO_SUBAGENTS: SubagentActivity[] = [];
 
 /** 工具类别 → 折叠行前导图标（DSH §6.1：16px 槽位内 14px 变体图标） */
@@ -498,45 +494,36 @@ export const CATEGORY_ICON: Record<string, ComponentType<{ className?: string }>
 // ── Shared lookup helpers ──────────────────────────────
 
 /** 摘要统一入口：registry 命中 → 注册表摘要；MCP → mcp 摘要；否则 default。 */
-export function getToolSummary(message: ChatMessage, taskAgents: SubagentActivity[] = NO_SUBAGENTS): ReactNode {
+export function getToolSummary(message: ChatMessage, subagents: SubagentActivity[] = NO_SUBAGENTS): ReactNode {
   const toolName = message.toolName ?? '';
   const isMCP = isMCPTool(toolName);
   const entry = isMCP ? undefined : TOOL_REGISTRY[toolName];
-  if (entry) return entry.summary(message, taskAgents);
+  if (entry) return entry.summary(message, subagents);
   return isMCP ? mcpSummary(message) : defaultSummary(message);
 }
 
 // ── ToolBody dispatcher ────────────────────────────────
 
 /**
- * 展开体统一分发器：task 优先用 subagent 实时/快照磁贴，其次 executing
- * 占位、MCP、registry、GenericBody 兜底。ToolCard 与 ToolRunGroup 共用。
+ * 展开体统一分发器：pi-subagents 直接消费原生结果与实时状态，其余工具走
+ * executing 占位、MCP、registry、GenericBody 兜底。ToolCard 与 ToolRunGroup 共用。
  */
 export function ToolBodyView({
   message,
-  taskAgents,
+  subagents,
 }: {
   message: ChatMessage;
-  taskAgents: SubagentActivity[];
+  subagents: SubagentActivity[];
 }) {
   const name = message.toolName ?? '';
   const isExecuting = !message.toolResult;
 
-  // task 工具：有 subagent 实时数据时用磁贴卡片
-  if (SUBAGENT_TOOLS.has(name) && taskAgents.length > 0) {
-    return <SubagentCard agents={taskAgents} />;
+  if (name === 'subagent') {
+    return <SubagentBodyWrap message={message} subagents={subagents} />;
   }
 
-  // task 工具：无实时数据但 toolResult.details.progress 存在时，从静态快照构建磁贴卡片
-  if (SUBAGENT_TOOLS.has(name) && !isExecuting && message.toolResult) {
-    const staticAgents = buildSubagentsFromResult(message.toolResult, message.toolCallId);
-    if (staticAgents.length > 0) {
-      return <SubagentCard agents={staticAgents as SubagentActivity[]} />;
-    }
-  }
-
-  // Executing placeholder (task with no subagent data falls through to TaskBody)
-  if (isExecuting && !SUBAGENT_TOOLS.has(name)) {
+  // Executing placeholder
+  if (isExecuting) {
     return (
       <div className="flex items-center gap-1.5 px-2.5 py-2 font-mono text-[11px] text-muted-foreground">
         <ThinkingOrb state="solving" size={20} theme="auto" />
@@ -547,16 +534,16 @@ export function ToolBodyView({
 
   // MCP tools
   if (isMCPTool(name)) {
-    return <McpBodyWrap message={message} taskAgents={taskAgents} />;
+    return <McpBodyWrap message={message} subagents={subagents} />;
   }
 
   // Registry lookup
   const entry = TOOL_REGISTRY[name];
   if (entry) {
     const { Body } = entry;
-    return <Body message={message} taskAgents={taskAgents} />;
+    return <Body message={message} subagents={subagents} />;
   }
 
   // Fallback
-  return <GenericBodyWrap message={message} taskAgents={taskAgents} />;
+  return <GenericBodyWrap message={message} subagents={subagents} />;
 }

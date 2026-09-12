@@ -19,7 +19,7 @@ vi.mock('@renderer/stores/diff-review', () => ({
   openReviewAwareFile: vi.fn(),
 }));
 
-// Session store mock — ToolRunGroup 读取 subagent 实时状态（task 工具）
+// Session store mock — ToolRunGroup reads pi-subagents live state.
 const { mockSessionState } = vi.hoisted(() => ({
   mockSessionState: {
     sessions: [] as Array<{ subagents?: Record<string, unknown> }>,

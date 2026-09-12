@@ -8,7 +8,7 @@ import { ThinkingOrb } from '@renderer/components/visual';
 /**
  * Subagent 树形行卡片（DSH §7 形态：缩进树形行，无独立磁贴网格）。
  *
- * task 工具派遣 subagent 后替换默认 TaskBody 渲染：
+ * subagent 工具派遣子代理后作为其展开内容渲染：
  * - 每个 subagent 一行：状态点（running=追逐点阵）+ 名称 + 活动摘要 + tabular 指标
  * - 点击行：右侧抽屉展示完整实时日志流（recentOutput 正序）
  *

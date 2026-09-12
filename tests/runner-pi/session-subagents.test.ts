@@ -390,6 +390,68 @@ describe('handleInit pi-subagents UI 事件关联', () => {
       }),
     }));
   });
+
+  it('管理调用不会接管异步执行 run 的 UI 归属', async () => {
+    const ctx = makeCtx();
+    await handleInit({ id: 'req_ui_management', type: 'init', config: { cwd: '/p' } }, ctx);
+
+    const bridge = (lastLoader().extensionFactories as Array<{
+      name: string;
+      factory: (pi: unknown) => void;
+    }>).find((factory) => factory.name === 'socverify-subagent-bridge');
+    const busHandlers = new Map<string, (payload: unknown) => void>();
+    const piHandlers = new Map<string, (event: Record<string, unknown>) => void>();
+    bridge?.factory({
+      events: {
+        emit: vi.fn(),
+        on: (channel: string, handler: (payload: unknown) => void) => {
+          busHandlers.set(channel, handler);
+          return () => busHandlers.delete(channel);
+        },
+      },
+      on: (event: string, handler: (payload: Record<string, unknown>) => void) => {
+        piHandlers.set(event, handler);
+      },
+    });
+
+    piHandlers.get('tool_execution_start')?.({
+      toolCallId: 'call_execution_1',
+      toolName: 'subagent',
+      args: { agent: 'reviewer', task: 'Review the project', async: true },
+    });
+    piHandlers.get('tool_execution_end')?.({
+      toolCallId: 'call_execution_1',
+      toolName: 'subagent',
+      result: { details: { mode: 'single', runId: 'run-1', asyncId: 'run-1', results: [] } },
+    });
+    piHandlers.get('tool_execution_start')?.({
+      toolCallId: 'call_management_1',
+      toolName: 'subagent',
+      args: { action: 'status', id: 'run-1' },
+    });
+    piHandlers.get('tool_execution_end')?.({
+      toolCallId: 'call_management_1',
+      toolName: 'subagent',
+      result: { details: { mode: 'single', runId: 'run-1', results: [] } },
+    });
+
+    sendEvent.mockClear();
+    busHandlers.get('subagent:async-complete')?.({
+      id: 'run-1',
+      runId: 'run-1',
+      agent: 'reviewer',
+      success: true,
+      state: 'complete',
+    });
+
+    expect(sendEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'subagent_lifecycle',
+      payload: expect.objectContaining({
+        id: 'run-1',
+        parentToolCallId: 'call_execution_1',
+      }),
+    }));
+  });
 });
 
 // ─── 审批模式动态更新 ───────────────────────────────────

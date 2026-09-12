@@ -483,7 +483,7 @@ describe('ToolCard file tools', () => {
   });
 });
 
-describe('ToolCard task tool — subagent tiles', () => {
+describe('ToolCard pi-subagents rendering', () => {
   function agent(partial: Partial<SubagentActivity> & { id: string }): SubagentActivity {
     return {
       index: 0,
@@ -503,42 +503,42 @@ describe('ToolCard task tool — subagent tiles', () => {
     mockSessionState.sessions = [{ subagents }];
   }
 
-  function taskMessage(): ChatMessage {
+  function subagentMessage(): ChatMessage {
     return {
-      id: 'tool-task-1',
+      id: 'tool-subagent-1',
       role: 'tool',
       content: '',
       timestamp: Date.now(),
-      toolName: 'task',
-      toolCallId: 'tc_task_1',
-      toolArgs: { tasks: [{ assignment: 'do stuff' }] },
+      toolName: 'subagent',
+      toolCallId: 'tc_subagent_1',
+      toolArgs: { agent: 'reviewer', task: 'Review the project' },
       toolStartTime: Date.now() - 1000,
     };
   }
 
   it('shows live subagent summary with running count while executing', () => {
     setStoreSubagents({
-      'sa-1': agent({ id: 'sa-1', parentToolCallId: 'tc_task_1', status: 'running' }),
-      'sa-2': agent({ id: 'sa-2', parentToolCallId: 'tc_task_1', status: 'completed' }),
+      'sa-1': agent({ id: 'sa-1', parentToolCallId: 'tc_subagent_1', status: 'running' }),
+      'sa-2': agent({ id: 'sa-2', parentToolCallId: 'tc_subagent_1', status: 'completed' }),
     });
 
-    render(<ToolCard message={taskMessage()} />);
+    render(<ToolCard message={subagentMessage()} />);
 
     expect(screen.getByTestId('tool-card').textContent).toContain('2 个子代理');
     expect(screen.getByTestId('tool-card').textContent).toContain('1 运行中');
   });
 
-  it('renders SubagentCard tiles instead of TaskBody when live data exists', () => {
+  it('renders SubagentCard rows when live lifecycle data exists', () => {
     setStoreSubagents({
       'sa-1': agent({
         id: 'sa-1',
-        parentToolCallId: 'tc_task_1',
+        parentToolCallId: 'tc_subagent_1',
         agent: 'coverage-analyzer',
         currentTool: 'Read cov:///uart',
       }),
     });
 
-    render(<ToolCard message={taskMessage()} />);
+    render(<ToolCard message={subagentMessage()} />);
     fireEvent.click(screen.getByTitle('展开'));
 
     expect(screen.getByTestId('subagent-card')).toBeInTheDocument();
@@ -547,37 +547,14 @@ describe('ToolCard task tool — subagent tiles', () => {
     expect(screen.getByTestId('subagent-tile-sa-1').textContent).toContain('Read cov:///uart');
   });
 
-  it('renders the existing SubagentCard for the pi-subagents tool name', () => {
-    setStoreSubagents({
-      'pi-sa-1': agent({
-        id: 'pi-sa-1',
-        parentToolCallId: 'tc_pi_subagent_1',
-        agent: 'reviewer',
-        currentTool: 'read',
-      }),
-    });
+  it('renders an immediate row from native call arguments before lifecycle events arrive', () => {
+    setStoreSubagents({});
 
-    render(<ToolCard message={{
-      ...taskMessage(),
-      id: 'tool-pi-subagent-1',
-      toolName: 'subagent',
-      toolCallId: 'tc_pi_subagent_1',
-      toolArgs: { agent: 'reviewer', task: 'Review the project' },
-    }} />);
+    render(<ToolCard message={subagentMessage()} />);
     fireEvent.click(screen.getByTitle('展开'));
 
     expect(screen.getByTestId('subagent-card')).toBeInTheDocument();
-    expect(screen.getByTestId('subagent-tile-pi-sa-1')).toHaveTextContent('reviewer');
-  });
-
-  it('falls back to TaskBody when no live subagent data (history restore)', () => {
-    setStoreSubagents({});
-
-    render(<ToolCard message={taskMessage()} />);
-
-    // 无实时数据：执行中显示默认 dispatching 摘要，不渲染磁贴
-    expect(screen.getByTestId('tool-card').textContent).toContain('dispatching sub-agents');
-    expect(screen.queryByTestId('subagent-card')).not.toBeInTheDocument();
+    expect(screen.getByTestId('subagent-tile-tc_subagent_1')).toHaveTextContent('reviewer');
   });
 
   it('ignores subagents belonging to other tool calls', () => {
@@ -585,16 +562,18 @@ describe('ToolCard task tool — subagent tiles', () => {
       'sa-other': agent({ id: 'sa-other', parentToolCallId: 'tc_other' }),
     });
 
-    render(<ToolCard message={taskMessage()} />);
+    render(<ToolCard message={subagentMessage()} />);
+    fireEvent.click(screen.getByTitle('展开'));
 
-    expect(screen.queryByTestId('subagent-card')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('subagent-tile-sa-other')).not.toBeInTheDocument();
+    expect(screen.getByTestId('subagent-tile-tc_subagent_1')).toBeInTheDocument();
   });
 
   it('renders recentOutput lines in drawer when tile is clicked', () => {
     setStoreSubagents({
       'sa-1': agent({
         id: 'sa-1',
-        parentToolCallId: 'tc_task_1',
+        parentToolCallId: 'tc_subagent_1',
         agent: 'coverage-analyzer',
         status: 'running',
         recentOutput: ['Analyzing coverage...', 'Found 3 gaps'],
@@ -602,7 +581,7 @@ describe('ToolCard task tool — subagent tiles', () => {
       }),
     });
 
-    render(<ToolCard message={taskMessage()} />);
+    render(<ToolCard message={subagentMessage()} />);
     fireEvent.click(screen.getByTitle('展开'));
 
     // Click the tile to open the drawer
@@ -621,125 +600,172 @@ describe('ToolCard task tool — subagent tiles', () => {
   });
 });
 
-describe('ToolCard task tool — async running fallback', () => {
+describe('ToolCard pi-subagents native results', () => {
+  function agent(partial: Partial<SubagentActivity> & { id: string }): SubagentActivity {
+    return {
+      index: 0,
+      agent: 'test-agent',
+      status: 'running',
+      recentOutput: [],
+      toolCount: 0,
+      tokens: 0,
+      requests: 0,
+      tokenHistory: [],
+      startedAt: Date.now(),
+      ...partial,
+    };
+  }
+
   function setStoreSubagents(subagents: Record<string, SubagentActivity>): void {
     mockSessionState.sessions = [{ subagents }];
   }
 
-  /**
-   * Real task tool result from session_1787196130609:
-   * - content[0].text: "Spawned 3 background agents..." (descriptive text, NOT JSON)
-   * - details.progress: 3 sub-tasks with status 'pending'
-   * - details.async: { state: 'running', jobId: 'ArchAnalysis', type: 'task' }
-   */
-  function asyncRunningTaskResult(): unknown {
+  function asyncSubagentMessage(): ChatMessage {
     return {
-      content: [{
-        type: 'text',
-        text: 'Spawned 3 background agents using task. Each result will be delivered when that agent yields.\n- `ArchAnalysis` (job `ArchAnalysis`) — Source code & architecture analysis\n- `PluginAnalysis` (job `PluginAnalysis`) — Plugins & extensibility analysis\n- `DevOpsAnalysis` (job `DevOpsAnalysis`) — DevOps & CI/CD analysis',
-      }],
-      details: {
-        projectAgentsDir: null,
-        results: [],
-        totalDurationMs: 0,
-        progress: [
-          { index: 0, id: 'ArchAnalysis', agent: 'task', agentSource: 'bundled', status: 'pending', task: '...', assignment: '...', description: 'Source code & architecture analysis', recentTools: [], recentOutput: [], toolCount: 0, requests: 0, tokens: 0, cost: 0, durationMs: 0 },
-          { index: 1, id: 'PluginAnalysis', agent: 'task', agentSource: 'bundled', status: 'pending', task: '...', assignment: '...', description: 'Plugins & extensibility analysis', recentTools: [], recentOutput: [], toolCount: 0, requests: 0, tokens: 0, cost: 0, durationMs: 0 },
-          { index: 2, id: 'DevOpsAnalysis', agent: 'task', agentSource: 'bundled', status: 'pending', task: '...', assignment: '...', description: 'DevOps & CI/CD analysis', recentTools: [], recentOutput: [], toolCount: 0, requests: 0, tokens: 0, cost: 0, durationMs: 0 },
-        ],
-        async: { state: 'running', jobId: 'ArchAnalysis', type: 'task' },
-      },
-    };
-  }
-
-  function taskMessageWithResult(): ChatMessage {
-    return {
-      id: 'tool-task-async',
+      id: 'tool-subagent-async',
       role: 'tool',
       content: '',
       timestamp: Date.now(),
-      toolName: 'task',
-      toolCallId: 'tc_task_async',
-      toolArgs: { tasks: [{ assignment: 'do stuff' }] },
-      toolResult: asyncRunningTaskResult(),
+      toolName: 'subagent',
+      toolCallId: 'call_async_1',
+      toolArgs: { agent: 'reviewer', task: 'Review the project' },
+      toolResult: {
+        content: [{ type: 'text', text: 'Async: reviewer [run-async-1]' }],
+        details: {
+          mode: 'single',
+          runId: 'run-async-1',
+          results: [],
+          asyncId: 'run-async-1',
+          asyncDir: 'D:\\tmp\\pi-subagents\\run-async-1',
+          context: 'fresh',
+        },
+      },
       toolStartTime: Date.now() - 5000,
       toolEndTime: Date.now(),
     };
   }
 
-  it('shows running summary (not done) when details.async.state is running', () => {
-    setStoreSubagents({});  // No live subagent data — forces fallback path
-
-    render(<ToolCard message={taskMessageWithResult()} />);
-
-    // Should show "3 个子代理 · 3 运行中", NOT "3/3 done"
-    const card = screen.getByTestId('tool-card');
-    expect(card.textContent).toContain('3 个子代理');
-    expect(card.textContent).toContain('运行中');
-    expect(card.textContent).not.toContain('done');
-  });
-
-  it('renders SubagentCard tiles from details.progress in expanded body', () => {
-    setStoreSubagents({});
-
-    render(<ToolCard message={taskMessageWithResult()} />);
-    fireEvent.click(screen.getByTitle('展开'));
-
-    // Should render SubagentCard (tile grid), NOT TaskBody (list)
-    expect(screen.getByTestId('subagent-card')).toBeInTheDocument();
-    // 3 tiles should be rendered
-    const tiles = screen.getAllByTestId(/^subagent-tile-/);
-    expect(tiles.length).toBe(3);
-    // Tile tooltip should contain the description
-    expect(tiles[0].getAttribute('title')).toContain('Source code & architecture analysis');
-    expect(tiles[1].getAttribute('title')).toContain('Plugins & extensibility analysis');
-    expect(tiles[2].getAttribute('title')).toContain('DevOps & CI/CD analysis');
-  });
-
-  it('opens drawer on tile click when using static data from details.progress', () => {
-    setStoreSubagents({});
-
-    render(<ToolCard message={taskMessageWithResult()} />);
-    fireEvent.click(screen.getByTitle('展开'));
-
-    // Click the first tile
-    const tiles = screen.getAllByTestId(/^subagent-tile-/);
-    expect(tiles.length).toBe(3);
-    fireEvent.click(tiles[0]);
-
-    // Drawer should open
-    expect(screen.getByTestId('subagent-drawer')).toBeInTheDocument();
-  });
-
-  it('falls back to text parsing with pending (not done) for dispatch lines', () => {
-    setStoreSubagents({});
-
-    // Task result with only content text (no details.progress) — simulates
-    // older omp versions or incomplete result objects
-    const message: ChatMessage = {
-      id: 'tool-task-text-only',
+  function foregroundSubagentMessage(): ChatMessage {
+    return {
+      id: 'tool-subagent-foreground',
       role: 'tool',
       content: '',
       timestamp: Date.now(),
-      toolName: 'task',
-      toolCallId: 'tc_text_only',
-      toolArgs: {},
+      toolName: 'subagent',
+      toolCallId: 'call_foreground_1',
+      toolArgs: { agent: 'reviewer', task: 'Review the project', async: false },
       toolResult: {
-        content: [{
-          type: 'text',
-          text: 'Spawned 2 background agents.\n- `Agent1` (job `Agent1`) — Task one\n- `Agent2` (job `Agent2`) — Task two',
-        }],
+        content: [{ type: 'text', text: 'Review complete' }],
+        details: {
+          mode: 'single',
+          runId: 'run-foreground-1',
+          results: [{
+            index: 0,
+            agent: 'reviewer',
+            task: 'Review the project',
+            exitCode: 0,
+            finalOutput: 'Found one issue\nReview complete',
+            usage: { input: 120, output: 80, cacheRead: 20, cacheWrite: 0, cost: 0.01, turns: 2 },
+            progress: { toolCount: 3, tokens: 200, durationMs: 4500 },
+          }],
+        },
       },
-      toolStartTime: Date.now() - 1000,
+      toolStartTime: Date.now() - 5000,
+      toolEndTime: Date.now(),
+    };
+  }
+
+  it('renders an async dispatch from details.asyncId', () => {
+    setStoreSubagents({});
+
+    render(<ToolCard message={asyncSubagentMessage()} />);
+    fireEvent.click(screen.getByTitle('展开'));
+
+    const card = screen.getByTestId('tool-card');
+    expect(card.textContent).toContain('1 个子代理');
+    expect(card.textContent).toContain('运行中');
+    expect(screen.getByTestId('subagent-tile-run-async-1')).toHaveTextContent('reviewer');
+  });
+
+  it('restores a completed foreground child from details.results', () => {
+    setStoreSubagents({});
+
+    render(<ToolCard message={foregroundSubagentMessage()} />);
+    fireEvent.click(screen.getByTitle('展开'));
+
+    expect(screen.getByTestId('subagent-card')).toBeInTheDocument();
+    const row = screen.getByTestId('subagent-tile-run-foreground-1:0');
+    expect(row).toHaveTextContent('reviewer');
+    expect(row).toHaveTextContent('已完成');
+    fireEvent.click(row);
+    expect(screen.getByTestId('subagent-assignment')).toHaveTextContent('Review the project');
+    expect(screen.getByTestId('subagent-log')).toHaveTextContent('Found one issue');
+    expect(screen.getByTestId('subagent-usage')).toHaveTextContent('in 120');
+  });
+
+  it('renders workflow execution as a native running activity', () => {
+    setStoreSubagents({});
+    const message: ChatMessage = {
+      id: 'tool-subagent-workflow',
+      role: 'tool',
+      content: '',
+      timestamp: Date.now(),
+      toolName: 'subagent',
+      toolCallId: 'call_workflow_1',
+      toolArgs: { workflowScript: 'const scout = run({ agent: "scout" })' },
+      toolStartTime: Date.now(),
+    };
+
+    render(<ToolCard message={message} />);
+    fireEvent.click(screen.getByTitle('展开'));
+
+    expect(screen.getByTestId('subagent-tile-call_workflow_1')).toHaveTextContent('workflow');
+  });
+
+  it('keeps management calls out of the subagent activity UI', () => {
+    setStoreSubagents({
+      unrelated: agent({ id: 'unrelated', parentToolCallId: 'call_management_1' }),
+    });
+    const message: ChatMessage = {
+      id: 'tool-subagent-management',
+      role: 'tool',
+      content: '',
+      timestamp: Date.now(),
+      toolName: 'subagent',
+      toolCallId: 'call_management_1',
+      toolArgs: { action: 'list', capabilities: true },
+      toolResult: {
+        content: [{ type: 'text', text: 'Available agents: reviewer' }],
+        details: { mode: 'management', results: [], agentCapabilities: { agents: [] } },
+      },
+      toolStartTime: Date.now() - 10,
       toolEndTime: Date.now(),
     };
 
     render(<ToolCard message={message} />);
+    expect(screen.getByTestId('tool-card')).toHaveTextContent('list');
+    fireEvent.click(screen.getByTitle('展开'));
+    expect(screen.queryByTestId('subagent-card')).not.toBeInTheDocument();
+    expect(screen.getByText('Available agents: reviewer')).toBeInTheDocument();
+  });
 
-    // Summary should NOT say "done" — dispatch lines should be pending (not done)
-    const card = screen.getByTestId('tool-card');
-    expect(card.textContent).toContain('子代理');
-    expect(card.textContent).not.toContain('2/2 done');
-    expect(card.textContent).not.toContain('2 成功');
+  it('does not map the removed task tool to pi-subagents rendering', () => {
+    setStoreSubagents({
+      legacy: agent({ id: 'legacy', parentToolCallId: 'call_task_legacy' }),
+    });
+    const message: ChatMessage = {
+      id: 'tool-task-legacy',
+      role: 'tool',
+      content: '',
+      timestamp: Date.now(),
+      toolName: 'task',
+      toolCallId: 'call_task_legacy',
+      toolArgs: { agent: 'reviewer' },
+      toolStartTime: Date.now(),
+    };
+
+    render(<ToolCard message={message} />);
+    fireEvent.click(screen.getByTitle('展开'));
+    expect(screen.queryByTestId('subagent-card')).not.toBeInTheDocument();
   });
 });

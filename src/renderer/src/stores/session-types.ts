@@ -72,8 +72,8 @@ export interface ChatMessage {
 }
 
 /**
- * task 工具派遣的 subagent 实时状态（瞬态，不持久化）。
- * 由 omp 引擎经 runner → 主进程 → session:event 转发的
+ * pi-subagents 派遣的子代理实时状态（瞬态，不持久化）。
+ * 由 runner → 主进程 → session:event 转发的
  * subagent_lifecycle / subagent_progress 帧驱动更新。
  */
 export interface SubagentActivity {
@@ -86,16 +86,14 @@ export interface SubagentActivity {
   /** 完整工作指令（progress 帧携带） */
   assignment?: string;
   status: 'running' | 'completed' | 'failed' | 'aborted';
-  /** 关联的 task 工具调用 id — 用于挂载到对应 tool card */
+  /** 关联的 subagent 工具调用 id，用于挂载到对应 tool card */
   parentToolCallId?: string;
   currentTool?: string;
   currentToolArgs?: string;
   lastIntent?: string;
   /**
    * 累积输出日志（正序，[length-1] 为最新）。
-   * omp 的 progress 帧只携带"当前轮 assistant 流式输出的尾部 8 行"预览窗口
-   * （倒序，且每轮 message_start 会被引擎清空），这里经滚动窗口合并成
-   * 完整运行日志，避免新一轮开始时旧内容被冲掉。
+   * progress 帧可能只携带当前输出窗口，这里经滚动窗口合并成完整运行日志。
    */
   recentOutput: string[];
   toolCount: number;
@@ -199,7 +197,7 @@ export interface SessionEntry {
   approvalMode?: ApprovalMode;
   /** 思考强度设置（'default'/缺省 = 跟随 omp 引擎默认） */
   thinkingLevel?: ThinkingLevelSetting;
-  /** task 工具派遣的 subagent 实时状态（key = subagent id，瞬态不持久化） */
+  /** subagent 工具派遣的实时状态（key = subagent id，瞬态不持久化） */
   subagents?: Record<string, SubagentActivity>;
   /** 建议追问（回合结束后由轻量 LLM 生成，瞬态不持久化，仅最后一条助手消息呈现） */
   followUps?: string[];

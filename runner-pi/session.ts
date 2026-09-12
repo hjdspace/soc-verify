@@ -632,17 +632,21 @@ function buildSubagentBridgeExtension(ctx: PiRunnerContext, runtime: SubagentRun
 				const args = typeof event.args === "object" && event.args !== null
 					? event.args as Record<string, unknown>
 					: {};
+				// pi-subagents uses `action` for management/control calls. Only
+				// execution calls own child lifecycle events and UI activity cards.
+				if (typeof args.action === "string") return;
 				activeToolCalls.set(event.toolCallId, typeof args.agent === "string" ? args.agent : undefined);
 			});
 			pi.on("tool_execution_end", (event) => {
 				if (event.toolName !== "subagent") return;
+				if (!activeToolCalls.has(event.toolCallId)) return;
 				const result = typeof event.result === "object" && event.result !== null
 					? event.result as Record<string, unknown>
 					: {};
 				const details = typeof result.details === "object" && result.details !== null
 					? result.details as Record<string, unknown>
 					: {};
-				if (typeof details.runId === "string") runParents.set(details.runId, event.toolCallId);
+				if (typeof details.asyncId === "string") runParents.set(details.asyncId, event.toolCallId);
 				activeToolCalls.delete(event.toolCallId);
 			});
 

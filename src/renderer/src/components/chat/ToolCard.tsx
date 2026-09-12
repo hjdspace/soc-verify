@@ -20,7 +20,6 @@ import {
   extractResultText,
   hasResultWarning,
   isDirectoryToolResult,
-  SUBAGENT_TOOLS,
 } from './tool-helpers';
 import {
   getToolSummary,
@@ -40,9 +39,9 @@ export function ToolCard({ message }: { message: ChatMessage }) {
   const meta = getToolMeta(message.toolName);
   const resultText = extractResultText(message.toolResult);
 
-  // task 工具：读取该 tool call 关联的 subagent 实时状态
-  const taskAgents = useSessionCoreStore(useShallow((s) => {
-    if (!SUBAGENT_TOOLS.has(message.toolName ?? '') || !message.toolCallId) return NO_SUBAGENTS;
+  // pi-subagents：读取该 tool call 关联的实时状态
+  const subagents = useSessionCoreStore(useShallow((s) => {
+    if (message.toolName !== 'subagent' || !message.toolCallId) return NO_SUBAGENTS;
     const list: SubagentActivity[] = [];
     for (const sess of s.sessions) {
       for (const a of Object.values(sess.subagents ?? {})) {
@@ -85,7 +84,7 @@ export function ToolCard({ message }: { message: ChatMessage }) {
   const isSkill = toolName === 'read' && isSkillRead(message.toolArgs);
 
   // Summary via shared registry (MCP / fallback included)
-  const summary = getToolSummary(message, taskAgents);
+  const summary = getToolSummary(message, subagents);
 
   const isError = typeof message.toolResult === 'object' && message.toolResult !== null
     && 'isError' in message.toolResult
@@ -191,7 +190,7 @@ export function ToolCard({ message }: { message: ChatMessage }) {
       {/* 折叠时跳过展开体渲染（挂载即执行逐行高亮是切换会话卡顿的主因之一） */}
       {expanded ? (
         <div className="border-t border-[var(--dsw-border-l1)] px-1 pb-1 pt-0.5">
-          <ToolBodyView message={message} taskAgents={taskAgents} />
+          <ToolBodyView message={message} subagents={subagents} />
         </div>
       ) : null}
     </div>

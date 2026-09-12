@@ -88,6 +88,12 @@ export function TitleBar() {
     <header
       className={cn(
         'titlebar-drag',
+        // relative z-[60]：header 带 glass（backdrop-filter）会创建 stacking context，
+        // 内部下拉（通知 z-70 / 项目选择器 z-70 / 工具 z-50）的 z 被困在其中；若 header
+        // 本身停留在 z-auto，fixed z-50 的 AiDrawer/FileDrawer 会整层压住这些下拉
+        // （且抽屉 bg-glass 半透明，下拉内容会透出来像「变透明」）。抬到 60（> drawer 50，
+        // < palette 80 / dialog 90~100）让 header 及其下拉整体位于抽屉之上。
+        'relative z-[60]',
         'flex h-9 shrink-0 items-center gap-2 border-b border-titlebar-border bg-titlebar pl-3 pr-1 text-titlebar-foreground select-none',
         'glass',
       )}

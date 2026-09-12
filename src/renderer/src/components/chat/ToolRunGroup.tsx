@@ -17,7 +17,7 @@ import { useSessionCoreStore } from '@renderer/stores/session-core';
 import type { ChatMessage, SubagentActivity } from '@renderer/stores/session-types';
 import { cn } from '@renderer/lib/utils';
 import { ThinkingOrb } from '@renderer/components/visual';
-import { getToolMeta, isSkillRead, extractResultText, hasResultWarning, SUBAGENT_TOOLS } from './tool-helpers';
+import { getToolMeta, isSkillRead, extractResultText, hasResultWarning } from './tool-helpers';
 import {
   getToolSummary,
   ToolBodyView,
@@ -98,9 +98,9 @@ function ToolRunRow({
   const toolName = message.toolName ?? '';
   const resultText = extractResultText(message.toolResult);
 
-  // task/subagent 工具：读取该 tool call 关联的 subagent 实时状态
-  const taskAgents = useSessionCoreStore(useShallow((s) => {
-    if (!SUBAGENT_TOOLS.has(message.toolName ?? '') || !message.toolCallId) return NO_SUBAGENTS;
+  // pi-subagents：读取该 tool call 关联的实时状态
+  const subagents = useSessionCoreStore(useShallow((s) => {
+    if (message.toolName !== 'subagent' || !message.toolCallId) return NO_SUBAGENTS;
     const list: SubagentActivity[] = [];
     for (const sess of s.sessions) {
       for (const a of Object.values(sess.subagents ?? {})) {
@@ -130,7 +130,7 @@ function ToolRunRow({
 
   const Icon = CATEGORY_ICON[meta.category] ?? Sparkle;
   const isSkill = toolName === 'read' && isSkillRead(message.toolArgs);
-  const summary = getToolSummary(message, taskAgents);
+  const summary = getToolSummary(message, subagents);
   const duration = messageDuration(message);
 
   return (
@@ -217,7 +217,7 @@ function ToolRunRow({
         >
           <div className="min-h-0 overflow-hidden">
             <div className="mb-1 ml-2 mr-0.5 mt-0.5 rounded-[10px] border border-[var(--dsw-border-l1)] bg-[var(--dsw-code-block)] px-1 pb-1 pt-0.5">
-              <ToolBodyView message={message} taskAgents={taskAgents} />
+              <ToolBodyView message={message} subagents={subagents} />
             </div>
           </div>
         </div>
