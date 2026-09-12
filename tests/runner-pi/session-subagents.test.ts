@@ -7,7 +7,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -389,6 +389,124 @@ describe('handleInit pi-subagents UI 事件关联', () => {
         parentToolCallId: 'call_pi_subagent_1',
       }),
     }));
+  });
+
+  it('持续把 detached run 的 status.json 进度转成 UI 流式帧', async () => {
+    vi.useFakeTimers();
+    const asyncDir = await mkdtemp(join(tmpdir(), 'socverify-async-progress-'));
+    const statusPath = join(asyncDir, 'status.json');
+    const writeStatus = async (tokens: number, output: string[]) => {
+      await writeFile(statusPath, JSON.stringify({
+        runId: 'run-pi-live',
+        mode: 'single',
+        state: 'running',
+        startedAt: 1,
+        lastUpdate: tokens,
+        steps: [{
+          agent: 'scout',
+          status: 'running',
+          recentOutput: output,
+          currentTool: 'read',
+          currentToolArgs: 'D:/AI/soc-verify/package.json',
+          turnCount: 2,
+          toolCount: 3,
+          tokens: { input: tokens - 20, output: 20, total: tokens },
+        }],
+      }), 'utf8');
+    };
+
+    try {
+      await writeStatus(120, ['Inspecting package.json']);
+      const ctx = makeCtx();
+      await handleInit({ id: 'req_ui_live', type: 'init', config: { cwd: '/p' } }, ctx);
+
+      const bridge = (lastLoader().extensionFactories as Array<{
+        name: string;
+        factory: (pi: unknown) => void;
+      }>).find((factory) => factory.name === 'socverify-subagent-bridge');
+      const busHandlers = new Map<string, (payload: unknown) => void>();
+      const piHandlers = new Map<string, (event: Record<string, unknown>) => void>();
+      bridge?.factory({
+        events: {
+          emit: vi.fn(),
+          on: (channel: string, handler: (payload: unknown) => void) => {
+            busHandlers.set(channel, handler);
+            return () => busHandlers.delete(channel);
+          },
+        },
+        on: (event: string, handler: (payload: Record<string, unknown>) => void) => {
+          piHandlers.set(event, handler);
+        },
+      });
+
+      piHandlers.get('tool_execution_start')?.({
+        toolCallId: 'call_pi_subagent_live',
+        toolName: 'subagent',
+        args: { agent: 'scout', task: 'Inspect the project' },
+      });
+      busHandlers.get('subagent:async-started')?.({
+        id: 'run-pi-live',
+        agent: 'scout',
+        asyncDir,
+      });
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(sendEvent).toHaveBeenCalledWith({
+        type: 'subagent_progress',
+        payload: expect.objectContaining({
+          id: 'run-pi-live',
+          parentToolCallId: 'call_pi_subagent_live',
+          progress: expect.objectContaining({
+            tokens: 120,
+            recentOutput: ['Inspecting package.json'],
+          }),
+        }),
+      });
+
+      sendEvent.mockClear();
+      await writeStatus(260, ['Inspecting package.json', 'Reading IPC router']);
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(sendEvent).toHaveBeenCalledWith({
+        type: 'subagent_progress',
+        payload: expect.objectContaining({
+          id: 'run-pi-live',
+          progress: expect.objectContaining({
+            tokens: 260,
+            recentOutput: ['Inspecting package.json', 'Reading IPC router'],
+          }),
+        }),
+      });
+
+      sendEvent.mockClear();
+      await writeStatus(320, ['Inspecting package.json', 'Reading IPC router', 'Done']);
+      busHandlers.get('subagent:async-complete')?.({
+        runId: 'run-pi-live',
+        agent: 'scout',
+        success: true,
+        state: 'complete',
+      });
+
+      expect(sendEvent.mock.calls.map(([event]) => event.type)).toEqual([
+        'subagent_progress',
+        'subagent_lifecycle',
+      ]);
+      expect(sendEvent).toHaveBeenCalledWith({
+        type: 'subagent_progress',
+        payload: expect.objectContaining({
+          id: 'run-pi-live',
+          progress: expect.objectContaining({ tokens: 320 }),
+        }),
+      });
+
+      sendEvent.mockClear();
+      await writeStatus(500, ['This update must not be emitted after completion']);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(sendEvent).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      await rm(asyncDir, { recursive: true, force: true });
+    }
   });
 
   it('管理调用不会接管异步执行 run 的 UI 归属', async () => {

@@ -1348,16 +1348,16 @@ describe('SessionStore — subagent activity (subagent_* frames)', () => {
 
   it('accumulates engine scrolling windows into an ordered log (sliding overlap deduped)', () => {
     const store = useSessionMessagesStore.getState();
-    // 引擎窗口为倒序（[0] 最新）：帧1 尾部 A,B,C；帧2 滑动到 B,C,D
-    store.handleSessionEvent(sessionId, progressFrame('sa-1', ['C', 'B', 'A']));
-    store.handleSessionEvent(sessionId, progressFrame('sa-1', ['D', 'C', 'B']));
+    store.handleSessionEvent(sessionId, progressFrame('sa-1', ['A', 'B', 'C']));
+    store.handleSessionEvent(sessionId, progressFrame('sa-1', ['B', 'C', 'D']));
 
     expect(getSubagent('sa-1')?.recentOutput).toEqual(['A', 'B', 'C', 'D']);
+    expect(getSubagent('sa-1')?.tokens).toBe(100);
   });
 
   it('keeps the accumulated log when the engine clears its window at a new turn', () => {
     const store = useSessionMessagesStore.getState();
-    store.handleSessionEvent(sessionId, progressFrame('sa-1', ['B', 'A']));
+    store.handleSessionEvent(sessionId, progressFrame('sa-1', ['A', 'B']));
     // 新一轮 message_start：引擎窗口清空 → 空帧不得冲掉已累积日志
     store.handleSessionEvent(sessionId, progressFrame('sa-1', []));
 
@@ -1366,17 +1366,17 @@ describe('SessionStore — subagent activity (subagent_* frames)', () => {
 
   it('appends all lines of a fresh turn output after the window was cleared', () => {
     const store = useSessionMessagesStore.getState();
-    store.handleSessionEvent(sessionId, progressFrame('sa-1', ['B', 'A']));
+    store.handleSessionEvent(sessionId, progressFrame('sa-1', ['A', 'B']));
     store.handleSessionEvent(sessionId, progressFrame('sa-1', []));
     // 新一轮输出与旧日志尾部无重叠 → 全部追加
-    store.handleSessionEvent(sessionId, progressFrame('sa-1', ['Y', 'X']));
+    store.handleSessionEvent(sessionId, progressFrame('sa-1', ['X', 'Y']));
 
     expect(getSubagent('sa-1')?.recentOutput).toEqual(['A', 'B', 'X', 'Y']);
   });
 
   it('merges terminal usage / runDir / parentSessionId from lifecycle frames (issue 05)', () => {
     const store = useSessionMessagesStore.getState();
-    store.handleSessionEvent(sessionId, progressFrame('sa-2', ['C', 'B', 'A']));
+    store.handleSessionEvent(sessionId, progressFrame('sa-2', ['A', 'B', 'C']));
     store.handleSessionEvent(sessionId, {
       type: 'subagent_lifecycle',
       payload: {
@@ -1402,6 +1402,7 @@ describe('SessionStore — subagent activity (subagent_* frames)', () => {
     expect(sub?.status).toBe('completed');
     expect(sub?.parentSessionId).toBe('pi-session-0001');
     expect(sub?.runDir).toBe('/tmp/pi/async/run-abc');
+    expect(sub?.tokens).toBe(100);
     expect(sub?.usage?.input).toBe(100);
     expect(sub?.usage?.costUsd).toBeCloseTo(0.01);
   });

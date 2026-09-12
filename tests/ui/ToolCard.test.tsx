@@ -535,6 +535,7 @@ describe('ToolCard pi-subagents rendering', () => {
         parentToolCallId: 'tc_subagent_1',
         agent: 'coverage-analyzer',
         currentTool: 'Read cov:///uart',
+        tokens: 1250,
       }),
     });
 
@@ -545,6 +546,7 @@ describe('ToolCard pi-subagents rendering', () => {
     expect(screen.getByTestId('subagent-tile-sa-1')).toBeInTheDocument();
     expect(screen.getByTestId('subagent-tile-sa-1').textContent).toContain('coverage-analyzer');
     expect(screen.getByTestId('subagent-tile-sa-1').textContent).toContain('Read cov:///uart');
+    expect(screen.getByTestId('subagent-tile-sa-1').textContent).toContain('1.3k tok');
   });
 
   it('renders an immediate row from native call arguments before lifecycle events arrive', () => {

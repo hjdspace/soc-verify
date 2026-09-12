@@ -31,33 +31,32 @@ import {
 const SUBAGENT_LOG_MAX_LINES = 500;
 
 /**
- * 将 omp progress 帧的滚动输出窗口合并进累积日志。
+ * 将 pi-subagents progress 帧的滚动输出窗口合并进累积日志。
  *
- * 引擎侧 recentOutput 是"当前轮流式输出的尾部 8 行"倒序窗口：
+ * 引擎侧 recentOutput 是正序滚动窗口：
  * - 每轮 message_start 会清空（新一轮开始）；
  * - 同一轮内窗口向后滑动，新窗口头部与旧窗口尾部重叠。
- * 合并策略：正序化窗口后，与累积日志尾部按最长重叠去重，只追加新行；
+ * 合并策略：与累积日志尾部按最长重叠去重，只追加新行；
  * 无重叠（新一轮输出）视为全部新行追加；空窗口（轮次切换瞬间）保留原日志。
  */
-export function mergeSubagentOutputWindow(accumulated: string[], windowReversed: string[]): string[] {
-  if (windowReversed.length === 0) return accumulated;
-  const windowFwd = [...windowReversed].reverse();
-  if (accumulated.length === 0) return windowFwd;
-  const maxOverlap = Math.min(accumulated.length, windowFwd.length);
+export function mergeSubagentOutputWindow(accumulated: string[], window: string[]): string[] {
+  if (window.length === 0) return accumulated;
+  if (accumulated.length === 0) return window;
+  const maxOverlap = Math.min(accumulated.length, window.length);
   for (let k = maxOverlap; k >= 1; k--) {
     let match = true;
     for (let i = 0; i < k; i++) {
-      if (accumulated[accumulated.length - k + i] !== windowFwd[i]) {
+      if (accumulated[accumulated.length - k + i] !== window[i]) {
         match = false;
         break;
       }
     }
     if (match) {
-      const added = windowFwd.slice(k);
+      const added = window.slice(k);
       return added.length > 0 ? [...accumulated, ...added] : accumulated;
     }
   }
-  return [...accumulated, ...windowFwd];
+  return [...accumulated, ...window];
 }
 
 // ─── 消息内容提取辅助 ──────────────────────────────────────

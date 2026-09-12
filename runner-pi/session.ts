@@ -31,7 +31,7 @@ import {
 import { classifyContentBlock } from "./message-blocks.ts";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createJiti } from "jiti";
 import type { ApprovalMode } from "./approval-logic";
 import {
@@ -65,11 +65,13 @@ import {
 import { buildSkillLoaderOptions } from "./skills.ts";
 import {
 	buildRpcStopRequest,
+	normalizeAsyncStatusProgressFrames,
 	normalizeSubagentFrame,
 	normalizeForegroundProgressFrames,
 	resolveSubagentCeiling,
 	RPC_REQUEST_CHANNEL,
 	SUBAGENT_CHANNELS,
+	SUBAGENT_ASYNC_STARTED_CHANNEL,
 	SUBAGENT_ASYNC_COMPLETE_CHANNEL,
 	SUBAGENT_CHILD_STATUS_CHANNEL,
 	SUBAGENT_DELEGATION_RESPONSE_CHANNEL,
@@ -629,6 +631,55 @@ function buildSubagentBridgeExtension(ctx: PiRunnerContext, runtime: SubagentRun
 			const runParents = new Map<string, string>();
 			// 前台流式进度变化检测签名（id → sig），tool_execution_end 时清理
 			const progressKeys = new Map<string, string>();
+			const asyncProgressRuns = new Map<string, { asyncDir: string; parentToolCallId?: string }>();
+			let asyncProgressTimer: ReturnType<typeof setInterval> | undefined;
+			const parentSessionId = () => ctx.session != null
+				? ((ctx.session as { sessionId?: string }).sessionId ?? null)
+				: null;
+			const stopAsyncProgress = (runId: string) => {
+				asyncProgressRuns.delete(runId);
+				for (const key of [...progressKeys.keys()].filter((candidate) => candidate === runId || candidate.startsWith(`${runId}:`))) {
+					progressKeys.delete(key);
+				}
+				if (asyncProgressRuns.size === 0 && asyncProgressTimer) {
+					clearInterval(asyncProgressTimer);
+					asyncProgressTimer = undefined;
+				}
+			};
+			const refreshAsyncProgress = (runId: string) => {
+				const run = asyncProgressRuns.get(runId);
+				if (!run) return;
+				try {
+					const status = JSON.parse(readFileSync(join(run.asyncDir, "status.json"), "utf8")) as unknown;
+					for (const frame of normalizeAsyncStatusProgressFrames(runId, status, {
+						parentSessionId: parentSessionId(),
+						parentToolCallId: run.parentToolCallId,
+					})) {
+						const id = String(frame.payload.id);
+						const sig = JSON.stringify(frame.payload.progress);
+						if (progressKeys.get(id) === sig) continue;
+						progressKeys.set(id, sig);
+						sendEvent(frame);
+					}
+				} catch {
+					// status.json is created and atomically replaced by the detached runner; retry on the next tick.
+				}
+			};
+			const startAsyncProgress = (runId: string, asyncDir: string, parentToolCallId?: string) => {
+				asyncProgressRuns.set(runId, { asyncDir, parentToolCallId });
+				refreshAsyncProgress(runId);
+				if (asyncProgressTimer) return;
+				asyncProgressTimer = setInterval(() => {
+					for (const id of asyncProgressRuns.keys()) refreshAsyncProgress(id);
+				}, 500);
+				asyncProgressTimer.unref?.();
+			};
+			pi.on("session_shutdown", () => {
+				if (asyncProgressTimer) clearInterval(asyncProgressTimer);
+				asyncProgressTimer = undefined;
+				asyncProgressRuns.clear();
+				progressKeys.clear();
+			});
 
 			pi.on("tool_execution_start", (event) => {
 				if (event.toolName !== "subagent") return;
@@ -680,11 +731,7 @@ function buildSubagentBridgeExtension(ctx: PiRunnerContext, runtime: SubagentRun
 				})) {
 					// 变化检测：fireUpdate 由子会话事件驱动、频率高，内容未变不重复发帧
 					const prog = frame.payload.progress as Record<string, unknown>;
-					const outputs = Array.isArray(prog.recentOutput) ? prog.recentOutput : [];
-					const sig = [
-						prog.tokens, prog.toolCount, prog.requests,
-						prog.currentTool ?? "", prog.currentToolArgs ?? "", outputs.length,
-					].join("|");
+					const sig = JSON.stringify(prog);
 					const id = String(frame.payload.id);
 					if (progressKeys.get(id) === sig) continue;
 					progressKeys.set(id, sig);
@@ -715,8 +762,16 @@ function buildSubagentBridgeExtension(ctx: PiRunnerContext, runtime: SubagentRun
 						else if (activeToolCalls.size === 1) parentToolCallId = activeToolCalls.keys().next().value;
 					}
 					if (runId && parentToolCallId) runParents.set(runId, parentToolCallId);
+					if (
+						channel === SUBAGENT_ASYNC_STARTED_CHANNEL &&
+						runId &&
+						typeof native.asyncDir === "string"
+					) {
+						startAsyncProgress(runId, native.asyncDir, parentToolCallId);
+					}
 					// 活动 run 登记（async-started）：destroy 时据此下发 stop
 					trackSubagentRun.onStart(runtime.registry, { channel, payload });
+					if (runId && channel === SUBAGENT_ASYNC_COMPLETE_CHANNEL) refreshAsyncProgress(runId);
 					for (const frame of normalizeSubagentFrame(channel, payload, {
 						parentSessionId:
 							ctx.session != null
@@ -736,6 +791,7 @@ function buildSubagentBridgeExtension(ctx: PiRunnerContext, runtime: SubagentRun
 						}
 						sendEvent(frame);
 					}
+					if (runId && channel === SUBAGENT_ASYNC_COMPLETE_CHANNEL) stopAsyncProgress(runId);
 				});
 			}
 		},

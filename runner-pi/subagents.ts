@@ -292,6 +292,34 @@ export function normalizeForegroundProgressFrames(
 	return frames;
 }
 
+/** detached runner 的 status.json 快照使用 TokenUsage 对象，其余字段与 AgentProgress 一致。 */
+export function normalizeAsyncStatusProgressFrames(
+	runId: string,
+	status: unknown,
+	ctx: SubagentNormalizeContext,
+): SubagentFrame[] {
+	if (typeof status !== "object" || status === null || Array.isArray(status)) return [];
+	const steps = (status as Record<string, unknown>).steps;
+	if (!Array.isArray(steps)) return [];
+	return normalizeForegroundProgressFrames(
+		runId,
+		steps.map((raw) => {
+			if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return raw;
+			const step = raw as Record<string, unknown>;
+			const usage = typeof step.tokens === "object" && step.tokens !== null && !Array.isArray(step.tokens)
+				? step.tokens as Record<string, unknown>
+				: undefined;
+			return {
+				...step,
+				tokens: usage
+					? num(usage.total) || num(usage.input) + num(usage.output)
+					: step.tokens,
+			};
+		}),
+		ctx,
+	);
+}
+
 // ─── 审批继承 → capability ceiling ──────────────────────
 
 /**
