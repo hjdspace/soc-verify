@@ -771,3 +771,126 @@ describe('ToolCard pi-subagents native results', () => {
     expect(screen.queryByTestId('subagent-card')).not.toBeInTheDocument();
   });
 });
+
+describe('ToolCard subagent management actions', () => {
+  function setStoreSubagents(subagents: Record<string, SubagentActivity>): void {
+    mockSessionState.sessions = [{ subagents }];
+  }
+
+  function managementMessage(partial: Partial<ChatMessage>): ChatMessage {
+    return {
+      id: 'tool-subagent-mgmt',
+      role: 'tool',
+      content: '',
+      timestamp: Date.now(),
+      toolName: 'subagent',
+      toolCallId: 'call_mgmt_1',
+      toolArgs: { action: 'status', id: 'run-status-1' },
+      toolStartTime: Date.now() - 500,
+      toolEndTime: Date.now(),
+      ...partial,
+    };
+  }
+
+  it('renders management action as a structured card instead of raw JSON', () => {
+    setStoreSubagents({});
+    const message = managementMessage({
+      toolResult: {
+        content: [{ type: 'text', text: 'Run run-status-1: running · 3 tools' }],
+        details: { mode: 'management', results: [] },
+      },
+    });
+
+    render(<ToolCard message={message} />);
+    fireEvent.click(screen.getByTitle('展开'));
+
+    const card = screen.getByTestId('subagent-mgmt');
+    expect(card).toBeInTheDocument();
+    // 动作徽章展示中文标签与原始 action
+    expect(screen.getByTestId('subagent-mgmt-action').textContent).toContain('运行状态');
+    expect(screen.getByTestId('subagent-mgmt-action').textContent).toContain('status');
+    // 目标 chip 而非整段 JSON args
+    expect(card.textContent).toContain('run-status-1');
+    expect(card.textContent).not.toContain('"action"');
+    // 结果文本保留原文
+    expect(screen.getByTestId('subagent-mgmt-result')).toHaveTextContent('Run run-status-1: running');
+  });
+
+  it('shows resume follow-up message without dumping args as JSON', () => {
+    setStoreSubagents({});
+    const message = managementMessage({
+      toolArgs: { action: 'resume', id: 'run-resume-1', message: '继续完成覆盖率收尾' },
+      toolResult: {
+        content: [{ type: 'text', text: 'Resumed run-resume-1' }],
+        details: { mode: 'management', results: [] },
+      },
+    });
+
+    render(<ToolCard message={message} />);
+    fireEvent.click(screen.getByTitle('展开'));
+
+    expect(screen.getByTestId('subagent-mgmt-action').textContent).toContain('恢复运行');
+    expect(screen.getByTestId('subagent-mgmt-message')).toHaveTextContent('继续完成覆盖率收尾');
+    expect(screen.getByTestId('subagent-mgmt').textContent).not.toContain('"message"');
+  });
+
+  it('renders capability rows for list with structured agentCapabilities', () => {
+    setStoreSubagents({});
+    const message = managementMessage({
+      toolArgs: { action: 'list', capabilities: true },
+      toolResult: {
+        content: [{ type: 'text', text: 'Available agents: reviewer' }],
+        details: {
+          mode: 'management',
+          results: [],
+          agentCapabilities: {
+            agents: [
+              { name: 'reviewer', source: 'project', executable: true, model: { value: 'claude-sonnet' }, runner: { type: 'pi' } },
+              { name: 'blocked-agent', source: 'builtin', executable: false, runner: { type: 'pi' } },
+            ],
+            restrictedCount: 1,
+          },
+        },
+      },
+    });
+
+    render(<ToolCard message={message} />);
+    fireEvent.click(screen.getByTitle('展开'));
+
+    const rows = screen.getByTestId('subagent-mgmt-agents');
+    expect(rows.textContent).toContain('reviewer');
+    expect(rows.textContent).toContain('claude-sonnet');
+    expect(rows.textContent).toContain('blocked-agent');
+    expect(rows.textContent).toContain('project');
+  });
+
+  it('marks failed management actions in the result block', () => {
+    setStoreSubagents({});
+    const message = managementMessage({
+      toolArgs: { action: 'steer', id: 'run-dead', message: 'go left' },
+      toolResult: {
+        content: [{ type: 'text', text: "No async run found for 'run-dead'." }],
+        isError: true,
+        details: { mode: 'management', results: [] },
+      },
+    });
+
+    render(<ToolCard message={message} />);
+    fireEvent.click(screen.getByTitle('展开'));
+
+    const result = screen.getByTestId('subagent-mgmt-result');
+    expect(result).toHaveTextContent("No async run found for 'run-dead'.");
+    expect(screen.getByTestId('subagent-mgmt-action').textContent).toContain('引导');
+  });
+
+  it('shows executing state while the management call is pending', () => {
+    setStoreSubagents({});
+    const message = managementMessage({ toolEndTime: undefined });
+
+    render(<ToolCard message={message} />);
+    fireEvent.click(screen.getByTitle('展开'));
+
+    expect(screen.getByTestId('subagent-mgmt').textContent).toContain('executing');
+    expect(screen.queryByTestId('subagent-mgmt-result')).not.toBeInTheDocument();
+  });
+});

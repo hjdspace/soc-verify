@@ -1,6 +1,7 @@
 import type { ChatMessage, SubagentActivity } from '@renderer/stores/session-types';
 import { argStr, extractResultText, getToolDetails } from '@renderer/components/chat/tool-helpers';
 import { SubagentCard } from '@renderer/components/chat/SubagentCard';
+import { SubagentManagementBody } from './SubagentManagementBody';
 import { GenericBody } from '../shared/GenericBody';
 
 export type PiSubagentMode = 'single' | 'parallel' | 'chain' | 'workflow' | 'management';
@@ -194,6 +195,8 @@ export function SubagentBody({
   liveSubagents: SubagentActivity[];
 }) {
   const presentation = getPiSubagentPresentation(message);
+  // 管理操作（action=list/status/resume/...）：结构化操作卡片，不走 JSON 兜底
+  if (presentation.mode === 'management') return <SubagentManagementBody message={message} />;
   const activities = resolvePiSubagentActivities(presentation, liveSubagents);
   if (activities.length > 0) return <SubagentCard agents={activities} />;
   return <GenericBody args={message.toolArgs} resultText={extractResultText(message.toolResult)} />;
