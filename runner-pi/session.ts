@@ -214,13 +214,14 @@ function loadCapabilityCeilingModule(): Promise<CapabilityCeilingModule> {
  *  1. 前台（async:false / 委派 / run fan-out）：子会话在 runner 进程内创建，
  *     经 pi-subagents 的进程级工厂替换口 setChildSessionFactory 安装
  *     loadPiCodingAgent 代理 —— 其 ModelRuntime.create 缺省注入父会话
- *     modelsPath（模型注册表与父会话一致，子代理默认继承主 agent 模型）。
+ *     modelsPath + 运行时凭证（setRuntimeApiKey，与父会话对齐；models.json
+ *     的 apiKey 字段无 $ 前缀是字面量，缺运行时凭证即 401 Forbidden）。
  *  2. 异步（async:true / RPC spawn）：子会话由 pi-subagents 自行 spawn 的
  *     detached runner 创建，其工厂经 runner 配置的 childSessionFactoryModule
  *     native import 注入 —— 生成一个 env 驱动的 .mjs wrapper（参数经
  *     spawnRunner 的 process.env 继承下发），wrapper 经 jiti 懒加载 seam
  *     （node_modules 下 .ts 禁止原生 type stripping）并构建同样的
- *     modelsPath 注入工厂。
+ *     modelsPath + 运行时凭证注入工厂。
  *
  * 安装失败不静默降级：blockedReason 显式透出（init response + notice），
  * 子代理将以模型解析错误失败，host/UI 必须展示原因。
@@ -230,6 +231,8 @@ const SOCVERIFY_SUBAGENT_MODELS_PATH_ENV = "SOCVERIFY_SUBAGENT_MODELS_PATH";
 const SOCVERIFY_SUBAGENT_PI_ENTRY_URL_ENV = "SOCVERIFY_SUBAGENT_PI_ENTRY_URL";
 const SOCVERIFY_SUBAGENT_SEAM_URL_ENV = "SOCVERIFY_SUBAGENT_SEAM_URL";
 const SOCVERIFY_SUBAGENT_JITI_URL_ENV = "SOCVERIFY_SUBAGENT_JITI_URL";
+const SOCVERIFY_SUBAGENT_PROVIDER_ENV = "SOCVERIFY_SUBAGENT_PROVIDER";
+const SOCVERIFY_SUBAGENT_API_KEY_ENV = "SOCVERIFY_SUBAGENT_API_KEY";
 
 /** pi-subagents child-session 模块（seam）的进程级工厂替换口。 */
 interface ChildSessionSeam {
@@ -239,6 +242,70 @@ interface ChildSessionSeam {
 	}): unknown;
 	setChildSessionFactory(factory: unknown): void;
 	setChildSessionFactoryModule(modulePath: string | undefined): void;
+}
+
+// ─── retry 治理（HTTP 层预算 + 会话层预算 + 误标错误改写） ───
+
+/**
+ * pi 有两层重试：
+ *  - HTTP 层 provider retry（pi 默认关闭：settings `retry.provider.maxRetries`
+ *    未配置时为 0）按 HTTP 状态码判定（408/409/429/5xx），不受响应体里误导性
+ *    code 的影响，并遵循 retry-after / retry-after-ms 头（超过 maxRetryDelayMs
+ *    的服务端延迟仍立即失败，避免长时间卡死）。maxRetries=3：退避序列约
+ *    0.5s/1s/2s。
+ *  - 会话级 auto retry（默认开启 3 次 × 2s 指数退避，约 14s）按 errorMessage
+ *    文本分类。pi-ai 把 `insufficient_quota` 归为"配额/计费耗尽"类永久错误、
+ *    fail fast 不重试 —— 而内部 OpenAI 兼容网关把瞬时 TPM/RPM 限流误用该 code
+ *    上报（`type:"rate_limit_error"` + `code:"insufficient_quota"`），导致可恢复
+ *    限流被当成永久错误直接终止会话。
+ *
+ * 两项治理：
+ *  1. 预算：会话层 5 次 × 4s 指数退避（4+8+16+32+64 = 124s 窗口，末次尝试约在
+ *     60s 后启动，覆盖每分钟 RPM/TPM 窗口）；HTTP 层 3 次（每次会话层尝试内部
+ *     自带）。经 SettingsManager.applyOverrides 内存覆盖，不落盘、不改用户级
+ *     settings.json。override 必须在 loader.reload() 之后应用（reload 会从磁盘
+ *     重建 settings 冲掉内存值，见 applyRetryOverrides 调用点）；子会话经
+ *     patchChildSettingsManager 在每次重建后重放。
+ *  2. 误标改写：buildRetryReclassifyExtension 在 message_end 把"明确声明
+ *     rate_limit_error / tpm / rpm 的瞬时错误"中的误导性配额标记改写掉，
+ *     让 pi 内建会话级 retry 分类放行（真实配额耗尽不含这些瞬时信号，仍 fail fast）。
+ */
+const PROVIDER_HTTP_MAX_RETRIES = 3;
+const SESSION_RETRY_MAX_RETRIES = 5;
+const SESSION_RETRY_BASE_DELAY_MS = 4000;
+
+/** 重试预算 override（主会话 applyRetryOverrides 与子会话 patchChildSettingsManager 共用同一数值）。 */
+const RETRY_OVERRIDES = {
+	retry: {
+		maxRetries: SESSION_RETRY_MAX_RETRIES,
+		baseDelayMs: SESSION_RETRY_BASE_DELAY_MS,
+		provider: { maxRetries: PROVIDER_HTTP_MAX_RETRIES },
+	},
+} as Parameters<SettingsManager["applyOverrides"]>[0];
+
+function applyRetryOverrides(settingsManager: SettingsManager): void {
+	settingsManager.applyOverrides(RETRY_OVERRIDES);
+}
+
+/**
+ * 子会话 SettingsManager 包装：pi-subagents 为每个子会话自建 SettingsManager，
+ * 其 loader.reload() 内部的 reload()/setProjectTrusted() 会从磁盘重建 settings
+ * 并冲掉内存 override（与主会话同一时序问题）——包装这两个方法，在每次重建
+ * 之后重放 retry override，使子会话与父会话共享同一重试预算。
+ */
+function patchChildSettingsManager(manager: SettingsManager): SettingsManager {
+	const reapply = () => manager.applyOverrides(RETRY_OVERRIDES);
+	const originalReload = manager.reload.bind(manager);
+	manager.reload = async () => {
+		await originalReload();
+		reapply();
+	};
+	const originalSetProjectTrusted = manager.setProjectTrusted.bind(manager);
+	manager.setProjectTrusted = (trusted: boolean) => {
+		originalSetProjectTrusted(trusted);
+		reapply();
+	};
+	return manager;
 }
 
 /**
@@ -261,6 +328,30 @@ export const SUBAGENT_CHILD_FACTORY_WRAPPER_SOURCE = `\
 // inherited model reference (provider/modelId) resolves. All inputs arrive
 // via environment variables (inherited through pi-subagents spawnRunner).
 let factoryPromise;
+const RETRY_OVERRIDES = {
+	retry: {
+		maxRetries: ${SESSION_RETRY_MAX_RETRIES},
+		baseDelayMs: ${SESSION_RETRY_BASE_DELAY_MS},
+		provider: { maxRetries: ${PROVIDER_HTTP_MAX_RETRIES} },
+	},
+};
+// 子会话 SettingsManager 包装：loader.reload() 内部的 reload/setProjectTrusted
+// 会从磁盘重建 settings 并冲掉内存 override，每次重建后重放 retry override
+//（与父会话同一重试预算，见 runner session.ts 的 patchChildSettingsManager）。
+function patchChildSettingsManager(manager) {
+	const reapply = () => manager.applyOverrides(RETRY_OVERRIDES);
+	const originalReload = manager.reload.bind(manager);
+	manager.reload = async () => {
+		await originalReload();
+		reapply();
+	};
+	const originalSetProjectTrusted = manager.setProjectTrusted.bind(manager);
+	manager.setProjectTrusted = (trusted) => {
+		originalSetProjectTrusted(trusted);
+		reapply();
+	};
+	return manager;
+}
 async function resolveFactory() {
 	factoryPromise ??= (async () => {
 		const seamUrl = process.env.SOCVERIFY_SUBAGENT_SEAM_URL;
@@ -278,14 +369,25 @@ async function resolveFactory() {
 		const seam = await jiti.import(seamUrl);
 		const pi = await import(piUrl);
 		const modelsPath = process.env.SOCVERIFY_SUBAGENT_MODELS_PATH ?? null;
+		const provider = process.env.SOCVERIFY_SUBAGENT_PROVIDER;
+		const apiKey = process.env.SOCVERIFY_SUBAGENT_API_KEY;
 		const patchedPi = {
 			...pi,
 			ModelRuntime: Object.assign(Object.create(pi.ModelRuntime), {
-				create: (options) =>
-					pi.ModelRuntime.create({
+				create: async (options) => {
+					const runtime = await pi.ModelRuntime.create({
 						...options,
 						modelsPath: (options && options.modelsPath) ?? modelsPath,
-					}),
+					});
+					// 与父会话 handleInit 的 setRuntimeApiKey 对齐：models.json 的
+					// apiKey 字段是无 $ 前缀的字面量（不会被解析为 env 引用），
+					// 运行时凭证是唯一正确的鉴权来源，缺失即 401 Forbidden。
+					if (provider && apiKey) await runtime.setRuntimeApiKey(provider, apiKey);
+					return runtime;
+				},
+			}),
+			SettingsManager: Object.assign(Object.create(pi.SettingsManager), {
+				create: (...args) => patchChildSettingsManager(pi.SettingsManager.create(...args)),
 			}),
 		};
 		return seam.createDefaultChildSessionFactory({ loadPiCodingAgent: async () => patchedPi });
@@ -309,21 +411,38 @@ function resolveMaybeFileUrl(resolved: string): string {
 }
 
 /**
- * 为子会话工厂构建 ModelRuntime.create 缺省注入 modelsPath 的 pi 模块代理。
- * 其余导出保持原引用（子会话与父会话共用同一 SDK 模块状态）。
+ * 为子会话工厂构建 pi 模块代理：
+ *  - ModelRuntime.create 缺省注入 modelsPath（+ 运行时凭证），其余导出保持
+ *    原引用（子会话与父会话共用同一 SDK 模块状态）；
+ *  - SettingsManager.create 经 patchChildSettingsManager 包装，保证子会话
+ *    loader.reload() 冲掉 settings 后重试预算 override 仍然生效。
+ *
+ * provider/apiKey 存在时对齐父会话的 setRuntimeApiKey —— models.json 的
+ * apiKey 字段（无 $ 前缀）是字面量而非 env 引用，运行时凭证缺失会导致
+ * 子会话以 Bearer <字面量> 请求 → 401 Forbidden。
  */
 function buildModelInheritingPiModule(
 	pi: typeof import("@earendil-works/pi-coding-agent"),
-	modelsPath: string,
+	options: { modelsPath: string; provider?: string; apiKey?: string },
 ): unknown {
+	const { modelsPath, provider, apiKey } = options;
 	return {
 		...pi,
 		ModelRuntime: Object.assign(Object.create(pi.ModelRuntime), {
-			create: (options?: { modelsPath?: string | null }) =>
-				pi.ModelRuntime.create({
-					...options,
-					modelsPath: options?.modelsPath ?? modelsPath,
-				} as Parameters<typeof pi.ModelRuntime.create>[0]),
+			create: async (createOptions?: { modelsPath?: string | null }) => {
+				const runtime = await pi.ModelRuntime.create({
+					...createOptions,
+					modelsPath: createOptions?.modelsPath ?? modelsPath,
+				} as Parameters<typeof pi.ModelRuntime.create>[0]);
+				if (provider && apiKey) {
+					await runtime.setRuntimeApiKey(provider, apiKey);
+				}
+				return runtime;
+			},
+		}),
+		SettingsManager: Object.assign(Object.create(pi.SettingsManager), {
+			create: (...args: Parameters<typeof pi.SettingsManager.create>) =>
+				patchChildSettingsManager(pi.SettingsManager.create(...args)),
 		}),
 	};
 }
@@ -351,13 +470,21 @@ async function loadChildSessionSeam(): Promise<{ seam: ChildSessionSeam; seamPat
  * 安装子会话模型继承（前台工厂替换 + 异步 wrapper 注入）。失败写入
  * runtime.blockedReason（显式透出，不中断 init、不停用 subagent 能力）。
  */
-async function installSubagentModelInheritance(modelsPath: string, runtime: SubagentRuntime): Promise<void> {
+async function installSubagentModelInheritance(
+	config: InitConfig,
+	modelsPath: string,
+	runtime: SubagentRuntime,
+): Promise<void> {
 	try {
 		const { seam, seamPath } = await loadChildSessionSeam();
 
-		// 1) 前台：进程级工厂替换（ModelRuntime.create 缺省注入 modelsPath）
+		// 1) 前台：进程级工厂替换（ModelRuntime.create 缺省注入 modelsPath + 运行时凭证）
 		const piModule = await import("@earendil-works/pi-coding-agent");
-		const patchedPi = buildModelInheritingPiModule(piModule, modelsPath);
+		const patchedPi = buildModelInheritingPiModule(piModule, {
+			modelsPath,
+			provider: config.provider,
+			apiKey: config.apiKey,
+		});
 		const factory = seam.createDefaultChildSessionFactory({
 			loadPiCodingAgent: () => Promise.resolve(patchedPi),
 		});
@@ -370,6 +497,10 @@ async function installSubagentModelInheritance(modelsPath: string, runtime: Suba
 			subagentsJiti.esmResolve("@earendil-works/pi-coding-agent");
 		process.env[SOCVERIFY_SUBAGENT_SEAM_URL_ENV] ??= pathToFileURL(seamPath).href;
 		process.env[SOCVERIFY_SUBAGENT_JITI_URL_ENV] ??= subagentsJiti.esmResolve("jiti");
+		if (config.provider) process.env[SOCVERIFY_SUBAGENT_PROVIDER_ENV] = config.provider;
+		else delete process.env[SOCVERIFY_SUBAGENT_PROVIDER_ENV];
+		if (config.apiKey) process.env[SOCVERIFY_SUBAGENT_API_KEY_ENV] = config.apiKey;
+		else delete process.env[SOCVERIFY_SUBAGENT_API_KEY_ENV];
 		const wrapperPath = join(dirname(modelsPath), "socverify-subagent-child-factory.mjs");
 		mkdirSync(dirname(modelsPath), { recursive: true });
 		writeFileSync(wrapperPath, SUBAGENT_CHILD_FACTORY_WRAPPER_SOURCE, "utf-8");
@@ -557,7 +688,7 @@ async function assembleSubagents(config: InitConfig, ctx: PiRunnerContext): Prom
 	// 子代理解析继承的父模型引用必失败（"Model ... not found"）。失败显式
 	// blockedReason，不停用 subagent 能力（内置 provider 的子代理仍可用）。
 	if (config.modelsPath) {
-		await installSubagentModelInheritance(config.modelsPath, runtime);
+		await installSubagentModelInheritance(config, config.modelsPath, runtime);
 	}
 
 	return {
@@ -592,6 +723,68 @@ async function registerApprovalInheritance(runtime: SubagentRuntime | null, sess
 	} catch (err) {
 		const reason = err instanceof Error ? err.message : String(err);
 		runtime.blockedReason = `Subagent approval inheritance unavailable: ${reason}`;
+	}
+}
+
+// ─── rpiv-todo 加载（jiti，TS 源码入口）─────────────────
+
+interface TodoExtensionModule {
+	default: (pi: unknown) => void;
+}
+
+/**
+ * @juicesharp/rpiv-todo 的 package.json "." 出口是 TypeScript 源码（index.ts），
+ * 与 pi-mcp-adapter / pi-subagents 同理由 jiti 加载（模块缓存随进程复用）。
+ * 扩展注册 `todo` 工具（create/update/list/get/delete/clear，4 态任务机），
+ * headless 下 TUI overlay / 快捷键自动空转（ctx.hasUI 守卫），todo 状态经
+ * 工具结果 details.tasks（Task[] 快照）随 tool_execution_end 回流 UI。
+ */
+let todoModulePromise: Promise<TodoExtensionModule> | null = null;
+
+function loadTodoExtension(): Promise<TodoExtensionModule> {
+	todoModulePromise ??= createJiti(import.meta.url)
+		.import("@juicesharp/rpiv-todo")
+		.then((mod) => {
+			const resolved = mod as { default?: unknown };
+			const factory = resolved.default;
+			if (typeof factory !== "function") {
+				throw new Error("rpiv-todo loaded but default extension factory missing");
+			}
+			return { default: factory as (pi: unknown) => void };
+		});
+	return todoModulePromise;
+}
+
+// ─── todo 装配（rpiv-todo 内置扩展）─────────────────────
+
+type TodoAssembly = {
+	factories: InlineExtension[];
+	/** 加载失败原因（host/UI 显式展示，不静默降级） */
+	blockedReason: string | null;
+};
+
+/**
+ * todo 装配：加载 @juicesharp/rpiv-todo 扩展（注册 `todo` 工具与 /todos 命令）。
+ * 失败不中断 init：blockedReason 由 handleInit 以 notice 事件透出。
+ */
+async function assembleTodo(): Promise<TodoAssembly> {
+	try {
+		const mod = await loadTodoExtension();
+		return {
+			factories: [
+				{
+					name: "socverify-todo",
+					hidden: true,
+					factory: (pi) => {
+						mod.default(pi);
+					},
+				},
+			],
+			blockedReason: null,
+		};
+	} catch (err) {
+		const reason = err instanceof Error ? err.message : String(err);
+		return { factories: [], blockedReason: reason };
 	}
 }
 
@@ -712,44 +905,6 @@ async function resolveSessionManager(
 	return { manager, recovery: "new" };
 }
 
-// ─── retry 治理（HTTP 层预算 + 会话层预算 + 误标错误改写） ───
-
-/**
- * pi 有两层重试：
- *  - HTTP 层 provider retry（pi 默认关闭：settings `retry.provider.maxRetries`
- *    未配置时为 0）按 HTTP 状态码判定（408/409/429/5xx），不受响应体里误导性
- *    code 的影响，并遵循 retry-after / retry-after-ms 头（超过 maxRetryDelayMs
- *    的服务端延迟仍立即失败，避免长时间卡死）。maxRetries=3：退避序列约
- *    0.5s/1s/2s。
- *  - 会话级 auto retry（默认开启 3 次 × 2s 指数退避，约 14s）按 errorMessage
- *    文本分类。pi-ai 把 `insufficient_quota` 归为"配额/计费耗尽"类永久错误、
- *    fail fast 不重试 —— 而内部 OpenAI 兼容网关把瞬时 TPM/RPM 限流误用该 code
- *    上报（`type:"rate_limit_error"` + `code:"insufficient_quota"`），导致可恢复
- *    限流被当成永久错误直接终止会话。
- *
- * 两项治理：
- *  1. 预算：会话层 5 次 × 4s 指数退避（4+8+16+32+64 = 124s 窗口，末次尝试约在
- *     60s 后启动，覆盖每分钟 RPM/TPM 窗口）；HTTP 层 3 次（每次会话层尝试内部
- *     自带）。经 SettingsManager.applyOverrides 内存覆盖，不落盘、不改用户级
- *     settings.json。
- *  2. 误标改写：buildRetryReclassifyExtension 在 message_end 把"明确声明
- *     rate_limit_error / tpm / rpm 的瞬时错误"中的误导性配额标记改写掉，
- *     让 pi 内建会话级 retry 分类放行（真实配额耗尽不含这些瞬时信号，仍 fail fast）。
- */
-const PROVIDER_HTTP_MAX_RETRIES = 3;
-const SESSION_RETRY_MAX_RETRIES = 5;
-const SESSION_RETRY_BASE_DELAY_MS = 4000;
-
-function applyRetryOverrides(settingsManager: SettingsManager): void {
-	settingsManager.applyOverrides({
-		retry: {
-			maxRetries: SESSION_RETRY_MAX_RETRIES,
-			baseDelayMs: SESSION_RETRY_BASE_DELAY_MS,
-			provider: { maxRetries: PROVIDER_HTTP_MAX_RETRIES },
-		},
-	});
-}
-
 /** 瞬时限流强信号：type=rate_limit_error 或 tpm/rpm 字样。不含裸 429 —— 真实配额耗尽也是 429。 */
 const TRANSIENT_RATE_LIMIT_SIGNAL = /"type"\s*:\s*"rate_limit_error"|tpm\b|rpm\b/i;
 /** pi-ai 归为永久错误的配额/计费标记（NON_RETRYABLE 优先判定）。 */
@@ -830,11 +985,11 @@ export async function handleInit(
 	// 提示词 → SoC Verify 应用规则（issue 06，不做整体替换）。
 	const mcp = await assembleMcp(config, ctx);
 	const subagents = await assembleSubagents(config, ctx);
+	const todo = await assembleTodo();
 	const agentDir = getAgentDir();
 	// 单一 SettingsManager 实例同时供 loader 与 createAgentSession 使用
 	// （createAgentSession 不传 settingsManager 时会自建新实例，override 会丢失）。
 	const settingsManager = SettingsManager.create(config.cwd, agentDir);
-	applyRetryOverrides(settingsManager);
 	const loader = new DefaultResourceLoader({
 		cwd: config.cwd,
 		agentDir,
@@ -845,6 +1000,7 @@ export async function handleInit(
 			buildRetryReclassifyExtension(),
 			...mcp.factories,
 			...subagents.factories,
+			...todo.factories,
 		],
 		appendSystemPrompt: buildAppendSystemPrompt(config.systemPrompt),
 		// skill 装载（issue 09）：host 下发有序 skillPaths（与 UI 发现同源），
@@ -863,6 +1019,11 @@ export async function handleInit(
 				ctx.requestTrust,
 			),
 	});
+
+	// 重试 override 必须在 loader.reload() 之后应用：reload 内部会调
+	// SettingsManager.reload()/setProjectTrusted() 从磁盘重建 settings，
+	// 之前应用的内存 override 会被冲掉（曾导致 retry 退回 pi 默认 3 次）。
+	applyRetryOverrides(settingsManager);
 
 	// 初始思考强度：'default'/'auto' 不下发（跟随引擎默认，pi 会按模型能力 clamp）
 	const initialThinkingLevel = toPiThinkingLevel(config.thinkingLevel);
@@ -940,6 +1101,13 @@ export async function handleInit(
 		: { enabled: false, blockedReason: "Subagent runtime not assembled" };
 	if (subagentStatus.blockedReason) {
 		sendEvent({ type: "notice", text: subagentStatus.blockedReason, message: subagentStatus.blockedReason });
+	}
+
+	// todo 扩展状态透出（加载失败显式展示，不静默降级 —— `todo` 工具不可用时
+	// 模型无法创建任务清单，UI 必须知道原因）
+	if (todo.blockedReason) {
+		const text = `Todo extension unavailable: ${todo.blockedReason}`;
+		sendEvent({ type: "notice", text, message: text });
 	}
 
 	// recovered 标记（issue 07）：host 据此在重建后更新 engineSessionId

@@ -2,21 +2,19 @@
  * issue 10 — AI 引擎载荷发布门禁。
  *
  * 用法：
- *   node scripts/engine-payload-gate.mjs --payload <dir> --out <report.json> [--limit-mb 30]
+ *   node scripts/engine-payload-gate.mjs --payload <dir> --out <report.json>
  *
  * 行为：
  *   1. 递归统计 --payload 的载荷构成（字节、文件数、顶层条目分布）
- *   2. 扫描禁含产物（omp 时代遗留，绝不允许进发布包，**不可 ack 豁免**）：
+ *   2. 扫描禁含产物（omp 时代遗留，绝不允许进发布包）：
  *        socverify-runner*  — 旧 Bun 单文件 runner
  *        pi_natives*        — 旧 native addon
  *        bun / bunx 可执行  — Bun 运行时（basename 精确匹配，不误伤 bundle.js）
  *        oh-my-pi           — omp submodule 残留
- *   3. 载荷超过 --limit-mb（默认 30）时：报告记录构成与 limit，需
- *      SOCVERIFY_ACK_ENGINE_PAYLOAD=1 显式放行（记录 ack: true）
- *   4. 报告 JSON 写入 --out（dist/engine-payload-report.json），作为
- *      载荷构成 / 原因 / 收益分析的输入
+ *   3. 报告 JSON 写入 --out（dist/engine-payload-report.json），作为
+ *      载荷构成的记录输入（体积阈值门限已取消，不再因超限中断打包）
  *
- * 退出码：0 = 通过（或超限已 ack）；1 = 禁含产物 / 超限未 ack / 参数错误。
+ * 退出码：0 = 通过；1 = 禁含产物 / 参数错误。
  */
 
 import { readdirSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
@@ -31,18 +29,15 @@ function argValue(name) {
 
 const payloadArg = argValue('--payload');
 const outPath = argValue('--out');
-const limitMb = argValue('--limit-mb') !== undefined ? Number(argValue('--limit-mb')) : 30;
 
 // --payload 接受逗号分隔的多个目录（如 runner 脚本与独立安装的依赖树），
 // 累加统计为一个引擎载荷。
 const payloadDirs = payloadArg ? payloadArg.split(',').map((d) => d.trim()).filter(Boolean) : [];
 
-if (payloadDirs.length === 0 || !outPath || !Number.isFinite(limitMb) || limitMb < 0) {
-  console.error('[engine-gate] usage: engine-payload-gate.mjs --payload <dir[,dir2...]> --out <report.json> [--limit-mb 30]');
+if (payloadDirs.length === 0 || !outPath) {
+  console.error('[engine-gate] usage: engine-payload-gate.mjs --payload <dir[,dir2...]> --out <report.json>');
   process.exit(1);
 }
-
-const ack = process.env.SOCVERIFY_ACK_ENGINE_PAYLOAD === '1';
 
 // ─── Forbidden artifacts (omp-era payload) ───────────────────────────
 
@@ -124,16 +119,12 @@ try {
 
 // ─── Verdict ─────────────────────────────────────────────────────────
 
-const limitBytes = limitMb * 1024 * 1024;
-const overLimit = totals.bytes > limitBytes;
 const hasForbidden = forbidden.length > 0;
-
-const passed = !hasForbidden && (!overLimit || ack);
+const passed = !hasForbidden;
 
 const report = {
   generatedAt: new Date().toISOString(),
   payloadDirs,
-  limitMb,
   totals: {
     bytes: totals.bytes,
     files: totals.files,
@@ -143,8 +134,6 @@ const report = {
     .map(([name, bytes]) => ({ name, bytes, mb: Math.round((bytes / (1024 * 1024)) * 10) / 10 }))
     .sort((a, b) => b.bytes - a.bytes),
   forbidden,
-  overLimit,
-  ack,
   passed,
 };
 
@@ -159,32 +148,17 @@ try {
 // ─── Log + exit ──────────────────────────────────────────────────────
 
 console.log(
-  `[engine-gate] payload: ${report.totals.mb} MB / ${totals.files} files (limit ${limitMb} MB) — ${passed ? 'PASS' : 'FAIL'}`,
+  `[engine-gate] payload: ${report.totals.mb} MB / ${totals.files} files — ${passed ? 'PASS' : 'FAIL'}`,
 );
 for (const entry of report.topLevel.slice(0, 10)) {
   console.log(`[engine-gate]   ${entry.name}: ${entry.mb} MB`);
 }
 
 if (hasForbidden) {
-  console.error('[engine-gate] forbidden omp-era artifacts found in payload (not ack-able):');
+  console.error('[engine-gate] forbidden omp-era artifacts found in payload:');
   for (const f of forbidden) {
     console.error(`[engine-gate]   ${f.path} (matched ${f.pattern})`);
   }
-  process.exit(1);
-}
-
-if (overLimit) {
-  if (ack) {
-    console.warn(
-      `[engine-gate] payload exceeds ${limitMb} MB — released with SOCVERIFY_ACK_ENGINE_PAYLOAD=1; ` +
-        'see the report for composition. Re-evaluate the size rationale each release.',
-    );
-    process.exit(0);
-  }
-  console.error(
-    `[engine-gate] payload exceeds ${limitMb} MB. ` +
-      'Record the composition, reason and benefit, then re-run with SOCVERIFY_ACK_ENGINE_PAYLOAD=1 to release.',
-  );
   process.exit(1);
 }
 

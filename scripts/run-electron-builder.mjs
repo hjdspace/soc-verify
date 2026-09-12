@@ -28,6 +28,11 @@ const ROOT = resolve(__dirname, '..');
 const MAX_RETRIES = 5;
 const BASE_DELAY_SEC = 30;
 
+// Only GitHub Actions publishes installer assets (and needs the 503 retry
+// loop for the GitHub API). Locally GITHUB_ACTIONS is unset — but note some
+// machines set CI globally, so CI is intentionally NOT used here.
+const IS_ACTIONS = process.env.GITHUB_ACTIONS === 'true';
+
 // ─── Pre-build cleanup ───────────────────────────────────────────────────────
 // Remove the dist directory before building. On Windows, leftover files from a
 // previous build can be locked by Explorer / antivirus / the previous electron
@@ -54,13 +59,15 @@ async function sleep(ms) {
 function runElectronBuilder() {
   return new Promise((resolve, reject) => {
     // Pass through all CLI arguments to electron-builder.
-    // In CI, default to --publish always so electron-builder uploads installer
-    // assets to the GitHub Release using GH_TOKEN. Local runs remain publish-free.
+    // Publishing only happens inside GitHub Actions (release.yml passes GH_TOKEN
+    // and uploads installer assets to the GitHub Release). Local runs never
+    // publish — releases are driven by GitHub Actions. An explicit --publish
+    // argument passed by the caller always wins.
     const userArgs = process.argv.slice(2);
     const hasPublishArg = userArgs.some((a) => a.startsWith('--publish'));
-    const args = (process.env.CI && !hasPublishArg)
-      ? ['--publish', 'always', ...userArgs]
-      : userArgs;
+    const args = hasPublishArg
+      ? userArgs
+      : ['--publish', IS_ACTIONS ? 'always' : 'never', ...userArgs];
 
     // Build the env with system CA support
     const env = { ...process.env };
@@ -72,12 +79,13 @@ function runElectronBuilder() {
     env.ELECTRON_MIRROR ??= env.npm_config_electron_mirror || 'https://npmmirror.com/mirrors/electron/';
     env.ELECTRON_BUILDER_BINARIES_MIRROR ??= env.npm_config_electron_builder_binaries_mirror || 'https://npmmirror.com/mirrors/electron-builder-binaries/';
 
-    // In CI, use a project-local cache directory so it can be cached between runs.
+    // In GitHub Actions, use a project-local cache directory so it can be
+    // cached between runs.
     // Locally, don't override ELECTRON_CACHE — electron-builder will use the system
     // default (e.g. %LOCALAPPDATA%/electron/Cache on Windows), which is already
     // populated by `npm install electron`. Overriding it to an empty project-local
     // directory causes electron-builder to re-download Electron every time.
-    if (process.env.CI) {
+    if (IS_ACTIONS) {
       env.ELECTRON_CACHE ??= join(ROOT, '.cache', 'electron');
       env.ELECTRON_BUILDER_CACHE ??= join(ROOT, '.cache', 'electron-builder');
     }
@@ -140,8 +148,8 @@ function runElectronBuilder() {
 // installer assets. If the API returns 503 (Service Unavailable), the entire
 // process exits non-zero. On retry, we skip the dist cleanup so
 // electron-builder detects existing build artifacts and only retries the
-// publish step, making retries fast.
-const isCI = !!process.env.CI;
+// publish step, making retries fast. Publishing (and thus this retry loop)
+// only applies inside GitHub Actions.
 let attempt = 0;
 
 for (;;) {
@@ -155,8 +163,8 @@ for (;;) {
     process.exit(0);
   }
 
-  // In non-CI (local), don't retry — just exit with the error code.
-  if (!isCI) {
+  // Outside Actions (local), don't retry — just exit with the error code.
+  if (!IS_ACTIONS) {
     process.exit(code);
   }
 

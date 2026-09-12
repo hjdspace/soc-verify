@@ -72,7 +72,11 @@ vi.mock('jiti', () => ({
 }));
 
 const createAgentSession = vi.fn();
-const piModelRuntimeCreate = vi.fn(async () => ({ __fakeModelRuntime: true }));
+const piModelRuntimeSetRuntimeApiKey = vi.fn(async () => undefined);
+const piModelRuntimeCreate = vi.fn(async () => ({
+  __fakeModelRuntime: true,
+  setRuntimeApiKey: piModelRuntimeSetRuntimeApiKey,
+}));
 
 vi.mock('@earendil-works/pi-coding-agent', () => ({
   createAgentSession: (...args: unknown[]) => createAgentSession(...args),
@@ -144,6 +148,7 @@ beforeEach(() => {
   setChildSessionFactoryModule.mockClear();
   createDefaultChildSessionFactory.mockClear();
   piModelRuntimeCreate.mockClear();
+  piModelRuntimeSetRuntimeApiKey.mockClear();
   subagentModuleError = null;
   seamModuleError = null;
   createAgentSession.mockReset();
@@ -157,6 +162,8 @@ afterEach(() => {
   delete process.env.SOCVERIFY_SUBAGENT_PI_ENTRY_URL;
   delete process.env.SOCVERIFY_SUBAGENT_SEAM_URL;
   delete process.env.SOCVERIFY_SUBAGENT_JITI_URL;
+  delete process.env.SOCVERIFY_SUBAGENT_PROVIDER;
+  delete process.env.SOCVERIFY_SUBAGENT_API_KEY;
 });
 
 // ─── init 装配 ──────────────────────────────────────────
@@ -227,7 +234,13 @@ describe('handleInit subagent 装配', () => {
     const notices = sendEvent.mock.calls.filter(
       ([event]) => (event as { type?: string })?.type === 'notice',
     );
-    expect(notices.length).toBe(1);
+    // 断言 subagent 阻断 notice 存在即可（rpiv-todo 扩展在本测试的 vm 池内
+    // 同样会加载失败并发独立 notice —— 生产 runner 是普通 node 进程，不受影响）
+    expect(
+      notices.some(([event]) =>
+        String((event as { text?: string })?.text).includes('pi-subagents not installed'),
+      ),
+    ).toBe(true);
   });
 
   it('enableSubagents=false 显式停用，无阻断原因', async () => {
@@ -272,9 +285,40 @@ describe('handleInit 子会话模型继承装配', () => {
     expect(process.env.SOCVERIFY_SUBAGENT_SEAM_URL).toContain('child-session.ts');
     expect(process.env.SOCVERIFY_SUBAGENT_JITI_URL).toBe(MOCK_JITI_URL);
     // wrapper 必须经 jiti 转译加载 seam（node_modules 下 .ts 禁止原生 stripping）
+    // 并对齐父会话的 setRuntimeApiKey（models.json apiKey 字面量 → 缺运行时凭证即 401）
     const wrapperSource = readFileSync(wrapperPath, 'utf-8');
     expect(wrapperSource).toContain('tryNative: false');
     expect(wrapperSource).toContain('jiti.import(seamUrl)');
+    expect(wrapperSource).toContain('setRuntimeApiKey');
+  });
+
+  it('config 携带 provider/apiKey 时，注入工厂的共享运行时对齐父会话 setRuntimeApiKey', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'socverify-subagent-test-'));
+    const ctx = makeCtx();
+    await handleInit(
+      {
+        id: 'req_9',
+        type: 'init',
+        config: {
+          cwd: '/p',
+          modelsPath: join(dir, 'models.json'),
+          provider: 'socverify-openai-compatible',
+          apiKey: 'real-key',
+        },
+      },
+      ctx,
+    );
+
+    expect(ctx.subagentRuntime).toMatchObject({ enabled: true, blockedReason: null });
+    expect(process.env.SOCVERIFY_SUBAGENT_PROVIDER).toBe('socverify-openai-compatible');
+    expect(process.env.SOCVERIFY_SUBAGENT_API_KEY).toBe('real-key');
+    const loadPiCodingAgent = (createDefaultChildSessionFactory.mock.calls[0]?.[0] as {
+      loadPiCodingAgent: () => Promise<{ ModelRuntime: { create: (o?: unknown) => Promise<unknown> } }>;
+    }).loadPiCodingAgent;
+    const patchedPi = await loadPiCodingAgent();
+    await patchedPi.ModelRuntime.create({ modelsPath: join(dir, 'models.json') });
+    expect(piModelRuntimeCreate).toHaveBeenCalledWith(expect.objectContaining({ modelsPath: join(dir, 'models.json') }));
+    expect(piModelRuntimeSetRuntimeApiKey).toHaveBeenCalledWith('socverify-openai-compatible', 'real-key');
   });
 
   it('seam 模块加载失败时显式 blockedReason，不停用 subagent 能力', async () => {

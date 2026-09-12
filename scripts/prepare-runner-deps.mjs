@@ -165,11 +165,17 @@ function main() {
 
   if (!PRUNE_ONLY) {
     console.log(`[prepare-runner-deps] npm ci in ${DEPS_DIR}`);
-    const result = spawnSync(
-      npmCommand(),
-      ['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'],
-      { cwd: DEPS_DIR, stdio: 'inherit', shell: false },
-    );
+    // Windows: spawning .cmd shims requires shell since Node's CVE-2024-27980
+    // fix (EINVAL otherwise); args are static so string form avoids DEP0190.
+    const useShell = process.platform === 'win32';
+    const npmArgs = ['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'];
+    const result = useShell
+      ? spawnSync(`${npmCommand()} ${npmArgs.join(' ')}`, {
+          cwd: DEPS_DIR,
+          stdio: 'inherit',
+          shell: true,
+        })
+      : spawnSync(npmCommand(), npmArgs, { cwd: DEPS_DIR, stdio: 'inherit' });
 
     if (result.error) {
       console.error(`[prepare-runner-deps] failed to spawn npm: ${result.error.message}`);

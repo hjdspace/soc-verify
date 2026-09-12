@@ -599,9 +599,42 @@ function normalizeTodoStatus(raw: string): TodoItemStatus {
 }
 
 /**
+ * Extract todo items from the rpiv-todo (@juicesharp/rpiv-todo, pi 引擎) tool
+ * result: `details.tasks` is the flat Task[] persistence snapshot
+ * (`{ id, subject, status: pending|in_progress|completed|deleted, activeForm? }`)
+ * — no omp-style phases. `deleted` 是墓碑态，不展示。
+ * 返回 null 表示结果不是 rpiv 格式（无 details.tasks）；items 为空数组表示
+ * 是 rpiv 格式但清单已清空（clear / 全部 tombstone）。
+ */
+export function extractRpivTodoTasks(result: unknown): TodoItemData[] | null {
+  if (typeof result !== 'object' || result === null) return null;
+  const details = (result as Record<string, unknown>).details;
+  if (typeof details !== 'object' || details === null) return null;
+  const tasks = (details as Record<string, unknown>).tasks;
+  if (!Array.isArray(tasks)) return null;
+  return (tasks as Array<Record<string, unknown>>)
+    .filter((t) => String(t.status ?? '') !== 'deleted')
+    .map((t) => {
+      const subject = String(t.subject ?? '');
+      const status = String(t.status ?? 'pending');
+      // in_progress 优先展示 activeForm（present-continuous 进度标签）
+      const activeForm =
+        status === 'in_progress' && typeof t.activeForm === 'string' && t.activeForm
+          ? t.activeForm
+          : '';
+      return {
+        text: activeForm ? `${subject} (${activeForm})` : subject,
+        status: normalizeTodoStatus(status),
+      };
+    })
+    .filter((item) => item.text);
+}
+
+/**
  * Extract todo phases from the omp todo tool result object.
  * The result contains `details.phases` with `TodoPhase[]` where each task has
  * `{ content: string, status: "pending" | "in_progress" | "completed" | "abandoned" }`.
+ * 兼容 rpiv-todo（pi 引擎）的 `details.tasks` 扁平快照：映射为单 phase。
  */
 export function extractTodoPhases(result: unknown): TodoPhaseData[] {
   if (typeof result !== 'object' || result === null) return [];
@@ -609,21 +642,28 @@ export function extractTodoPhases(result: unknown): TodoPhaseData[] {
   const details = obj.details;
   if (typeof details !== 'object' || details === null) return [];
   const phases = (details as Record<string, unknown>).phases;
-  if (!Array.isArray(phases)) return [];
-  return (phases as Array<Record<string, unknown>>)
-    .map((phase) => {
-      const tasks = Array.isArray(phase.tasks) ? phase.tasks : [];
-      return {
-        name: String(phase.name ?? ''),
-        items: (tasks as Array<Record<string, unknown>>)
-          .map((task) => ({
-            text: String(task.content ?? task.text ?? task.task ?? ''),
-            status: normalizeTodoStatus(String(task.status ?? 'pending')),
-          }))
-          .filter((item) => item.text),
-      };
-    })
-    .filter((phase) => phase.items.length > 0);
+  if (Array.isArray(phases)) {
+    return (phases as Array<Record<string, unknown>>)
+      .map((phase) => {
+        const tasks = Array.isArray(phase.tasks) ? phase.tasks : [];
+        return {
+          name: String(phase.name ?? ''),
+          items: (tasks as Array<Record<string, unknown>>)
+            .map((task) => ({
+              text: String(task.content ?? task.text ?? task.task ?? ''),
+              status: normalizeTodoStatus(String(task.status ?? 'pending')),
+            }))
+            .filter((item) => item.text),
+        };
+      })
+      .filter((phase) => phase.items.length > 0);
+  }
+  // rpiv-todo（pi 引擎）：details.tasks 扁平 Task[] 快照 → 单 phase
+  const rpivTasks = extractRpivTodoTasks(result);
+  if (rpivTasks && rpivTasks.length > 0) {
+    return [{ name: '任务', items: rpivTasks }];
+  }
+  return [];
 }
 
 /**
@@ -837,6 +877,10 @@ export function parseTodoItems(args: unknown, resultText: string): TodoItemData[
   const fromText = parseTodoPhasesFromText(resultText);
   if (fromText.length > 0) return flattenTodoItems(fromText);
 
+  // rpiv-todo result text lines (pi 引擎：[status] #id subject / Created #id: ...)
+  const fromRpivLines = parseRpivTodoLines(resultText);
+  if (fromRpivLines.length > 0) return fromRpivLines;
+
   // Legacy line parsing
   const lines = resultText.split('\n').filter(Boolean);
   const items: TodoItemData[] = [];
@@ -846,6 +890,35 @@ export function parseTodoItems(args: unknown, resultText: string): TodoItemData[
       items.push({ text: trimmed.replace(/^(\[x\]|\[X\]|\u2713)\s*/, ''), status: 'completed' });
     } else if (/^\[ \]/.test(trimmed) || /^[-*]\s/.test(trimmed)) {
       items.push({ text: trimmed.replace(/^(\[ \]|[-*])\s*/, ''), status: 'pending' });
+    }
+  }
+  return items;
+}
+
+/**
+ * rpiv-todo（pi 引擎）结果文本行解析：
+ * `list`/`get` action 输出 `[status] #id subject [(activeForm)] [⛓ #dep,…]`，
+ * `create` action 输出 `Created #id: subject (status)`。
+ */
+function parseRpivTodoLines(text: string): TodoItemData[] {
+  if (!text) return [];
+  const items: TodoItemData[] = [];
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    const listMatch = trimmed.match(/^\[(pending|in_progress|completed|deleted)\]\s*#\d+\s+(.+)$/);
+    if (listMatch) {
+      if (listMatch[1] !== 'deleted') {
+        // 剥掉尾部依赖链展示（⛓ #1,2），保留 activeForm
+        items.push({
+          text: listMatch[2].replace(/\s*⛓.*$/, '').trim(),
+          status: normalizeTodoStatus(listMatch[1]),
+        });
+      }
+      continue;
+    }
+    const createMatch = trimmed.match(/^Created #\d+:\s+(.+?)\s+\((pending|in_progress|completed)\)$/);
+    if (createMatch) {
+      items.push({ text: createMatch[1].trim(), status: normalizeTodoStatus(createMatch[2]) });
     }
   }
   return items;

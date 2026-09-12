@@ -35,6 +35,7 @@ import {
   buildSubagentsFromResult,
   parseJobItems,
   parseTodoItems,
+  extractRpivTodoTasks,
   extractEditFilePath,
   hasResultWarning,
   isSkillRead,
@@ -165,7 +166,8 @@ function jobSummary(message: ChatMessage): ReactNode {
 function todoSummary(message: ChatMessage): ReactNode {
   const args = message.toolArgs;
   const resultText = extractResultText(message.toolResult);
-  const todos = parseTodoItems(args, resultText);
+  // rpiv-todo（pi 引擎）优先用 details.tasks 快照；omp 回退文本解析
+  const todos = extractRpivTodoTasks(message.toolResult) ?? parseTodoItems(args, resultText);
   const done = todos.filter((t) => t.status === 'completed').length;
   return <>{todos.length} items {' \u00b7 '} {done}/{todos.length} done</>;
 }
@@ -299,7 +301,7 @@ function JobBodyWrap({ message }: ToolBodyProps) {
   return <JobBody resultText={extractResultText(message.toolResult)} />;
 }
 function TodoBodyWrap({ message }: ToolBodyProps) {
-  return <TodoBody args={message.toolArgs} resultText={extractResultText(message.toolResult)} />;
+  return <TodoBody args={message.toolArgs} result={message.toolResult} resultText={extractResultText(message.toolResult)} />;
 }
 function SimRunBodyWrap({ message }: ToolBodyProps) {
   return <SimRunBody args={message.toolArgs} resultText={extractResultText(message.toolResult)} />;
