@@ -233,6 +233,10 @@ const SOCVERIFY_SUBAGENT_SEAM_URL_ENV = "SOCVERIFY_SUBAGENT_SEAM_URL";
 const SOCVERIFY_SUBAGENT_JITI_URL_ENV = "SOCVERIFY_SUBAGENT_JITI_URL";
 const SOCVERIFY_SUBAGENT_PROVIDER_ENV = "SOCVERIFY_SUBAGENT_PROVIDER";
 const SOCVERIFY_SUBAGENT_API_KEY_ENV = "SOCVERIFY_SUBAGENT_API_KEY";
+// pi-subagents persists failed-model exclusions globally by default. Keep the
+// cache scoped to this session so a stale 401 from another session cannot
+// disable the currently configured model for subagent dispatch.
+const PI_MODEL_EXCLUSIONS_PATH_ENV = "PI_MODEL_EXCLUSIONS_PATH";
 
 /** pi-subagents child-session 模块（seam）的进程级工厂替换口。 */
 interface ChildSessionSeam {
@@ -493,6 +497,7 @@ async function installSubagentModelInheritance(
 		// 2) 异步：detached runner 的工厂经 env 驱动 wrapper 注入
 		//    （spawnRunner 继承 runner 进程 env；wrapper 写入 models.json 同目录）
 		process.env[SOCVERIFY_SUBAGENT_MODELS_PATH_ENV] = modelsPath;
+		process.env[PI_MODEL_EXCLUSIONS_PATH_ENV] = join(dirname(modelsPath), "subagent-model-exclusions.json");
 		process.env[SOCVERIFY_SUBAGENT_PI_ENTRY_URL_ENV] ??=
 			subagentsJiti.esmResolve("@earendil-works/pi-coding-agent");
 		process.env[SOCVERIFY_SUBAGENT_SEAM_URL_ENV] ??= pathToFileURL(seamPath).href;

@@ -164,6 +164,7 @@ afterEach(() => {
   delete process.env.SOCVERIFY_SUBAGENT_JITI_URL;
   delete process.env.SOCVERIFY_SUBAGENT_PROVIDER;
   delete process.env.SOCVERIFY_SUBAGENT_API_KEY;
+  delete process.env.PI_MODEL_EXCLUSIONS_PATH;
 });
 
 // ─── init 装配 ──────────────────────────────────────────
@@ -281,6 +282,7 @@ describe('handleInit 子会话模型继承装配', () => {
     expect(existsSync(wrapperPath)).toBe(true);
     // env 下发（detached runner 经 spawnRunner 继承）
     expect(process.env.SOCVERIFY_SUBAGENT_MODELS_PATH).toBe(modelsPath);
+    expect(process.env.PI_MODEL_EXCLUSIONS_PATH).toBe(join(dir, 'subagent-model-exclusions.json'));
     expect(process.env.SOCVERIFY_SUBAGENT_PI_ENTRY_URL).toBe(MOCK_PI_ENTRY_URL);
     expect(process.env.SOCVERIFY_SUBAGENT_SEAM_URL).toContain('child-session.ts');
     expect(process.env.SOCVERIFY_SUBAGENT_JITI_URL).toBe(MOCK_JITI_URL);
