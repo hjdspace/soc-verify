@@ -6,6 +6,70 @@
 
 ---
 
+## [0.5.0](https://github.com/hjdspace/soc-verify/compare/v0.4.9...v0.5.0) (2026-09-12)
+
+### 重大升级：Pi 引擎全面迁移
+
+本版本完成 AI 引擎从 oh-my-pi (omp) 到 pi coding agent SDK 的全面迁移，pi 成为唯一 AI 引擎运行时。迁移涵盖引擎中立契约、runner 交互链路、Host Tools/MCP/审批信任闭环、子代理工作流、会话恢复、技能治理、依赖治理与打包链等 9 个 issue 闭环。
+
+### Features
+
+* **agent:** engine-neutral agent contract（issue 02）——建立引擎中立的 IAgentClient 契约（init/prompt/steer/abort/setModel/compact/destroy）、AgentEvent 判别联合、AgentClientFactory 工厂缝；SessionManager 依赖注入 clientFactory；持久化 PersistedSession 增加 engine/engineSessionId/cwd，历史 ompSessionId 只读兼容
+* **agent:** pi runner 核心交互链路（issue 03）——新增 runner-pi（普通 Node 脚本 runner，ELECTRON_RUN_AS_NODE=1 复用 Electron 内置 Node），实现 ready 握手、init/prompt/steer/abort/setModel/compact/destroy 全链路；pi 原生事件经 event-normalizer 归一化为 Agent Event Contract；PiAgentClient 接入 AgentClientFactory
+* **agent:** pi Host Tools、MCP 与审批/信任闭环（issue 04）——runner-pi 新增 approval-logic（工具分级审批纯逻辑）、mcp-config（单一来源配置解析 + 信任分区）、mcp-runtime（状态快照）、extensions（审批门内联扩展 + pi-mcp-adapter 装配）；host 侧新增 TrustStore（userData 持久化，原子写）；TrustCard UI 组件（yolo 不绕过信任确认）
+* **agent:** pi Subagent 父子工作流（issue 05）——装配 pi-subagents@0.66.0，事件桥订阅 async-started/async-complete/child-status；异步委派与父子关系（lifecycle/progress 帧携带 parentSessionId/ownerRunId/runDir）；取消传播（foreground 走引擎 abort signal，host 显式取消经 cancelSubagent 命令）；审批继承（registerSubagentCapabilityCeiling）；Token 归属（终态 usage 旁路写入 Token Monitor）
+* **agent:** pi 模型、认证与上下文能力对齐（issue 06）——init 接线 thinkingLevel/contextWindow/systemPrompt；新增 setThinkingLevel/setToolFilter/listAgentTools/getMessages/getState/getSystemPrompt 命令；context_usage 推送（message_end/agent_end/compaction 边界）；设置页新增「当前生效系统提示词」查看区
+* **agent:** pi 原生会话恢复与 cwd 安全边界（issue 07）——init 接线 resumeSessionId/seedHistory（原生 session 优先，缺失/损坏时降级为 transcript 重建）；init response 增加 recovered 标记；新增 modelsPath 显式注入；session-router restore/rebindCwd/setModel 使用持久化 cwd；isCwdAccessible 门控
+* **agent:** 外部 pi session 接管、统一删除与旧 omp 清理（issue 08）——regenerate 命令真实分支（非持久化回退）；session-scan CLI（list/export）；external-pi-sessions 只读扫描 + 去重 + adopt 显式接管；session-deletion 统一物理删除（index/transcript/native/artifacts 分步报告）；omp-legacy-cleanup（精确匹配 header id）；崩溃语义（agent-client ready 后子进程退出 → 合成 error 事件）
+* **agent:** pi canonical skill 来源与信任治理收口（issue 09）——skill-discovery 重写（canonical 来源：项目 .pi/skills、用户 ~/.pi/agent/skills；旧 .omp/skills 只读兼容一个版本周期，移除期限 v0.6.0）；同名解析 first-wins（project > builtin > user）；resolveSkillLoadPaths 为 pi 引擎下发 InitConfig.skillPaths；runner-pi 新增 skills.ts（noSkills + additionalSkillPaths 装载）
+* **agent:** 移除 omp 构建链，pi 成为唯一 AI 引擎运行时（issue 10 · 1/2）——删除 engine/oh-my-pi submodule、旧 runner/、tsconfig.runner.json、@types/bun；setup-agent.mjs 重写为 pi runner 载荷校验；paths.ts/AgentClient/SessionManager 引擎中立化收口；omp 提示词模板本地化；MCP 用户级配置迁移 ~/.omp/mcp.json → ~/.pi/agent/mcp.json
+* **agent:** runner-deps 依赖治理、引擎载荷门禁与 omp 命名收口（issue 10 · 2/2）——pi 系列依赖移至 devDependencies，运行时载荷由 resources/runner-deps 经 npm ci 安装并 prune（sourcemap/recheck-jar/docs/examples，实测 −101.8 MB）；scripts/prepare-runner-deps.mjs（安装/裁剪/check 三模式）；scripts/engine-payload-gate.mjs（载荷构成统计 + 禁含产物扫描 + 30 MB 阈值）；electron-builder.yml runner-pi 脚本与 runner-deps/node_modules 以 extraResources 分发
+* **build:** 载荷门禁接入打包链，发布需显式 ack（issue 10 收尾）——engine-payload-gate 接入 package/package:win/package:linux，prepare-runner-deps 后、electron-builder 前执行，超限未 ack 直接中断打包
+* **design-view:** 框图自动布局与连线优化——重构框图布局逻辑，使用 ELK Worker 实现异步布局并支持取消；优化连线绕行算法，支持多障碍正确避让；新增架构模式，默认隐藏普通信号仅展示时钟/复位/总线；实现连线语义分类与样式区分，支持选中高亮与流动动画；添加端口锚点自动管理
+* **subagents:** 完善子代理会话支持——新增 AssistantMessageContent 组件统一渲染助手消息；为 message_update 事件添加 usage 字段支持；支持子代理会话中展示用户输入 prompt；新增工作流子代理活动归一化处理与 ID 生成逻辑
+* **subagents:** 新增子会话流式结构化消息支持——新增 subagent_stream 事件类型；实现子会话流式消息的渲染与状态更新逻辑；新增 AskBody 组件支持多格式交互答案回显
+* **subagents:** 补全前台子代理进度流式更新——新增 normalizeForegroundProgressFrames 处理 tool_execution_update 的子代理进度；实现前台进度变化防抖
+* **chat:** 新增子代理管理操作的专属渲染组件（SubagentBody），替换 JSON 兜底展示，为各类 subagent 管理动作提供结构化卡片展示
+* **agent:** 新增 pi-web-access 网络工具与 UI 展示支持——新增 pi-web-access 依赖并注册 fetch_content/get_search_content/source_check 工具；新增三类工具的富展示卡片与摘要逻辑
+* **agent:** 新增 @juicesharp/rpiv-todo 扩展支持——实现 rpiv 格式待办数据解析与兼容兜底；重构待办卡片与摘要组件，优先展示 rpiv 全量快照
+* **runner-pi:** 子会话模型继承——支持自定义模型 provider 注入（前台进程内替换子会话工厂，注入父会话 modelsPath；异步 detached runner 通过 env 驱动的 wrapper 注入）
+* **runner-pi:** 为子会话模型排除项添加会话级作用域支持——PI_MODEL_EXCLUSIONS_PATH 环境变量绑定模型排除缓存到当前会话目录
+* **token-overview:** Token 趋势 sparkline 增强——使用 Catmull-Rom 算法生成平滑贝塞尔曲线；新增面积渐变填充效果；实现鼠标悬停显示明细 tooltip（日期、token 数量和费用信息）
+* **coverage:** 覆盖率 detail 报告解析——实现 detail.txt 解析与 instance coverage 指标提取；新增 parseDetailMetrics/getDetailMetrics procedures；实现 worker-based detail report parsing；CoveragePanel 集成 detail 解析按钮
+* **coverage:** 覆盖率 analog blocks detail 报告——新增 analog blocks 的详细覆盖率报告，包含 covered/uncovered/excluded 指标
+* **terminal:** 终端 keep-alive 增强——新增终端创建占位符与 keep-alive 渲染层；TerminalKeepAliveLayer 基于 location 的管理增强
+* **skill-discovery:** 技能发现完善——新增 .agents/skills 原生标准目录支持（与 pi-tui 对齐）；修复符号链接目录扫描兼容（Windows 链接目录识别）；更新技能解析优先级
+* **skill-discovery:** 重试治理完善——重构重试配置，合并会话层与 HTTP 层重试预算；新增误标限流错误改写逻辑
+* **agent:** 新增 provider 层 HTTP 重试配置逻辑
+* **build:** 添加 runner-pi 目录到 tsconfig.node.json 编译包含路径
+
+### Bug Fixes
+
+* **agent:** 修复审批模式（approval mode）未传播到恢复/模型切换会话的问题——持久化 approvalMode 到 PersistedSession 和运行时 SessionEntry；create/restore/rebindCwd/setModel-swap 复用；setApprovalMode 持久化到 sessions.json；渲染端恢复时回退到持久化值 → localStorage → yolo
+
+### Refactor
+
+* **kb:** 移除 kb 相关工作台类型，迁移知识库到独立视图路由——从工作区目标类型中删除 kb 类型；将知识库从多 tab 工作台迁移到独立的视图路由；更新导航栏和 tab 操作按钮配置
+* **subagents:** 重构子代理工具的渲染与管理逻辑——移除旧 task 工具子代理支持，统一为 pi-subagents 工作流；新增 SubagentBody 组件处理子代理实时状态与静态结果渲染；重构工具注册表、摘要与展开体逻辑，拆分管理调用与执行调用
+* **subagents:** 完善异步子代理进度处理与显示逻辑——新增 normalizeAsyncStatusProgressFrames 处理 detached runner 的 token 统计；修复 mergeSubagentOutputWindow 的窗口顺序处理逻辑；实现异步子代理的进度轮询推送功能
+* **chat:** 优化错误展示逻辑，延迟错误卡片到回合结束时渲染——新增 ChatMessage.pendingError 字段暂存 LLM 错误文本；自动重试成功时不再发送通知；仅在重试耗尽的最终 agent_end 时展示错误卡片
+* **openai-compatible:** 重构模型条目生成逻辑以适配 pi-ai 的模型 schema 要求，移除 omp-era 的 thinking 声明，改用统一的 pi 兼容配置
+* **coverage:** 重构覆盖率报告解析与测试——覆盖率视图聚焦行覆盖率（移除无用功能）；CoverageRingPanel 使用代码覆盖率数据；迁移 legacy IMC 和 vcs-urg 配置；优化覆盖率数据导入与解析流程；覆盖率测试路径与断言全面重构
+* **regression:** 增强 ResolvedGroupRef 类型，添加 reason 字段描述不可读文件原因；实现不可读引用路径的复制功能
+* **terminal:** 重构 BottomPanel 注释与 TerminalKeepAliveLayer，添加 location 属性
+
+### Performance
+
+* **token:** 优化 sparkline 图表的重渲染性能——将相关计算逻辑包裹在 useMemo 中缓存结果，减少不必要的重复计算
+
+### Documentation
+
+* **research:** pi 运行时可行性 spike 报告与依赖锁定结论——完成 issue 01 五项验证（session 生命周期 26/26 PASS、MCP adapter 与 pi-subagents headless 扩展加载、ELECTRON_RUN_AS_NODE 非 ASCII 路径可用、真实首 token 2690ms）；锁定 pi-coding-agent 0.85.1 / pi-mcp-adapter 2.32.1 / pi-subagents 0.66.0
+
+### Build
+
+* **agent:** 多维度优化打包——新增平台感知的 runner 依赖裁剪脚本，支持指定架构打包并瘦身；更新 electron-builder 配置排除 officecli 更新残留的 .old 备份文件；优化 electron-builder 构建压缩级别配置
+
 ## [0.4.9](https://github.com/hjdspace/soc-verify/compare/v0.4.8...v0.4.9) (2026-09-09)
 
 ### Features
