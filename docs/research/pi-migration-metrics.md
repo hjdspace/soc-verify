@@ -31,7 +31,7 @@
 
 - **原因**：pi 内核 0.85.1 自带多 provider SDK 与 MCP / 扩展运行时，30 MB 仅够内核本体的一部分；spec 要求 provider 能力完整（openai / anthropic / google 等），provider SDK 与 esbuild 平台二进制不可裁剪。**已执行的裁剪**（prune 步骤，−101.8 MB）：`*.map` sourcemap、`recheck-jar/`（JVM 后端，Node/Windows 走 recheck.exe，运行时 resolve 失败安全降级已确认）、各包 `docs/`、`examples/`、非合规 Markdown（保留 LICENSE/NOTICE）。
 - **收益**：相对 omp 268 MiB → 188.3 MB（**−32%**），且获得普通 Node 分发、无 Bun 构建链、无 submodule、无 native addon、无单文件反编译难题；后续减重候选：esbuild bundle 依赖树（预估可至 60–100 MB，−50%+）。
-- **处置**：发布门禁（`scripts/engine-payload-gate.mjs`，默认 30 MB 阈值）默认 FAIL 阻止无条件发布；每版发布需 `SOCVERIFY_ACK_ENGINE_PAYLOAD=1` 显式确认，报告 JSON（`dist/engine-payload-report.json`）记录构成供逐版重新评估；禁含产物（omp 残留 / Bun runner / native addon / 旧 runner）不可 ack，门禁实测为零。
+- **处置**：发布门禁已接入打包链（`npm run package` / `package:win` / `package:linux` 在 `prepare-runner-deps` 后、electron-builder 前执行），默认 30 MB 阈值 FAIL 即中断打包，阻止无条件发布；每版发布需 `SOCVERIFY_ACK_ENGINE_PAYLOAD=1` 显式确认，报告 JSON（`dist/engine-payload-report.json`）记录构成供逐版重新评估；禁含产物（omp 残留 / Bun runner / native addon / 旧 runner）不可 ack，门禁实测为零。
 
 ## 2. 安装包大小与安装后占用
 
@@ -72,7 +72,7 @@
 | 构建链 | Bun `--compile`（scripts/build-runner.mjs + compile-runner.ts）+ native addon 下载（download-natives.mjs） | 无编译：`runner-pi/*.ts` 直接分发，`ELECTRON_RUN_AS_NODE=1` 运行 |
 | 依赖治理 | omp submodule（指针升级）+ Bun 版本检查 | `resources/runner-deps/package.json` + `package-lock.json`（精确版本），`npm ci --omit=dev --ignore-scripts` + prune（sourcemap / recheck-jar / docs / examples / 非合规 Markdown），`scripts/prepare-runner-deps.mjs` |
 | 分发 | `resources/binaries/socverify-runner.exe` + `pi_natives.*.node`（asarUnpack） | extraResources：`runner-pi/`（脚本）+ `runner-pi/node_modules`（依赖载荷） |
-| 发布门禁 | 无 | `scripts/engine-payload-gate.mjs`：载荷构成统计 + 禁含产物扫描（socverify-runner* / pi_natives* / bun|bunx / oh-my-pi，不可 ack）+ 30 MB 阈值（超限需 `SOCVERIFY_ACK_ENGINE_PAYLOAD=1`），报告写 `dist/engine-payload-report.json` |
+| 发布门禁 | 无 | `scripts/engine-payload-gate.mjs`（已接入 package/package:win/package:linux 打包链）：载荷构成统计 + 禁含产物扫描（socverify-runner* / pi_natives* / bun|bunx / oh-my-pi，不可 ack）+ 30 MB 阈值（超限需 `SOCVERIFY_ACK_ENGINE_PAYLOAD=1`，未 ack 直接中断打包），报告写 `dist/engine-payload-report.json` |
 | 前置校验 | setup-agent 下载/校验二进制 | `setup-agent.mjs --require-runner` 校验 runner 脚本与 node_modules 依赖在位 |
 
 ## 7. 结论

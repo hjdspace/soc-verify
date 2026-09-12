@@ -182,7 +182,7 @@ if (overLimit) {
     process.exit(0);
   }
   console.error(
-    `[engine-gate] payload exceeds ${limitMb} MB (target: < 30 MB). ` +
+    `[engine-gate] payload exceeds ${limitMb} MB. ` +
       'Record the composition, reason and benefit, then re-run with SOCVERIFY_ACK_ENGINE_PAYLOAD=1 to release.',
   );
   process.exit(1);
