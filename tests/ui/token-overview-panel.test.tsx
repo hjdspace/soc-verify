@@ -262,5 +262,101 @@ describe('TokenOverviewPanel — 7 天趋势 sparkline', () => {
     // SVG path should be rendered
     const svg = screen.getByTestId('token-sparkline').querySelector('svg');
     expect(svg).toBeInTheDocument();
+
+    // 平滑曲线：path 使用三次贝塞尔（C 指令）而非折线（L 指令）
+    const line = screen.getByTestId('token-sparkline-line');
+    const d = line.getAttribute('d') ?? '';
+    expect(d.startsWith('M')).toBe(true);
+    expect(d).toMatch(/\sC\s/);
+    // 面积渐变填充同步渲染
+    expect(screen.getByTestId('token-sparkline-area')).toBeInTheDocument();
+  });
+
+  it('悬停显示当日 Token 明细 tooltip（日期 + 紧凑值 + 精确值 + 费用）', async () => {
+    const today = new Date();
+    const days: Array<{ date: string; totalTokens: number; costUsd: number }> = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(today.getTime() - i * 24 * 60 * 60 * 1000);
+      days.push({
+        date: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
+        totalTokens: (i + 1) * 10000,
+        costUsd: 0.5,
+      });
+    }
+    useTokenStore.setState({ heatmap: days, loadedForProject: 'proj-1' });
+
+    render(<TokenOverviewPanel />);
+    await waitFor(() => {
+      expect(screen.getByTestId('token-sparkline-svg')).toBeInTheDocument();
+    });
+
+    // jsdom 无布局 — mock getBoundingClientRect 模拟 200px 宽（与 viewBox 一致）
+    const svg = screen.getByTestId('token-sparkline-svg');
+    vi.spyOn(svg, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      top: 0,
+      width: 200,
+      height: 40,
+      right: 200,
+      bottom: 40,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    // clientX=100 → ratio 0.5 → 第 4 个数据点（3 天前）→ tokens = 4万
+    fireEvent.mouseMove(svg, { clientX: 100, clientY: 20 });
+
+    // 悬停标记：引导线 + 高亮数据点（覆盖层）
+    expect(screen.getByTestId('token-sparkline-guide')).toBeInTheDocument();
+    expect(screen.getByTestId('token-sparkline-dot')).toBeInTheDocument();
+
+    const tooltip = await screen.findByTestId('token-sparkline-tooltip');
+    const threeDaysAgo = new Date(today.getTime() - 3 * 24 * 60 * 60 * 1000);
+    const threeDaysAgoStr = `${threeDaysAgo.getFullYear()}-${String(threeDaysAgo.getMonth() + 1).padStart(2, '0')}-${String(threeDaysAgo.getDate()).padStart(2, '0')}`;
+    expect(tooltip.textContent).toContain(threeDaysAgoStr);
+    expect(tooltip.textContent).toContain('4万');
+    expect(tooltip.textContent).toContain('40,000');
+    expect(tooltip.textContent).toContain('$0.5000');
+  });
+
+  it('鼠标移出后 tooltip 消失', async () => {
+    const today = new Date();
+    const days: Array<{ date: string; totalTokens: number; costUsd: number }> = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(today.getTime() - i * 24 * 60 * 60 * 1000);
+      days.push({
+        date: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
+        totalTokens: (i + 1) * 10000,
+        costUsd: 0,
+      });
+    }
+    useTokenStore.setState({ heatmap: days, loadedForProject: 'proj-1' });
+
+    render(<TokenOverviewPanel />);
+    await waitFor(() => {
+      expect(screen.getByTestId('token-sparkline-svg')).toBeInTheDocument();
+    });
+
+    const svg = screen.getByTestId('token-sparkline-svg');
+    vi.spyOn(svg, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      top: 0,
+      width: 200,
+      height: 40,
+      right: 200,
+      bottom: 40,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    fireEvent.mouseMove(svg, { clientX: 100, clientY: 20 });
+    expect(await screen.findByTestId('token-sparkline-tooltip')).toBeInTheDocument();
+
+    fireEvent.mouseLeave(svg);
+    expect(screen.queryByTestId('token-sparkline-tooltip')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('token-sparkline-dot')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('token-sparkline-guide')).not.toBeInTheDocument();
   });
 });

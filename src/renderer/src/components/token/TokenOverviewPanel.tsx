@@ -10,7 +10,7 @@
  * 先例：DashboardView 的 KpiRow + 时间范围选择器模式。
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { Coins, CalendarDays, TrendingUp, DollarSign, Flame, Trophy } from 'lucide-react';
 import { ViewHeader } from '@renderer/components/layout/ViewHeader';
@@ -326,7 +326,20 @@ function TokenHeatmap({ entries }: { entries: HeatmapEntry[] }) {
 }
 
 /** 热力图悬停提示 — 日期标题 + Token / Cost 行（样式对齐 token-monitor 的 tt-head/tt-row） */
-function HeatTooltip({ x, y, date, entry }: { x: number; y: number; date: string; entry: HeatmapEntry | null }) {
+function HeatTooltip({
+  x,
+  y,
+  date,
+  entry,
+  testId = 'token-heatmap-tooltip',
+}: {
+  x: number;
+  y: number;
+  date: string;
+  entry: HeatmapEntry | null;
+  /** 区分调用方（热力图 / sparkline），便于测试精确断言 */
+  testId?: string;
+}) {
   // 贴边自动翻转（参考 token-monitor positionTooltip）
   const TIP_W = 240;
   const TIP_H = 76;
@@ -352,7 +365,7 @@ function HeatTooltip({ x, y, date, entry }: { x: number; y: number; date: string
     <div
       className="pointer-events-none fixed z-[60] min-w-[130px] rounded-lg border border-border px-3 py-2 text-xs shadow-xl"
       style={{ left, top, background: 'color-mix(in srgb, var(--card) 96%, transparent)' }}
-      data-testid="token-heatmap-tooltip"
+      data-testid={testId}
     >
       <div className="mb-1.5 font-semibold tabular-nums">
         {date}
@@ -378,63 +391,175 @@ function HeatTooltip({ x, y, date, entry }: { x: number; y: number; date: string
 
 // ─── 7 天趋势 Sparkline ─────────────────────────────────────
 
-/** 生成 SVG sparkline path */
-function buildSparklinePath(values: number[], width: number, height: number): string {
-  if (values.length === 0) return '';
-  if (values.length === 1) return `M ${width / 2} ${height / 2}`;
+/** sparkline viewBox 尺寸（SVG 宽 200 高 40，容器拉伸显示） */
+const SPARK_W = 200;
+const SPARK_H = 40;
+
+/** 计算 sparkline 各数据点的 viewBox 坐标（悬停高亮点复用） */
+function buildSparklinePoints(
+  values: number[],
+  width: number,
+  height: number,
+): Array<{ x: number; y: number }> {
+  if (values.length === 0) return [];
 
   const max = Math.max(...values, 1);
   const min = Math.min(...values, 0);
   const range = max - min || 1;
-  const stepX = width / (values.length - 1);
+  const stepX = values.length > 1 ? width / (values.length - 1) : 0;
 
-  return values
-    .map((v, i) => {
-      const x = i * stepX;
-      const y = height - ((v - min) / range) * height;
-      return `${i === 0 ? 'M' : 'L'} ${x.toFixed(1)} ${y.toFixed(1)}`;
-    })
-    .join(' ');
+  return values.map((v, i) => ({
+    x: values.length > 1 ? i * stepX : width / 2,
+    y: height - ((v - min) / range) * height,
+  }));
 }
 
-/** 7 天趋势 sparkline */
+/** Catmull-Rom → 三次贝塞尔平滑曲线 path（严格过数据点，悬停高亮点不偏移） */
+function buildSmoothPath(points: Array<{ x: number; y: number }>): string {
+  if (points.length === 0) return '';
+  const f = (n: number) => n.toFixed(1);
+  if (points.length === 1) return `M ${f(points[0].x)} ${f(points[0].y)}`;
+  if (points.length === 2) {
+    return `M ${f(points[0].x)} ${f(points[0].y)} L ${f(points[1].x)} ${f(points[1].y)}`;
+  }
+
+  let d = `M ${f(points[0].x)} ${f(points[0].y)}`;
+  for (let i = 0; i < points.length - 1; i++) {
+    // 端点夹取（首尾无外侧邻居时重复端点，避免曲线外甩）
+    const p0 = points[Math.max(0, i - 1)];
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    const p3 = points[Math.min(points.length - 1, i + 2)];
+    // Catmull-Rom（tension=1）控制点：C1 = P1 + (P2-P0)/6，C2 = P2 - (P3-P1)/6
+    const c1x = p1.x + (p2.x - p0.x) / 6;
+    const c1y = p1.y + (p2.y - p0.y) / 6;
+    const c2x = p2.x - (p3.x - p1.x) / 6;
+    const c2y = p2.y - (p3.y - p1.y) / 6;
+    d += ` C ${f(c1x)} ${f(c1y)} ${f(c2x)} ${f(c2y)} ${f(p2.x)} ${f(p2.y)}`;
+  }
+  return d;
+}
+
+/** 7 天趋势 sparkline（悬停显示当日 Token / 费用明细） */
 function TokenSparkline({ entries }: { entries: HeatmapEntry[] }) {
   const sparkData = useMemo(() => {
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
     const entryMap = new Map(entries.map((e) => [e.date, e]));
 
-    const days: { date: string; tokens: number }[] = [];
+    const days: { date: string; entry: HeatmapEntry | null }[] = [];
     for (let i = 6; i >= 0; i--) {
       const d = new Date(todayStart.getTime() - i * 24 * 60 * 60 * 1000);
       const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-      const entry = entryMap.get(dateStr);
-      days.push({ date: dateStr, tokens: entry?.totalTokens ?? 0 });
+      days.push({ date: dateStr, entry: entryMap.get(dateStr) ?? null });
     }
     return days;
   }, [entries]);
 
-  const values = sparkData.map((d) => d.tokens);
+  // 悬停状态：数据点索引 + 鼠标视口坐标（tooltip 跟随鼠标）
+  const [hover, setHover] = useState<{ idx: number; x: number; y: number } | null>(null);
+
+  const values = sparkData.map((d) => d.entry?.totalTokens ?? 0);
   const hasData = values.some((v) => v > 0);
-  const path = buildSparklinePath(values, 200, 40);
+  const points = useMemo(() => buildSparklinePoints(values, SPARK_W, SPARK_H), [values]);
+  const path = buildSmoothPath(points);
+  // 面积填充路径：曲线 + 底边闭合（渐变从线上透明度 0.2 → 底部 0.02）
+  const areaPath =
+    points.length > 1
+      ? `${path} L ${points[points.length - 1].x.toFixed(1)} ${SPARK_H} L ${points[0].x.toFixed(1)} ${SPARK_H} Z`
+      : '';
+
+  const handleMouseMove = (ev: ReactMouseEvent<SVGSVGElement>): void => {
+    const rect = ev.currentTarget.getBoundingClientRect();
+    if (rect.width <= 0 || points.length === 0) {
+      setHover(null);
+      return;
+    }
+    // 鼠标 x → 最近数据点：容器宽度按数据点数等分
+    // （preserveAspectRatio=none 拉伸不影响比例，rect 换算与 viewBox 坐标对齐）
+    const ratio = (ev.clientX - rect.left) / rect.width;
+    const idx = Math.max(0, Math.min(points.length - 1, Math.round(ratio * (points.length - 1))));
+    setHover({ idx, x: ev.clientX, y: ev.clientY });
+  };
+
+  const hoverPoint = hover ? (points[hover.idx] ?? null) : null;
+  const hoverDay = hover ? (sparkData[hover.idx] ?? null) : null;
 
   return (
     <div className="rounded-xl border border-border bg-card p-4" data-testid="token-sparkline">
       <div className="mb-1 text-xs font-semibold text-muted-foreground">最近 7 天趋势</div>
       {hasData ? (
-        <svg viewBox="0 0 200 40" className="w-full" style={{ height: '40px' }} preserveAspectRatio="none">
-          <path
-            d={path}
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            className="text-primary"
-          />
-        </svg>
+        <div className="relative w-full" style={{ height: SPARK_H }}>
+          <svg
+            viewBox={`0 0 ${SPARK_W} ${SPARK_H}`}
+            className="h-full w-full"
+            preserveAspectRatio="none"
+            data-testid="token-sparkline-svg"
+            onMouseMove={handleMouseMove}
+            onMouseLeave={() => setHover(null)}
+          >
+            <defs>
+              {/* 面积渐变：主色顶部淡入 → 底部近透明（主题感知） */}
+              <linearGradient id="token-sparkline-area" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" style={{ stopColor: 'var(--primary)', stopOpacity: 0.2 }} />
+                <stop offset="100%" style={{ stopColor: 'var(--primary)', stopOpacity: 0.02 }} />
+              </linearGradient>
+            </defs>
+            {areaPath && (
+              <path d={areaPath} fill="url(#token-sparkline-area)" data-testid="token-sparkline-area" />
+            )}
+            {/* 平滑曲线（non-scaling-stroke：容器横向拉伸时线宽保持 2px） */}
+            <path
+              d={path}
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+              vectorEffect="non-scaling-stroke"
+              strokeLinecap="round"
+              className="text-primary"
+              data-testid="token-sparkline-line"
+            />
+          </svg>
+          {/* 悬停引导线 + 高亮数据点 — HTML 覆盖层按百分比定位：
+              preserveAspectRatio=none 会把 SVG 内的圆拉伸成椭圆，覆盖层不受影响 */}
+          {hoverPoint && (
+            <>
+              <div
+                className="pointer-events-none absolute inset-y-0 w-px"
+                style={{
+                  left: `${(hoverPoint.x / SPARK_W) * 100}%`,
+                  background: 'var(--border)',
+                }}
+                data-testid="token-sparkline-guide"
+              />
+              <div
+                className="pointer-events-none absolute size-2 rounded-full"
+                style={{
+                  left: `${(hoverPoint.x / SPARK_W) * 100}%`,
+                  top: `${(hoverPoint.y / SPARK_H) * 100}%`,
+                  transform: 'translate(-50%, -50%)',
+                  background: 'var(--primary)',
+                  border: '2px solid var(--card)',
+                }}
+                data-testid="token-sparkline-dot"
+              />
+            </>
+          )}
+        </div>
       ) : (
         <div className="flex h-10 items-center text-[10px] text-muted-foreground">
           暂无 7 天数据
         </div>
+      )}
+      {/* 悬停明细（与热力图同款：日期 + 星期 + Token + 费用） */}
+      {hoverDay && hover && (
+        <HeatTooltip
+          x={hover.x}
+          y={hover.y}
+          date={hoverDay.date}
+          entry={hoverDay.entry}
+          testId="token-sparkline-tooltip"
+        />
       )}
     </div>
   );
