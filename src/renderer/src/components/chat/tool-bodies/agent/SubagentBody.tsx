@@ -72,7 +72,8 @@ function resultActivity(
   const recentOutput = (finalOutput ? finalOutput.split('\n') : recentProgress).slice(-500);
 
   return {
-    id: `${runId}:${index}`,
+    id: string(result.runId) && string(result.workflowKey)
+      ? `${message.toolCallId}:workflow:${result.runId}` : `${runId}:${index}`,
     index,
     agent: string(result.agent) ?? 'subagent',
     description: string(result.sessionName),
@@ -130,7 +131,8 @@ export function getPiSubagentPresentation(message: ChatMessage): PiSubagentPrese
       id: asyncId ?? message.toolCallId ?? message.id,
       index: 0,
       agent: string(args?.agent) ?? string(args?.workflow) ?? (mode === 'workflow' ? 'workflow' : 'subagent'),
-      assignment: string(args?.task),
+      assignment: string(args?.task) ?? string(args?.label) ?? string(args?.workflow)
+        ?? string(args?.workflowScriptPath) ?? string(args?.workflowScript),
       status: 'running',
       parentToolCallId: message.toolCallId,
       runDir: string(details?.asyncDir),
@@ -153,6 +155,7 @@ export function resolvePiSubagentActivities(
   if (presentation.activities.length === 0) return liveSubagents;
   if (
     presentation.activities.length === 1
+    && presentation.mode !== 'workflow'
     && presentation.activities[0]?.id === liveSubagents[0]?.parentToolCallId
   ) {
     // 单代理直替换分支：live 全量覆盖运行态，但任务概要只存在于派遣参数快照
@@ -169,6 +172,12 @@ export function resolvePiSubagentActivities(
   }
 
   const snapshots = new Map(presentation.activities.map((activity) => [activity.id, activity]));
+  if (presentation.mode === 'workflow' && liveSubagents.some((activity) => activity.id.includes(':workflow:'))) {
+    for (const [id, activity] of snapshots) {
+      if (activity.agent === 'workflow') snapshots.delete(id);
+    }
+    liveSubagents = liveSubagents.filter((activity) => activity.agent !== 'workflow');
+  }
   const merged = liveSubagents.map((live) => {
     const snapshot = snapshots.get(live.id)
       ?? presentation.activities.find((candidate) => candidate.index === live.index && candidate.agent === live.agent);

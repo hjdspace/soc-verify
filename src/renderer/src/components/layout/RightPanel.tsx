@@ -10,7 +10,7 @@ import { MarkdownRenderer } from '@renderer/components/chat/MarkdownRenderer';
 import { AssistantActions } from '@renderer/components/chat/AssistantActions';
 import { ToolCard } from '@renderer/components/chat/ToolCard';
 import { ToolRunGroup, groupToolMessages } from '@renderer/components/chat/ToolRunGroup';
-import { ThinkingBlock } from '@renderer/components/chat/ThinkingBlock';
+import { AssistantMessageContent } from '@renderer/components/chat/AssistantMessageContent';
 import { TVAISuggestionCard } from '@renderer/components/chat/TVAISuggestionCard';
 import { cn } from '@renderer/lib/utils';
 import { trpc } from '@renderer/lib/trpc';
@@ -1544,13 +1544,7 @@ const MessageBubble = memo(function MessageBubble({ message, sessionId, tvViolat
 
   return (
     <div className="flex flex-col gap-0.5">
-      {message.thinking && (
-        <ThinkingBlock
-          thinking={message.thinking}
-          isStreaming={isStreaming}
-          hasContent={!!message.content}
-        />
-      )}
+      <AssistantMessageContent message={message}>
       {canRenderTVCard ? (
         <TVAISuggestionCardRenderer content={message.content} violationId={tvViolationId!} />
       ) : message.content?.trimStart().startsWith('[错误]') ? (
@@ -1572,6 +1566,7 @@ const MessageBubble = memo(function MessageBubble({ message, sessionId, tvViolat
           </div>
         )
       )}
+      </AssistantMessageContent>
       {/* 回合收尾操作栏只在「回合结束后的最后一条助手消息」上渲染——
           多步回合的中间文本段（工具调用前后的说明）与流式中/工具执行中的
           消息都不显示，避免每段文本都挂一个复制按钮；

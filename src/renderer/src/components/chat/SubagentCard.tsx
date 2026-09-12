@@ -4,7 +4,7 @@ import { Wrench, X } from 'lucide-react';
 import { cn } from '@renderer/lib/utils';
 import type { SubagentActivity } from '@renderer/stores/session-types';
 import { MarkdownRenderer } from './MarkdownRenderer';
-import { ThinkingBlock } from './ThinkingBlock';
+import { AssistantMessageContent } from './AssistantMessageContent';
 import { ToolCard } from './ToolCard';
 import { ThinkingOrb } from '@renderer/components/visual';
 
@@ -166,7 +166,10 @@ function Drawer({ agent, onClose }: { agent: SubagentActivity; onClose: () => vo
         data-testid="subagent-drawer-mask"
       />
       <aside
-        className="fixed right-0 top-0 z-50 flex h-full w-[360px] max-w-[85vw] flex-col rounded-l-xl border-l border-[var(--dsw-border-l2)] bg-[var(--dsw-layer-1)] shadow-[var(--dsw-shadow-lv3)]"
+        role="dialog"
+        aria-label={`${agent.agent} 子代理会话`}
+        aria-modal="true"
+        className="fixed right-0 top-0 z-50 flex h-full w-[560px] max-w-[90vw] flex-col border-l border-[var(--dsw-border-l2)] bg-[var(--dsw-layer-1)] shadow-[var(--dsw-shadow-lv3)]"
         data-testid="subagent-drawer"
       >
         <header className="flex items-center gap-1.5 border-b border-[var(--dsw-border-l1)] px-3 py-2.5">
@@ -193,7 +196,7 @@ function Drawer({ agent, onClose }: { agent: SubagentActivity; onClose: () => vo
           </button>
         </header>
 
-        {(agent.assignment ?? agent.description) && (
+        {!messages.some((message) => message.role === 'user') && (agent.assignment ?? agent.description) && (
           <div
             className="max-h-40 overflow-y-auto border-b border-[var(--dsw-border-l1)] px-3 py-2"
             data-testid="subagent-assignment"
@@ -263,29 +266,24 @@ function Drawer({ agent, onClose }: { agent: SubagentActivity; onClose: () => vo
             <div className="space-y-2" data-testid="subagent-transcript">
               {messages.map((message) => {
                 if (message.role === 'tool') return <ToolCard key={message.id} message={message} />;
+                if (message.role === 'user') return (
+                  <div key={message.id} className="flex justify-end py-2" data-testid="subagent-assignment">
+                    <div className="max-w-[88%] whitespace-pre-wrap break-words rounded-lg bg-[var(--dsw-bubble)] px-3 py-2 text-xs leading-5 text-foreground">
+                      {message.content}
+                    </div>
+                  </div>
+                );
                 if (message.role !== 'assistant') return null;
                 return (
                   <div key={message.id} className="space-y-0.5">
-                    {message.thinking && (
-                      <ThinkingBlock
-                        thinking={message.thinking}
-                        isStreaming={message.isStreaming === true}
-                        hasContent={message.content.length > 0}
-                      />
-                    )}
-                    {message.content && (
-                      <MarkdownRenderer
-                        content={message.content}
-                        streaming={message.isStreaming === true}
-                      />
-                    )}
+                    <AssistantMessageContent message={message} />
                   </div>
                 );
               })}
             </div>
           ) : (
             <div className="space-y-0.5 font-mono text-[10.5px] leading-relaxed" data-testid="subagent-log">
-              {lines.length === 0 && <div className="text-muted-foreground/50">暂无输出…</div>}
+              {lines.length === 0 && <div className="text-muted-foreground/50">{running ? '等待子代理响应...' : '本次运行未返回文本输出'}</div>}
               {lines.map((line, i) => (
                 <div key={i} className="whitespace-pre-wrap break-all text-muted-foreground">
                   {line}

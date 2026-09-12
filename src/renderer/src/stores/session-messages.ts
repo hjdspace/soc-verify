@@ -140,6 +140,14 @@ function updateSubagentStream(
     case 'message_start': {
       const message = event.message as Record<string, unknown> | undefined;
       const initial = extractTextFromMessage(message);
+      if (message?.role === 'user') {
+        return {
+          ...previous,
+          assignment: previous.assignment ?? initial.text,
+          messages: [...messages, { id: `${previous.id}:user:${messages.length}`, role: 'user',
+            content: initial.text, timestamp: Date.now() }],
+        };
+      }
       const activeIndex = messages.findLastIndex((item) => item.role === 'assistant' && item.isStreaming);
       if (activeIndex >= 0) {
         messages = messages.map((item, index) => index === activeIndex
@@ -192,6 +200,7 @@ function updateSubagentStream(
 
     case 'message_end': {
       const message = event.message as Record<string, unknown> | undefined;
+      if (message?.role !== 'assistant') break;
       const final = extractTextFromMessage(message);
       const activeIndex = messages.findLastIndex((item) => item.role === 'assistant' && item.isStreaming);
       if (activeIndex >= 0) {
@@ -283,7 +292,8 @@ function updateSubagentStream(
     }
   }
 
-  const tokens = Math.max(previous.tokens, streamTokens);
+  const partialUsage = event.type === 'message_update' ? subagentUsageTokens(event) : 0;
+  const tokens = Math.max(previous.tokens, streamTokens + partialUsage);
   const delta = Math.max(0, tokens - previous.tokens);
   return {
     ...previous,
@@ -1220,7 +1230,7 @@ export const useSessionMessagesStore = create<SessionMessagesState>(() => ({
               id,
               index: typeof p.index === 'number' ? p.index : (prev?.index ?? 0),
               agent: typeof p.agent === 'string' ? p.agent : (prev?.agent ?? 'subagent'),
-              description: prev?.description,
+              description: typeof p.description === 'string' ? p.description : prev?.description,
               assignment: typeof p.assignment === 'string' ? p.assignment : prev?.assignment,
               status: 'running',
               parentToolCallId:

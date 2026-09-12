@@ -349,16 +349,54 @@ describe('handleInit 子会话模型继承装配', () => {
     });
   });
 
-  it('无 modelsPath 时不安装模型继承工厂（无自定义 provider 可注入）', async () => {
+  it('无 modelsPath 时仍安装流式订阅工厂，不生成模型继承 wrapper', async () => {
     const ctx = makeCtx();
     await handleInit({ id: 'req_8', type: 'init', config: { cwd: '/p' } }, ctx);
-    expect(setChildSessionFactory).not.toHaveBeenCalled();
+    expect(setChildSessionFactory).toHaveBeenCalledTimes(1);
     expect(setChildSessionFactoryModule).not.toHaveBeenCalled();
     expect(ctx.subagentRuntime).toMatchObject({ enabled: true, blockedReason: null });
   });
 });
 
 describe('handleInit pi-subagents UI 事件关联', () => {
+  it('streams child input without requiring a custom modelsPath', async () => {
+    const ctx = makeCtx();
+    await handleInit({ id: 'native-provider', type: 'init', config: { cwd: '/p' } }, ctx);
+    expect(setChildSessionFactory).toHaveBeenCalledTimes(1);
+    const factory = setChildSessionFactory.mock.calls.at(-1)?.[0] as {
+      create: (launch: unknown) => Promise<unknown>;
+    };
+    ctx.subagentRuntime!.onChildEvent = vi.fn();
+    await factory.create({ runtime: { runId: 'child-1', agent: 'scout', childIndex: 0 } });
+    childEventListener?.({ type: 'message_start', message: { role: 'user', content: [{ type: 'text', text: 'Inspect the router' }] } });
+    expect(ctx.subagentRuntime!.onChildEvent).toHaveBeenCalled();
+  });
+
+  it('forwards workflow child activity instead of dropping updates without details.progress', async () => {
+    const ctx = makeCtx();
+    await handleInit({ id: 'workflow', type: 'init', config: { cwd: '/p' } }, ctx);
+    const bridge = (lastLoader().extensionFactories as Array<{
+      name: string; factory: (pi: unknown) => void;
+    }>).find((factory) => factory.name === 'socverify-subagent-bridge');
+    const handlers = new Map<string, (event: Record<string, unknown>) => void>();
+    bridge?.factory({
+      events: { emit: vi.fn(), on: vi.fn(() => vi.fn()) },
+      on: (name: string, handler: (event: Record<string, unknown>) => void) => handlers.set(name, handler),
+    });
+    handlers.get('tool_execution_start')?.({ toolName: 'subagent', toolCallId: 'workflow-call', args: { workflowScript: 'await runs.run(...)' } });
+    handlers.get('tool_execution_update')?.({
+      toolName: 'subagent', toolCallId: 'workflow-call',
+      partialResult: { details: { mode: 'workflow', runId: 'workflow-run', results: [],
+        workflowChildren: { version: 1, parentToolCallId: 'workflow-call', workflowRunId: 'workflow-run', inventoryComplete: false, workflowState: 'running', children: [
+          { childId: 'inspect', runId: 'child-run', agent: 'scout', sessionName: 'Inspect router', state: 'running', activity: { tokens: 123, toolCount: 2, turnCount: 1 } },
+        ] },
+      } },
+    });
+    expect(sendEvent).toHaveBeenCalledWith({ type: 'subagent_progress', payload: expect.objectContaining({
+      parentToolCallId: 'workflow-call', agent: 'scout', progress: expect.objectContaining({ tokens: 123 }),
+    }) });
+  });
+
   it('订阅前台 child session，并按并行 index 转发结构化消息增量', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'socverify-subagent-stream-'));
     const ctx = makeCtx();

@@ -30,9 +30,11 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { classifyContentBlock } from "./message-blocks.ts";
 import { dirname, join } from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { closeSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs";
 import { createJiti } from "jiti";
+import { normalizeWorkflowProgressFrames, workflowChildId } from "./subagents.ts";
 import type { ApprovalMode } from "./approval-logic";
 import {
 	type Command,
@@ -266,6 +268,8 @@ type ChildSessionFactory = {
 	dispose(): Promise<void>;
 };
 
+const subagentDispatch = new AsyncLocalStorage<{ parentToolCallId: string; workflow: boolean }>();
+
 // ─── retry 治理（HTTP 层预算 + 会话层预算 + 误标错误改写） ───
 
 /**
@@ -494,7 +498,7 @@ async function loadChildSessionSeam(): Promise<{ seam: ChildSessionSeam; seamPat
  */
 async function installSubagentModelInheritance(
 	config: InitConfig,
-	modelsPath: string,
+	modelsPath: string | undefined,
 	runtime: SubagentRuntime,
 ): Promise<void> {
 	try {
@@ -502,22 +506,24 @@ async function installSubagentModelInheritance(
 
 		// 1) 前台：进程级工厂替换（ModelRuntime.create 缺省注入 modelsPath + 运行时凭证）
 		const piModule = await import("@earendil-works/pi-coding-agent");
-		const patchedPi = buildModelInheritingPiModule(piModule, {
+		const patchedPi = modelsPath ? buildModelInheritingPiModule(piModule, {
 			modelsPath,
 			provider: config.provider,
 			apiKey: config.apiKey,
-		});
+		}) : piModule;
 		const baseFactory = seam.createDefaultChildSessionFactory({
 			loadPiCodingAgent: () => Promise.resolve(patchedPi),
 		});
 		const childSubscriptions = new Set<() => void>();
 		const factory: ChildSessionFactory = {
 			async create(launch) {
+				const dispatch = subagentDispatch.getStore();
 				const child = await baseFactory.create(launch);
 				const unsubscribe = child.subscribe((event) => runtime.onChildEvent?.({
 					runId: launch.runtime.runId,
 					agent: launch.runtime.agent,
 					index: launch.runtime.childIndex ?? 0,
+					...dispatch,
 					event,
 				}));
 				childSubscriptions.add(unsubscribe);
@@ -530,6 +536,7 @@ async function installSubagentModelInheritance(
 			},
 		};
 		seam.setChildSessionFactory(factory);
+		if (!modelsPath) return;
 
 		// 2) 异步：detached runner 的工厂经 env 驱动 wrapper 注入
 		//    （spawnRunner 继承 runner 进程 env；wrapper 写入 models.json 同目录）
@@ -739,7 +746,7 @@ function buildSubagentBridgeExtension(ctx: PiRunnerContext, runtime: SubagentRun
 						parentToolCallId: run.parentToolCallId,
 					})) {
 						const id = String(frame.payload.id);
-						const sig = JSON.stringify(frame.payload.progress);
+						const sig = JSON.stringify(frame);
 						if (progressKeys.get(id) === sig) continue;
 						progressKeys.set(id, sig);
 						sendEvent(frame);
@@ -782,8 +789,8 @@ function buildSubagentBridgeExtension(ctx: PiRunnerContext, runtime: SubagentRun
 				}
 				return typeof args.agent === "string" ? 1 : undefined;
 			};
-			runtime.onChildEvent = ({ runId, agent, index, event }) => {
-				let parentToolCallId = runId ? runParents.get(runId) : undefined;
+			runtime.onChildEvent = ({ runId, agent, index, event, parentToolCallId: dispatchParent, workflow }) => {
+				let parentToolCallId = dispatchParent ?? (runId ? runParents.get(runId) : undefined);
 				if (!parentToolCallId) {
 					const matches = [...activeToolCalls].filter(([, active]) =>
 						agent !== undefined && active.agent === agent,
@@ -794,7 +801,8 @@ function buildSubagentBridgeExtension(ctx: PiRunnerContext, runtime: SubagentRun
 				if (!parentToolCallId) return;
 				if (runId) runParents.set(runId, parentToolCallId);
 				const count = activeToolCalls.get(parentToolCallId)?.childCount;
-				for (const frame of normalizeChildStreamFrame(childId(parentToolCallId, index, count), event, {
+				const id = workflow && runId ? workflowChildId(parentToolCallId, runId) : childId(parentToolCallId, index, count);
+				for (const frame of normalizeChildStreamFrame(id, event, {
 					parentSessionId: parentSessionId(),
 					parentToolCallId,
 					index,
@@ -825,6 +833,11 @@ function buildSubagentBridgeExtension(ctx: PiRunnerContext, runtime: SubagentRun
 					? result.details as Record<string, unknown>
 					: {};
 				if (typeof details.asyncId === "string") runParents.set(details.asyncId, event.toolCallId);
+				if (details.mode === "workflow") {
+					for (const frame of normalizeWorkflowProgressFrames(details.workflowChildren, {
+						parentSessionId: parentSessionId(), parentToolCallId: event.toolCallId,
+					})) sendEvent(frame);
+				}
 				activeToolCalls.delete(event.toolCallId);
 				for (const key of [event.toolCallId, ...[...progressKeys.keys()].filter((k) => k.startsWith(`${event.toolCallId}:`))]) {
 					progressKeys.delete(key);
@@ -845,6 +858,11 @@ function buildSubagentBridgeExtension(ctx: PiRunnerContext, runtime: SubagentRun
 					? partial.details as Record<string, unknown>
 					: undefined;
 				const list = Array.isArray(details?.progress) ? details.progress : [];
+				if (details?.mode === "workflow") {
+					for (const frame of normalizeWorkflowProgressFrames(details.workflowChildren, {
+						parentSessionId: parentSessionId(), parentToolCallId: event.toolCallId,
+					})) sendEvent(frame);
+				}
 				if (list.length === 0) return;
 				const active = activeToolCalls.get(event.toolCallId);
 				if (active) active.childCount = list.length;
@@ -872,13 +890,13 @@ function buildSubagentBridgeExtension(ctx: PiRunnerContext, runtime: SubagentRun
 						: {};
 					const runId = [native.runId, native.requestId, native.id, native.childId]
 						.find((value): value is string => typeof value === "string" && value.length > 0);
-					let parentToolCallId = typeof native.parentToolCallId === "string"
+					let parentToolCallId = subagentDispatch.getStore()?.parentToolCallId ?? (typeof native.parentToolCallId === "string"
 						? native.parentToolCallId
 						: typeof native.toolCallId === "string"
 							? native.toolCallId
 							: runId
 								? runParents.get(runId)
-								: undefined;
+								: undefined);
 					if (!parentToolCallId) {
 						const agent = typeof native.agent === "string" ? native.agent : undefined;
 						const matches = [...activeToolCalls].filter(([, active]) =>
@@ -966,9 +984,7 @@ async function assembleSubagents(config: InitConfig, ctx: PiRunnerContext): Prom
 	// 自定义 provider 只存在于 modelsPath 指向的会话级 models.json，不注入时
 	// 子代理解析继承的父模型引用必失败（"Model ... not found"）。失败显式
 	// blockedReason，不停用 subagent 能力（内置 provider 的子代理仍可用）。
-	if (config.modelsPath) {
-		await installSubagentModelInheritance(config, config.modelsPath, runtime);
-	}
+	await installSubagentModelInheritance(config, config.modelsPath, runtime);
 
 	return {
 		factories: [
@@ -977,7 +993,20 @@ async function assembleSubagents(config: InitConfig, ctx: PiRunnerContext): Prom
 				name: "socverify-subagents",
 				hidden: true,
 				factory: (pi) => {
-					extensionFactory(pi);
+					extensionFactory(new Proxy(pi, {
+						get(target, property, receiver) {
+							if (property !== "registerTool") return Reflect.get(target, property, receiver);
+							return (tool: ToolDefinition) => target.registerTool(tool.name !== "subagent" ? tool : {
+								...tool,
+								execute: (...args: Parameters<ToolDefinition["execute"]>) => {
+									const params = args[1] as Record<string, unknown>;
+									return subagentDispatch.run({ parentToolCallId: args[0],
+										workflow: !!(params.workflow || params.workflowScript || params.workflowScriptPath),
+									}, () => tool.execute(...args));
+								},
+							});
+						},
+					}));
 				},
 			},
 		],

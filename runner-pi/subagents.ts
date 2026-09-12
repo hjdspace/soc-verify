@@ -137,7 +137,8 @@ export function normalizeChildStreamFrame(
 		case "message_start":
 		case "message_end": {
 			const message = record(event.message);
-			if (!message || message.role !== "assistant") return [];
+			if (!message || (message.role !== "assistant" && message.role !== "user")) return [];
+			if (message.role === "user" && event.type === "message_end") return [];
 			projected = { type: event.type, message };
 			break;
 		}
@@ -146,6 +147,8 @@ export function normalizeChildStreamFrame(
 			if (!update || typeof update.type !== "string") return [];
 			projected = {
 				type: "message_update",
+				...(record(event.usage) ?? record(record(event.message)?.usage)
+					? { usage: record(event.usage) ?? record(record(event.message)?.usage) } : {}),
 				assistantMessageEvent: {
 					type: update.type,
 					...(typeof update.delta === "string" ? { delta: update.delta } : {}),
@@ -378,6 +381,14 @@ export function normalizeAsyncStatusProgressFrames(
 	if (typeof status !== "object" || status === null || Array.isArray(status)) return [];
 	const steps = (status as Record<string, unknown>).steps;
 	if (!Array.isArray(steps)) return [];
+	if ((status as Record<string, unknown>).mode === "workflow") {
+		return normalizeWorkflowProgressFrames({ children: steps.map((raw) => {
+			const step = record(raw) ?? {};
+			const usage = record(step.tokens);
+			return { ...step, childId: step.workflowKey, state: step.status,
+				activity: { ...step, tokens: usage ? num(usage.total) || num(usage.input) + num(usage.output) : step.tokens } };
+		}) }, ctx);
+	}
 	return normalizeForegroundProgressFrames(
 		runId,
 		steps.map((raw) => {
@@ -395,6 +406,35 @@ export function normalizeAsyncStatusProgressFrames(
 		}),
 		ctx,
 	);
+}
+
+/** Workflow children have independent run IDs and local index=0, not a shared progress array. */
+export function workflowChildId(parentToolCallId: string, runId: string): string {
+	return `${parentToolCallId}:workflow:${runId}`;
+}
+
+export function normalizeWorkflowProgressFrames(summary: unknown, ctx: SubagentNormalizeContext): SubagentFrame[] {
+	const children = record(summary)?.children;
+	if (!Array.isArray(children) || !ctx.parentToolCallId) return [];
+	return children.flatMap((raw, index) => {
+		const child = record(raw);
+		const runId = str(child?.runId);
+		if (!child || !runId) return [];
+		const id = workflowChildId(ctx.parentToolCallId!, runId);
+		const activity = record(child.activity) ?? {};
+		const frames = normalizeForegroundProgressFrames(id, [{ ...activity, agent: child.agent, index }], ctx);
+		for (const frame of frames) {
+			frame.payload.description = str(child.sessionName) ?? str(child.label);
+		}
+		const state = child.state;
+		if (state && state !== "running" && state !== "pending" && state !== "detached") {
+			frames.push(lifecycleFrame(id, state === "completed" || state === "complete" ? "completed"
+				: state === "stopped" || state === "paused" ? "aborted" : "failed", ctx, {
+				index, agent: str(child.agent), blockedReason: str(child.error),
+			}));
+		}
+		return frames;
+	});
 }
 
 // ─── 审批继承 → capability ceiling ──────────────────────
@@ -446,6 +486,8 @@ export type SubagentRuntime = {
 		runId?: string;
 		agent?: string;
 		index: number;
+		parentToolCallId?: string;
+		workflow?: boolean;
 		event: unknown;
 	}) => void;
 }

@@ -117,6 +117,7 @@ export type SubagentStreamEvent =
   | { type: 'message_start'; message: AgentMessage }
   | {
       type: 'message_update';
+      usage?: AgentMessage['usage'];
       assistantMessageEvent: { type: string; delta?: string };
     }
   | { type: 'message_end'; message: AgentMessage }

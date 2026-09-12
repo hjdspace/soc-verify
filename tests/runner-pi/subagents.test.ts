@@ -452,6 +452,15 @@ describe('normalizeForegroundProgressFrames', () => {
 });
 
 describe('normalizeChildStreamFrame', () => {
+  it('preserves the actual child user prompt for the drawer', () => {
+    expect(normalizeChildStreamFrame('child', {
+      type: 'message_start', message: { role: 'user', content: [{ type: 'text', text: 'Task: inspect router' }] },
+    }, { parentSessionId: 'parent' })).toEqual([expect.objectContaining({
+      type: 'subagent_stream', payload: expect.objectContaining({ event: expect.objectContaining({
+        message: expect.objectContaining({ role: 'user' }),
+      }) }),
+    })]);
+  });
   it('projects assistant deltas and tool lifecycle events into an isolated child stream', () => {
     expect(normalizeChildStreamFrame(
       'call-1:1',
