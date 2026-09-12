@@ -104,6 +104,16 @@ describe('planDetour 绕行规划', () => {
     const b = { x: 100, y: 40 };
     expect(planDetour(a, b, [obstacleV], 0, 'v')).toEqual({ axis: 'v', channel: 60 - 46 });
   });
+
+  it('错开后的最终通道仍避开其他框，不能只检查错开前的通道', () => {
+    const detour = planDetour({ x: 286, y: 132 }, { x: 640, y: 132 }, [obstacle, rect(320, -50, 286, 10)], 2, 'h');
+    expect(detour!.channel).toBeLessThan(-62);
+  });
+
+  it('大型障碍需要超过八个步长时也不穿框', () => {
+    const detour = planDetour({ x: 286, y: 132 }, { x: 640, y: 132 }, [obstacle, rect(320, -1000, 286, 990)], 0, 'h');
+    expect(detour!.channel).toBeLessThan(-1012);
+  });
 });
 
 describe('detourGeometry 绕行折线', () => {

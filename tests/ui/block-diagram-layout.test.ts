@@ -8,8 +8,17 @@
  *   - 40 实例 / 35 边规模下秒级完成（宽松预算）
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { layoutDiagram } from '@renderer/components/design/block-diagram-layout';
+
+// Node 中使用 ELK 提供的同算法 Worker 实现；浏览器生产构建另行验证。
+vi.mock('elkjs/lib/elk-worker.min.js?worker', async () => {
+  // elk-worker.d.ts 只导出同名 type，缺少实际存在的 Worker 构造器声明。
+  const { Worker: InlineWorker } = await import('elkjs/lib/elk-worker.js') as unknown as {
+    Worker: new () => Pick<Worker, 'postMessage' | 'onmessage'>;
+  };
+  return { default: class extends InlineWorker { terminate() {} } };
+});
 
 function syntheticGraph(count: number): { nodes: { id: string; width: number; height: number }[]; edges: { id: string; source: string; target: string }[] } {
   const nodes = Array.from({ length: count }, (_, i) => ({
@@ -26,6 +35,19 @@ function syntheticGraph(count: number): { nodes: { id: string; width: number; he
 }
 
 describe('layoutDiagram elkjs 分层布局（issue 05）', () => {
+  it('取消过期布局，不覆盖后来进入的子图', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(layoutDiagram([], [], controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('同一模块对的平行信号不增加布局复杂度', async () => {
+    const { nodes, edges } = syntheticGraph(10);
+    const once = await layoutDiagram(nodes, edges);
+    const repeated = await layoutDiagram(nodes, edges.flatMap((e) => Array.from({ length: 50 }, (_, i) => ({ ...e, id: `${e.id}-${i}` }))));
+    expect(repeated).toEqual(once);
+  });
+
   it('小图（3 节点 2 边）：全部节点产出坐标', async () => {
     const positions = await layoutDiagram(
       [

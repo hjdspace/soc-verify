@@ -83,12 +83,25 @@ const DETOUR_MARGIN = 46;
 const DETOUR_STAGGER = 18;
 
 /** 通道线段是否压到任一障碍 */
-function channelHits(axis: 'h' | 'v', channel: number, a: Point, b: Point, obstacles: Rect[]): boolean {
+function channelHits(axis: 'h' | 'v', channel: number, a: Point, b: Point, obstacles: Rect[]): Rect[] {
   const seg: [Point, Point] =
     axis === 'h'
       ? [{ x: a.x, y: channel }, { x: b.x, y: channel }]
       : [{ x: channel, y: a.y }, { x: channel, y: b.y }];
-  return obstacles.some((r) => segmentHitsRect(seg[0], seg[1], r, 12));
+  return obstacles.filter((r) => segmentHitsRect(seg[0], seg[1], r, 12));
+}
+
+/** 每次直接越过阻挡框的外缘；通道单向移动，每个障碍最多被越过一次。 */
+function clearChannel(axis: 'h' | 'v', initial: number, negative: boolean, a: Point, b: Point, obstacles: Rect[]): number {
+  let channel = initial;
+  for (let i = 0; i <= obstacles.length; i++) {
+    const hits = channelHits(axis, channel, a, b, obstacles);
+    if (hits.length === 0) break;
+    const starts = hits.map((r) => axis === 'h' ? r.y : r.x);
+    const ends = hits.map((r) => axis === 'h' ? r.y + r.height : r.x + r.width);
+    channel = negative ? Math.min(...starts) - DETOUR_MARGIN : Math.max(...ends) + DETOUR_MARGIN;
+  }
+  return channel;
 }
 
 /**
@@ -103,20 +116,14 @@ export function planDetour(a: Point, b: Point, obstacles: Rect[], ordinal = 0, a
     const top = Math.min(...hits.map((r) => r.y));
     const bottom = Math.max(...hits.map((r) => r.y + r.height));
     const up = (a.y + b.y) / 2 < (top + bottom) / 2;
-    let channel = up ? top - DETOUR_MARGIN : bottom + DETOUR_MARGIN;
-    for (let i = 0; i < 8 && channelHits('h', channel, a, b, obstacles); i++) {
-      channel += up ? -DETOUR_MARGIN : DETOUR_MARGIN;
-    }
-    return { axis: 'h', channel: channel + (up ? -1 : 1) * ordinal * DETOUR_STAGGER };
+    const channel = (up ? top - DETOUR_MARGIN : bottom + DETOUR_MARGIN) + (up ? -1 : 1) * ordinal * DETOUR_STAGGER;
+    return { axis: 'h', channel: clearChannel('h', channel, up, a, b, obstacles) };
   }
   const left = Math.min(...hits.map((r) => r.x));
   const right = Math.max(...hits.map((r) => r.x + r.width));
   const toLeft = (a.x + b.x) / 2 < (left + right) / 2;
-  let channel = toLeft ? left - DETOUR_MARGIN : right + DETOUR_MARGIN;
-  for (let i = 0; i < 8 && channelHits('v', channel, a, b, obstacles); i++) {
-    channel += toLeft ? -DETOUR_MARGIN : DETOUR_MARGIN;
-  }
-  return { axis: 'v', channel: channel + (toLeft ? -1 : 1) * ordinal * DETOUR_STAGGER };
+  const channel = (toLeft ? left - DETOUR_MARGIN : right + DETOUR_MARGIN) + (toLeft ? -1 : 1) * ordinal * DETOUR_STAGGER;
+  return { axis: 'v', channel: clearChannel('v', channel, toLeft, a, b, obstacles) };
 }
 
 // ─── 绕行 path 构建 ───────────────────────────────────────────

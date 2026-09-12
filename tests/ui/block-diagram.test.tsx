@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, within } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ReactNode, ReactElement } from 'react';
 import type { DesignSubgraphRow } from '@main/rtl/types';
@@ -19,8 +19,9 @@ import type { DesignSubgraphRow } from '@main/rtl/types';
  * React Flow 渲染本身是库内部）。
  */
 
-const { trpcMocks } = vi.hoisted(() => ({
+const { trpcMocks, flowCallbacks } = vi.hoisted(() => ({
   trpcMocks: { getSubgraph: { query: vi.fn() } },
+  flowCallbacks: { onNodesChange: undefined as ((changes: unknown[]) => void) | undefined },
 }));
 
 vi.mock('@renderer/lib/trpc', () => ({
@@ -55,12 +56,12 @@ vi.mock('@xyflow/react', () => {
     edgeTypes,
     onNodeDoubleClick,
     onInit: _onInit,
-    onNodesChange: _onNodesChange,
+    onNodesChange,
     proOptions,
     children,
   }: {
     nodes: { id: string; type?: string; position?: { x: number; y: number }; data: Record<string, unknown> }[];
-    edges: { id: string; source?: string; target?: string; type?: string; data?: Record<string, unknown> }[];
+    edges: { id: string; source?: string; target?: string; sourceHandle?: string; targetHandle?: string; selected?: boolean; type?: string; data?: Record<string, unknown> }[];
     nodeTypes?: Record<string, (props: { id: string; data: Record<string, unknown> }) => ReactElement>;
     edgeTypes?: Record<string, (props: Record<string, unknown>) => ReactElement>;
     onNodeDoubleClick?: (event: unknown, node: { id: string }) => void;
@@ -68,7 +69,9 @@ vi.mock('@xyflow/react', () => {
     onNodesChange?: (changes: unknown[]) => void;
     proOptions?: { hideAttribution?: boolean };
     children?: ReactNode;
-  }) => (
+  }) => {
+    flowCallbacks.onNodesChange = onNodesChange;
+    return (
     <div
       data-testid="block-diagram-canvas"
       data-hide-attribution={String(proOptions?.hideAttribution ?? false)}
@@ -86,10 +89,11 @@ vi.mock('@xyflow/react', () => {
         const src = nodes?.find((n) => n.id === e.source);
         const tgt = nodes?.find((n) => n.id === e.target);
         return (
-          <div key={e.id} data-edge-id={e.id} data-highlighted={String(e.data?.highlighted ?? false)}>
+          <div key={e.id} data-edge-id={e.id} data-highlighted={String(e.data?.highlighted ?? false)} data-selected={String(e.selected ?? false)} data-obstacles={JSON.stringify(e.data?.obstacles)} data-source={e.source} data-source-handle={e.sourceHandle} data-target={e.target} data-target-handle={e.targetHandle}>
             {Cmp ? (
               <Cmp
                 id={e.id}
+                selected={e.selected}
                 data={e.data ?? {}}
                 sourceX={src ? src.position!.x + 286 : 0}
                 sourceY={src ? src.position!.y + 92 : 0}
@@ -102,8 +106,9 @@ vi.mock('@xyflow/react', () => {
       })}
       {children}
     </div>
-  );
-  return { ReactFlow, Handle, Position, BaseEdge, EdgeLabelRenderer, getBezierPath, applyNodeChanges, Background, Controls, MiniMap, Panel };
+    );
+  };
+  return { MarkerType: { ArrowClosed: 'arrowclosed' }, useUpdateNodeInternals: () => () => {}, ReactFlow, Handle, Position, BaseEdge, EdgeLabelRenderer, getBezierPath, applyNodeChanges, Background, Controls, MiniMap, Panel };
 });
 
 import { BlockDiagram } from '@renderer/components/design/BlockDiagram';
@@ -171,8 +176,8 @@ const SG_TOP: DesignSubgraphRow = {
       { name: 'apb0_psel', direction: 'input', width: 1 },
       { name: 'apb0_pwrite', direction: 'input', width: 1 },
       { name: 'apb0_pwdata', direction: 'input', width: 32 },
-      { name: 'apb0_prdata', direction: 'input', width: 32 },
-      { name: 'apb0_pready', direction: 'input', width: 1 },
+      { name: 'apb0_prdata', direction: 'output', width: 32 },
+      { name: 'apb0_pready', direction: 'output', width: 1 },
     ],
   },
   nodes: [subsysNode('spike_top.u_subsys0', 'u_subsys0'), subsysNode('spike_top.u_subsys1', 'u_subsys1')],
@@ -298,10 +303,10 @@ describe('BlockDiagram 渲染（issue 05）', () => {
     expect(u0).toHaveTextContent('u_subsys0');
     expect(u0).toHaveTextContent('soc_subsys');
 
-    // 7 条边：APB 桥 + AHB→APB 读通道 + clk_i×2 + rst_n_i×2 + link_irq 细边
-    expect(canvas.querySelectorAll('[data-edge-id]')).toHaveLength(7);
+    // 默认架构模式隐藏普通 link_irq 网络。
+    expect(canvas.querySelectorAll('[data-edge-id]')).toHaveLength(6);
     expect(canvas.textContent).toContain('APB → AHB');
-    expect(canvas.textContent).toContain('link_irq');
+    expect(canvas.textContent).not.toContain('link_irq');
     // clock/reset singleton 束标签 = net 名（无 ×1、无协议名，消除 "clockx1 框图" 误读）
     const bundleLabels = [...canvas.querySelectorAll('[data-testid="diagram-bundle-label"]')].map(
       (n) => n.textContent ?? '',
@@ -315,13 +320,60 @@ describe('BlockDiagram 渲染（issue 05）', () => {
     );
     for (const transform of labelTransforms) expect(transform).toContain('translate(-50%, -50%)');
     // 直连边标签 = 贝塞尔中点（mock getBezierPath 返回固定 160,96）
-    expect(labelTransforms.filter((t) => t.includes('translate(160px, 96px)'))).toHaveLength(5);
+    expect(labelTransforms.filter((t) => t.includes('translate(160px, 96px)'))).toHaveLength(4);
     // root→u_subsys1 的 clock/reset 边穿过 u_subsys0 → 绕行通道标签：
     // 不在贝塞尔中点，且位于节点上缘（y < 40）之外的空白通道
     const detoured = labelTransforms.filter((t) => !t.includes('translate(160px, 96px)'));
     expect(detoured).toHaveLength(2);
     const labelY = (t: string) => Number(/translate\(([-\d.]+)px, ([-\d.]+)px\)/.exec(t)?.[2]);
-    for (const t of detoured) expect(labelY(t)).toBeLessThan(40);
+    for (const t of detoured) expect(labelY(t) < 40 || labelY(t) > 210).toBe(true);
+  });
+
+  it('可切回全部信号，恢复普通网络和端口；再切回架构模式', async () => {
+    render(<BlockDiagram projectId="proj-1" path="spike_top" />);
+    await screen.findByTestId('block-diagram-canvas');
+    expect(screen.getByRole('status')).toHaveTextContent('已隐藏 1 个普通网络');
+    fireEvent.click(screen.getByRole('button', { name: '全部信号' }));
+    let canvas = await screen.findByTestId('block-diagram-canvas');
+    expect(canvas.querySelectorAll('[data-edge-id]')).toHaveLength(7);
+    expect(canvas).toHaveTextContent('link_irq');
+    fireEvent.click(screen.getByRole('button', { name: 'SoC 架构' }));
+    canvas = await screen.findByTestId('block-diagram-canvas');
+    expect(canvas.querySelectorAll('[data-edge-id]')).toHaveLength(6);
+    expect(canvas).not.toHaveTextContent('link_irq');
+  });
+
+  it('每条边都有真实的两端锚点，锚点不在可滚动端口列表内', async () => {
+    render(<BlockDiagram projectId="proj-1" path="spike_top" />);
+    const canvas = await screen.findByTestId('block-diagram-canvas');
+    for (const edge of canvas.querySelectorAll<HTMLElement>('[data-edge-id]')) {
+      for (const type of ['source', 'target'] as const) {
+        const node = screen.getByTestId(`diagram-node-${edge.dataset[type]}`);
+        const handle = [...node.querySelectorAll<HTMLElement>('[data-handle-id]')].find((h) => h.dataset.handleId === edge.dataset[`${type}Handle`] && h.dataset.handleType === type);
+        expect(handle).toBeDefined();
+        expect(handle!.closest('.rtl-diagram-node-body')).toBeNull();
+      }
+    }
+    expect(canvas.querySelectorAll('[data-handle-id]').length).toBeLessThan(100);
+  });
+
+  it('连线有语义类型，点击标签选中并显示流动反馈', async () => {
+    render(<BlockDiagram projectId="proj-1" path="spike_top" />);
+    const canvas = await screen.findByTestId('block-diagram-canvas');
+    const label = canvas.querySelector<HTMLElement>('[data-category="clock"]')!;
+    fireEvent.click(within(label).getByRole('button'));
+    expect(label.closest('[data-edge-id]')).toHaveAttribute('data-selected', 'true');
+    expect(canvas.querySelectorAll('.diagram-connection-flow')).toHaveLength(1);
+    expect(new Set([...canvas.querySelectorAll<HTMLElement>('[data-category]')].map((e) => e.dataset.category))).toEqual(new Set(['bus', 'clock', 'reset']));
+  });
+
+  it('拖动模块后，其他连线的绕行障碍同步更新', async () => {
+    render(<BlockDiagram projectId="proj-1" path="spike_top" />);
+    const canvas = await screen.findByTestId('block-diagram-canvas');
+    const edge = canvas.querySelector<HTMLElement>('[data-source="spike_top"][data-target="spike_top.u_subsys1"]')!;
+    expect(JSON.parse(edge.dataset.obstacles!)[0].x).toBe(320);
+    act(() => flowCallbacks.onNodesChange?.([{ type: 'position', id: 'spike_top.u_subsys0', position: { x: 1100, y: 450 } }]));
+    expect(JSON.parse(edge.dataset.obstacles!)[0]).toMatchObject({ x: 1100, y: 450 });
   });
 });
 

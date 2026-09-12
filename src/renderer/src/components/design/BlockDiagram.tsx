@@ -1,7 +1,7 @@
 /**
  * 可下钻框图（issue 05：React Flow + elkjs）。
  *
- * - box = 图根 + 直接子实例（每个端口渲染四向 handle，连线锚定面由
+ * - box = 图根 + 直接子实例（只为实际连线端口渲染固定在框缘的 handle，连线锚定面由
  *   两端节点相对位置决定（block-diagram-routing.anchorSides）：左框右缘
  *   出线 → 右框左缘入线，不再按端口方向固定左右，消除绕底部/穿框走线）
  * - 直连线穿过中间节点时按 planDetour 绕行（通道 + 圆角折线），
@@ -13,12 +13,14 @@
  *   点击信号高亮同名连线（edgesForSignal）
  */
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, memo, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ReactFlow,
   applyNodeChanges,
+  useUpdateNodeInternals,
   Handle,
   Position,
+  MarkerType,
   BaseEdge,
   EdgeLabelRenderer,
   getBezierPath,
@@ -27,6 +29,7 @@ import {
   MiniMap,
   Panel,
   type EdgeProps,
+  type EdgeChange,
   type NodeChange,
   type Node,
   type NodeProps,
@@ -38,8 +41,11 @@ import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
 import {
   buildDiagramViewModel,
+  bundleCategory,
   edgesForSignal,
+  type DiagramMode,
   type DiagramSignal,
+  type SignalCategory,
 } from './block-diagram-model';
 import { layoutDiagram } from './block-diagram-layout';
 import {
@@ -55,6 +61,13 @@ import {
 } from './block-diagram-routing';
 import type { BundleGroup, DesignSubgraphRow, SubgraphPortRow } from '@main/rtl/types';
 
+const SIGNAL_STYLES: Record<SignalCategory, { label: string; color: string; dash?: string }> = {
+  clock: { label: '时钟', color: 'var(--diagram-clock)', dash: '8 4' },
+  reset: { label: '复位', color: 'var(--diagram-reset)', dash: '3 4' },
+  bus: { label: '总线', color: 'var(--diagram-bus)' },
+  signal: { label: '普通信号', color: 'var(--diagram-signal)' },
+};
+
 // ─── 节点视图：box + 端口两列 ────────────────────────────────
 
 type ModuleBoxData = {
@@ -65,32 +78,39 @@ type ModuleBoxData = {
   portsOut: SubgraphPortRow[];
   bundles: BundleGroup[];
   leftovers: string[];
+  handles: { port: string; type: 'source' | 'target' }[];
   /** 当前高亮信号（同名端口行标记） */
   signal: string | null;
   onPortHover: (port: SubgraphPortRow | null) => void;
   onPortClick: (signal: string) => void;
 };
 
-function ModuleBoxView({ data, selected }: NodeProps) {
+function ModuleBoxView({ id, data, selected }: NodeProps) {
   const d = (data ?? {}) as ModuleBoxData;
+  const updateNodeInternals = useUpdateNodeInternals();
+  useEffect(() => updateNodeInternals(id), [id, d.handles, updateNodeInternals]);
   const ports = [...d.portsIn, ...d.portsOut];
   const portByName = new Map(ports.map((port) => [port.name, port]));
   return (
     <div
       data-testid="diagram-module-box"
       className={cn(
-        'rtl-diagram-node overflow-hidden border bg-card',
+        'rtl-diagram-node relative border bg-card',
         d.isRoot ? 'border-primary' : 'border-border',
         selected && 'is-selected',
       )}
       style={{ width: NODE_WIDTH }}
     >
+      {/* 锚点固定在框体边缘，独立于可滚动端口列表；仅为实际连线创建 handle。 */}
+      {d.handles.map((handle, i) => (
+        <PortHandles key={`${handle.type}:${handle.port}`} {...handle} offset={(i + 1) / (d.handles.length + 1) * 100} />
+      ))}
       <div className="rtl-diagram-node-header flex h-[42px] items-center gap-2 border-b border-border px-2.5">
         <span className="rtl-diagram-node-icon grid size-6 shrink-0 place-items-center rounded-[5px] bg-primary/10 text-primary"><Box className="size-3.5" /></span>
         <span className="min-w-0 flex-1"><span className="block truncate font-mono text-[11px] font-semibold leading-tight text-foreground">{d.name}</span><span className="mt-0.5 block truncate font-mono text-[9px] leading-tight text-muted-foreground">{d.module}</span></span>
         {d.isRoot && <span className="rounded bg-warning/20 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-warning-foreground">root</span>}
       </div>
-      <div className="rtl-diagram-node-body max-h-[300px] overflow-y-auto p-[5px]">
+      <div className="rtl-diagram-node-body min-h-[40px] max-h-[300px] overflow-y-auto p-[5px]">
         {d.bundles.map((bundle) => (
           <BundleRow key={`${bundle.protocol}:${bundle.prefix}`} bundle={bundle} portByName={portByName} d={d} />
         ))}
@@ -105,8 +125,7 @@ function ModuleBoxView({ data, selected }: NodeProps) {
 }
 
 /** 端口四向 handle：锚定面由两端节点相对位置决定（anchorSides），
- * 连线可从任一面出/入框；同一端口同面同时挂 source/target，
- * 支持同向端口对（如两 input 共网）的任一端作 source */
+ * source/target 类型取实际连接方向。 */
 const PORT_SIDES: ReadonlyArray<{ side: Side; pos: Position }> = [
   { side: 'l', pos: Position.Left },
   { side: 'r', pos: Position.Right },
@@ -114,14 +133,12 @@ const PORT_SIDES: ReadonlyArray<{ side: Side; pos: Position }> = [
   { side: 'b', pos: Position.Bottom },
 ];
 
-function PortHandles({ port }: { port: SubgraphPortRow }) {
+function PortHandles({ port, type, offset }: { port: string; type: 'source' | 'target'; offset: number }) {
   return (
     <>
       {PORT_SIDES.map(({ side, pos }) => (
-        <Fragment key={side}>
-          <Handle type="source" position={pos} id={handleId(side, port.name)} isConnectable={false} />
-          <Handle type="target" position={pos} id={handleId(side, port.name)} isConnectable={false} />
-        </Fragment>
+        <Handle key={side} type={type} position={pos} id={handleId(side, port)} isConnectable={false}
+          title={port} style={side === 'l' || side === 'r' ? { top: `${offset}%` } : { left: `${offset}%` }} />
       ))}
     </>
   );
@@ -135,8 +152,11 @@ function BundleRow({ bundle, portByName, d }: { bundle: BundleGroup; portByName:
   const highlighted = ports.some((port) => port.name === d.signal);
   const label = bundle.singleton ? (ports[0]?.name ?? bundle.protocol) : `${bundle.prefix || ''}* · ${bundle.protocol}${bundle.role ? ` ${bundle.role}` : ''}`;
   return (
-    <div className={cn('nodrag relative flex h-[30px] items-center gap-1.5 rounded px-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground', highlighted && 'bg-primary/15 text-primary')}>
-      <span className={cn('size-1.5 shrink-0 rounded-full', bundle.singleton ? 'bg-muted-foreground' : 'bg-status-pass')} />
+    <div role="button" tabIndex={0} aria-label={`高亮 ${label}`} aria-pressed={highlighted}
+      onClick={() => ports[0] && d.onPortClick(ports[0].name)}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (ports[0]) d.onPortClick(ports[0].name); } }}
+      className={cn('nodrag relative flex h-[30px] cursor-pointer items-center gap-1.5 rounded px-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary', highlighted && 'bg-primary/15 text-primary')}>
+      <span className="size-1.5 shrink-0 rounded-full" style={{ background: SIGNAL_STYLES[bundleCategory(bundle)].color }} />
       <span className="min-w-0 truncate font-mono text-[10px]">{label}</span>
       <span className="ml-auto shrink-0 text-[9px] text-muted-foreground">{bundle.singleton ? ports[0]?.direction : `${ports.length} signals`}</span>
       {ports.map((port) => (
@@ -148,9 +168,8 @@ function BundleRow({ bundle, portByName, d }: { bundle: BundleGroup; portByName:
             className="sr-only"
             onMouseEnter={() => d.onPortHover(port)}
             onMouseLeave={() => d.onPortHover(null)}
-            onClick={() => d.onPortClick(port.name)}
+            onClick={(e) => { e.stopPropagation(); d.onPortClick(port.name); }}
           />
-          <PortHandles port={port} />
         </Fragment>
       ))}
     </div>
@@ -162,20 +181,21 @@ function PortRow({ port, d }: { port: SubgraphPortRow; d: ModuleBoxData }) {
   return (
     <div
       data-testid="diagram-port"
+      role="button"
+      tabIndex={0}
+      aria-pressed={matched}
       data-port={port.name}
       data-direction={port.direction}
       title={`${port.name} · ${port.direction} · [${port.width - 1}:0]`}
       onMouseEnter={() => d.onPortHover(port)}
       onMouseLeave={() => d.onPortHover(null)}
       onClick={() => d.onPortClick(port.name)}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); d.onPortClick(port.name); } }}
       className={cn(
-        'nodrag relative flex h-[30px] w-full cursor-pointer items-center rounded px-1.5 font-mono text-[10px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
+        'nodrag relative flex h-[30px] w-full cursor-pointer items-center rounded px-1.5 font-mono text-[10px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary',
         matched && 'bg-primary/20 text-primary',
       )}
     >
-      {/* 同一端口同时挂 source/target handle：同向端口对（如两 input 共网）的
-          source 端也能锚定在该端口行，避免 React Flow 找不到 handle 丢边 */}
-      <PortHandles port={port} />
       <span className="truncate">{port.name}</span>
       <span className="ml-auto shrink-0 pl-1 font-sans text-[9px] text-muted-foreground">
         {port.width > 1 ? `[${port.width - 1}:0]` : port.direction}
@@ -187,6 +207,7 @@ function PortRow({ port, d }: { port: SubgraphPortRow; d: ModuleBoxData }) {
 // ─── 边视图：粗边（bundle）/ 细边（signal） ──────────────────
 
 type EdgeViewData = {
+  category: SignalCategory;
   label: string;
   signalCount: number;
   signals: DiagramSignal[];
@@ -200,10 +221,14 @@ type EdgeViewData = {
   /** 其余节点矩形（布局期快照）：直连线穿过时绕行 */
   obstacles: Rect[];
   onToggle: () => void;
+  onSelect: () => void;
 };
 
 /** 连线路径 + 标签位置：优先绕行折线（圆角），否则按锚定面方向的贝塞尔 */
-function edgeGeometry(props: EdgeProps, d: EdgeViewData): { path: string; labelX: number; labelY: number } {
+function edgeGeometry(
+  props: Pick<EdgeProps, 'sourceX' | 'sourceY' | 'sourcePosition' | 'targetX' | 'targetY' | 'targetPosition'>,
+  d: Pick<EdgeViewData, 'obstacles' | 'ordinal' | 'axis'>,
+): { path: string; labelX: number; labelY: number } {
   const source = { x: props.sourceX, y: props.sourceY };
   const target = { x: props.targetX, y: props.targetY };
   const detour = planDetour(source, target, d.obstacles, d.ordinal, d.axis);
@@ -222,24 +247,41 @@ function edgeGeometry(props: EdgeProps, d: EdgeViewData): { path: string; labelX
   return { path, labelX, labelY };
 }
 
+function useEdgeGeometry(props: EdgeProps, d: EdgeViewData) {
+  const { sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition } = props;
+  const { obstacles, ordinal, axis } = d;
+  return useMemo(() => edgeGeometry(
+    { sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition },
+    { obstacles, ordinal, axis },
+  ), [sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition, obstacles, ordinal, axis]);
+}
+
 function BundleEdgeView(props: EdgeProps) {
   const d = (props.data ?? {}) as EdgeViewData;
-  const { path, labelX, labelY } = edgeGeometry(props, d);
+  const { path, labelX, labelY } = useEdgeGeometry(props, d);
+  const appearance = SIGNAL_STYLES[d.category];
+  const active = d.highlighted || props.selected;
   return (
     <>
       <BaseEdge
         id={props.id}
         path={path}
+        markerEnd={props.markerEnd}
+        interactionWidth={20}
+        className={cn('diagram-connection', active && 'is-active')}
         style={{
-          strokeWidth: d.highlighted ? 5 : 3.5,
-          stroke: d.highlighted ? 'var(--primary)' : 'var(--border)',
+          strokeWidth: active ? 4 : d.category === 'bus' ? 2.5 : 1.8,
+          stroke: appearance.color,
+          strokeDasharray: appearance.dash,
           strokeLinecap: 'round',
         }}
       />
+      {props.selected && <path d={path} className="diagram-connection-flow" />}
       <EdgeLabelRenderer>
         <div
           data-testid="diagram-bundle-label"
           data-highlighted={String(d.highlighted)}
+          data-category={d.category}
           style={{
             position: 'absolute',
             transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
@@ -247,17 +289,18 @@ function BundleEdgeView(props: EdgeProps) {
           }}
           className={cn(
             'diagram-edge-label nodrag nopan relative z-20 flex flex-col items-start rounded-md border border-border bg-card text-[10px] shadow-sm',
-            d.highlighted && 'border-primary/60',
+            active && 'ring-1 ring-current',
           )}
         >
           <button
             type="button"
             data-testid="diagram-bundle-toggle"
-            onClick={d.onToggle}
+            onClick={() => { d.onSelect(); d.onToggle(); }}
+            aria-expanded={d.expanded}
             title={d.expanded ? '收拢协议信号' : '展开协议信号'}
-            className="flex h-7 items-center gap-1.5 px-2 font-semibold text-foreground"
+            className="flex h-7 items-center gap-1.5 rounded-md px-2 font-semibold text-foreground focus-visible:outline-2 focus-visible:outline-primary"
           >
-            <span className="size-1.5 rounded-full bg-status-pass" />
+            <span className="size-1.5 rounded-full" style={{ background: appearance.color }} />
             <span className="font-mono">{d.label}</span>
             {d.signalCount > 1 && <span className="font-mono text-[9px] font-normal text-muted-foreground">×{d.signalCount}</span>}
             <ChevronDown className={cn('size-3 text-muted-foreground transition-transform', d.expanded && 'rotate-180')} />
@@ -281,24 +324,35 @@ function BundleEdgeView(props: EdgeProps) {
 
 function SignalEdgeView(props: EdgeProps) {
   const d = (props.data ?? {}) as EdgeViewData;
-  const { path, labelX, labelY } = edgeGeometry(props, d);
+  const { path, labelX, labelY } = useEdgeGeometry(props, d);
+  const appearance = SIGNAL_STYLES[d.category];
+  const active = d.highlighted || props.selected;
   return (
     <>
       <BaseEdge
         id={props.id}
         path={path}
+        markerEnd={props.markerEnd}
+        interactionWidth={20}
+        className={cn('diagram-connection', active && 'is-active')}
         style={{
-          strokeWidth: d.highlighted ? 3 : 1.5,
-          stroke: d.highlighted ? 'var(--primary)' : 'var(--border)',
+          strokeWidth: active ? 3 : 1.5,
+          stroke: appearance.color,
+          strokeDasharray: appearance.dash,
         }}
       />
+      {props.selected && <path d={path} className="diagram-connection-flow" />}
       <EdgeLabelRenderer>
-        <div
+        <button
+          type="button"
+          onClick={d.onSelect}
+          aria-pressed={Boolean(active)}
           data-testid="diagram-signal-label"
+          data-category={d.category}
           style={{
             position: 'absolute',
             transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
-            pointerEvents: 'none',
+            pointerEvents: 'all',
           }}
           className={cn(
             'diagram-edge-label nodrag nopan relative z-20 rounded-md border border-border/70 bg-card/90 px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground shadow-sm',
@@ -307,13 +361,16 @@ function SignalEdgeView(props: EdgeProps) {
         >
           {d.label}
           {d.width !== null && d.width > 1 ? ` [${d.width - 1}:0]` : ''}
-        </div>
+        </button>
       </EdgeLabelRenderer>
     </>
   );
 }
 
 // ─── 主组件 ─────────────────────────────────────────────────
+
+const NODE_TYPES = { moduleBox: memo(ModuleBoxView) };
+const EDGE_TYPES = { bundleEdge: memo(BundleEdgeView), signalEdge: memo(SignalEdgeView) };
 
 export function BlockDiagram({ projectId, path }: { projectId: string; path: string }) {
   const [rootPath, setRootPath] = useState(path);
@@ -325,6 +382,10 @@ export function BlockDiagram({ projectId, path }: { projectId: string; path: str
   const [hoveredPort, setHoveredPort] = useState<SubgraphPortRow | null>(null);
   const [highlightSignal, setHighlightSignal] = useState<string | null>(null);
   const [expandedEdges, setExpandedEdges] = useState<ReadonlySet<string>>(new Set());
+  const [mode, setMode] = useState<DiagramMode>('architecture');
+  const [selectedEdge, setSelectedEdge] = useState<string | null>(null);
+  const [layoutRevision, setLayoutRevision] = useState(0);
+  const [layoutError, setLayoutError] = useState(false);
 
   // prop 变化重置图根（DesignView 切换选中实例）
   useEffect(() => setRootPath(path), [path]);
@@ -332,11 +393,14 @@ export function BlockDiagram({ projectId, path }: { projectId: string; path: str
   useEffect(() => {
     let alive = true;
     setLoading(true);
+    setLayoutError(false);
+    setSg(null);
     setPositions(null);
     setRfNodes([]);
     setHighlightSignal(null);
     setExpandedEdges(new Set());
     setHoveredPort(null);
+    setSelectedEdge(null);
     trpc.rtl.getSubgraph
       .query({ projectId, path: rootPath })
       .then((r) => {
@@ -354,7 +418,18 @@ export function BlockDiagram({ projectId, path }: { projectId: string; path: str
     };
   }, [projectId, rootPath]);
 
-  const vm = useMemo(() => (sg ? buildDiagramViewModel(sg) : null), [sg]);
+  const vm = useMemo(() => (sg ? buildDiagramViewModel(sg, mode) : null), [sg, mode]);
+  const handlesByNode = useMemo(() => {
+    const handles = new Map<string, Map<string, ModuleBoxData['handles'][number]>>();
+    for (const e of vm?.edges ?? []) {
+      for (const [id, port, type] of [[e.source, e.sourcePort, 'source'], [e.target, e.targetPort, 'target']] as const) {
+        if (!port) continue;
+        if (!handles.has(id)) handles.set(id, new Map());
+        handles.get(id)!.set(`${type}:${port}`, { port, type });
+      }
+    }
+    return new Map([...handles].map(([id, values]) => [id, [...values.values()]]));
+  }, [vm]);
 
   const onPortClick = useCallback((signal: string) => {
     setHighlightSignal((prev) => (prev === signal ? null : signal));
@@ -363,9 +438,13 @@ export function BlockDiagram({ projectId, path }: { projectId: string; path: str
   useEffect(() => {
     if (!vm) return;
     let alive = true;
+    const controller = new AbortController();
+    setPositions(null);
+    setLayoutError(false);
     void layoutDiagram(
       vm.nodes.map((n) => ({ id: n.id, ...nodeSize(n) })),
       vm.edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
+      controller.signal,
     ).then((pos) => {
       if (!alive) return;
       setPositions(pos);
@@ -383,16 +462,18 @@ export function BlockDiagram({ projectId, path }: { projectId: string; path: str
           portsOut: n.portsOut,
           bundles: n.bundles,
           leftovers: n.leftovers,
+          handles: handlesByNode.get(n.id) ?? [],
           signal: null,
           onPortHover: setHoveredPort,
           onPortClick,
         } satisfies ModuleBoxData,
       })));
-    });
+    }).catch(() => { if (alive) setLayoutError(true); });
     return () => {
       alive = false;
+      controller.abort();
     };
-  }, [onPortClick, vm]);
+  }, [onPortClick, vm, handlesByNode, layoutRevision]);
 
   const highlightedIds = useMemo(
     () => (vm && highlightSignal ? new Set(edgesForSignal(vm, highlightSignal)) : new Set<string>()),
@@ -417,42 +498,23 @@ export function BlockDiagram({ projectId, path }: { projectId: string; path: str
 
   const handleNodesChange = useCallback((changes: NodeChange[]) => {
     setRfNodes((current) => applyNodeChanges(changes, current));
+    const moves = changes.filter((c) => c.type === 'position' && c.position);
+    if (moves.length > 0) setPositions((current) => {
+      const next = new Map(current);
+      for (const move of moves) if (move.type === 'position' && move.position) next.set(move.id, move.position);
+      return next;
+    });
   }, []);
 
   const resetLayout = useCallback(() => {
-    if (!vm) return;
-    void layoutDiagram(
-      vm.nodes.map((n) => ({ id: n.id, ...nodeSize(n) })),
-      vm.edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
-    ).then((next) => {
-      setPositions(next);
-      setRfNodes((_current) =>
-        vm.nodes.map((n) => ({
-          id: n.id,
-          type: 'moduleBox',
-          position: next.get(n.id) ?? { x: 0, y: 0 },
-          draggable: true,
-          dragHandle: '.rtl-diagram-node-header',
-          data: {
-            name: n.name,
-            module: n.module,
-            isRoot: n.isRoot,
-            portsIn: n.portsIn,
-            portsOut: n.portsOut,
-            bundles: n.bundles,
-            leftovers: n.leftovers,
-            signal: highlightSignal,
-            onPortHover: setHoveredPort,
-            onPortClick,
-          } satisfies ModuleBoxData,
-        })),
-      );
-      requestAnimationFrame(() => flow?.fitView({ padding: 0.18, duration: 180 }));
-    });
-  }, [flow, highlightSignal, onPortClick, vm]);
-
-  const nodeTypes = useMemo(() => ({ moduleBox: ModuleBoxView }), []);
-  const edgeTypes = useMemo(() => ({ bundleEdge: BundleEdgeView, signalEdge: SignalEdgeView }), []);
+    setHighlightSignal(null);
+    setLayoutRevision((revision) => revision + 1);
+  }, []);
+  const handleEdgesChange = useCallback((changes: EdgeChange[]) => {
+    for (const change of changes) if (change.type === 'select') {
+      setSelectedEdge((current) => change.selected ? change.id : current === change.id ? null : current);
+    }
+  }, []);
 
   useEffect(() => {
     setRfNodes((current) =>
@@ -460,7 +522,7 @@ export function BlockDiagram({ projectId, path }: { projectId: string; path: str
     );
   }, [highlightSignal]);
 
-  const rfEdges = useMemo(() => {
+  const routedEdges = useMemo(() => {
     if (!vm || !positions) return [];
     // 节点矩形（布局期快照）：锚定面选择 + 绕行障碍检测
     const rects = new Map<string, Rect>(
@@ -478,7 +540,7 @@ export function BlockDiagram({ projectId, path }: { projectId: string; path: str
       // 锚定面按节点相对位置：左框右缘出线 → 右框左缘入线（水平流优先）
       const sides =
         srcRect && tgtRect ? anchorSides(srcRect, tgtRect) : { source: 'r' as Side, target: 'l' as Side, axis: 'h' as const };
-      const pairKey = `${e.source}->${e.target}`;
+      const pairKey = [e.source, e.target].sort().join('->');
       const ordinal = pairOrdinal.get(pairKey) ?? 0;
       pairOrdinal.set(pairKey, ordinal + 1);
       return {
@@ -488,26 +550,37 @@ export function BlockDiagram({ projectId, path }: { projectId: string; path: str
         sourceHandle: e.sourcePort ? handleId(sides.source, e.sourcePort) : undefined,
         targetHandle: e.targetPort ? handleId(sides.target, e.targetPort) : undefined,
         type: e.kind === 'bundle' ? 'bundleEdge' : 'signalEdge',
+        markerEnd: { type: MarkerType.ArrowClosed, color: SIGNAL_STYLES[e.category].color, width: 12, height: 12 },
+        ariaLabel: `${SIGNAL_STYLES[e.category].label} ${e.label}: ${e.source} → ${e.target}`,
         data: {
+          category: e.category,
           label: e.label,
           signalCount: e.signalCount,
           signals: e.signals,
           width: e.width,
-          highlighted: highlightedIds.has(e.id),
-          expanded: e.kind === 'bundle' && expandedEdges.has(e.id),
+          highlighted: false,
+          expanded: false,
           axis: sides.axis,
           ordinal,
           obstacles: [...rects.values()].filter((r) => r !== srcRect && r !== tgtRect),
           onToggle: () => toggleExpanded(e.id),
+          onSelect: () => setSelectedEdge((current) => current === e.id ? null : e.id),
         } satisfies EdgeViewData,
       };
     });
-  }, [vm, positions, highlightedIds, expandedEdges, toggleExpanded]);
+  }, [vm, positions, toggleExpanded]);
+
+  const rfEdges = useMemo(() => routedEdges.map((e) => ({
+    ...e,
+    selected: e.id === selectedEdge,
+    data: { ...e.data, highlighted: highlightedIds.has(e.id), expanded: expandedEdges.has(e.id) },
+  })), [routedEdges, selectedEdge, highlightedIds, expandedEdges]);
 
   // ── 状态呈现 ──
   if (!loading && (!sg || sg.root === null)) {
     return <EmptyHint text={sg ? '未找到实例' : '框图数据加载失败'} />;
   }
+  if (layoutError) return <div className="flex flex-1 items-center justify-center gap-3 text-xs text-muted-foreground"><span>框图布局失败</span><button type="button" className="rounded border border-border px-2 py-1 hover:bg-muted" onClick={resetLayout}>重试布局</button></div>;
   if (loading || !vm || !positions) {
     return <EmptyHint text="框图加载中..." testId="diagram-loading" />;
   }
@@ -519,7 +592,7 @@ export function BlockDiagram({ projectId, path }: { projectId: string; path: str
   }));
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-background/60">
+    <div className="rtl-diagram flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-background/60">
       {/* ─── 工具条：面包屑 + 高亮信号 chip ─────────────── */}
       <div className="flex items-center gap-2 border-b border-border bg-card/70 px-3 py-2">
         <div data-testid="diagram-breadcrumb" className="flex min-w-0 flex-wrap items-center gap-0.5">
@@ -561,6 +634,31 @@ export function BlockDiagram({ projectId, path }: { projectId: string; path: str
         )}
       </div>
 
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border bg-card px-3 py-2 text-[10px]">
+        <div className="flex rounded-md border border-border p-0.5" role="group" aria-label="连线显示范围">
+          {(['architecture', 'all'] as const).map((value) => (
+            <button key={value} type="button" aria-pressed={mode === value}
+              onClick={() => { setMode(value); setHighlightSignal(null); setSelectedEdge(null); setExpandedEdges(new Set()); }}
+              className={cn('rounded px-2 py-1 font-medium focus-visible:outline-2 focus-visible:outline-primary', mode === value ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted')}>
+              {value === 'architecture' ? 'SoC 架构' : '全部信号'}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-3" aria-label="连线图例">
+          {(['clock', 'reset', 'bus', ...(mode === 'all' ? ['signal' as const] : [])] as SignalCategory[]).map((category) => (
+            <span key={category} className="flex items-center gap-1.5 text-muted-foreground">
+              <svg width="22" height="8" aria-hidden="true"><path d="M 1 4 H 21" stroke={SIGNAL_STYLES[category].color} strokeWidth={category === 'bus' ? 3 : 2} strokeDasharray={SIGNAL_STYLES[category].dash} /></svg>
+              {SIGNAL_STYLES[category].label}
+            </span>
+          ))}
+        </div>
+        <span className="ml-auto text-muted-foreground" role="status">
+          {vm.edges.length} 条连线{mode === 'architecture' && ` · 已隐藏 ${vm.hiddenNetCount} 个普通网络`}
+        </span>
+        {vm.unresolvedNetCount > 0 && <span className="text-warning-foreground" title="缺失驱动、多驱动或双向端口的网络暂不绘制方向线，请在模块接口或源码中核查。">{vm.unresolvedNetCount} 个网络方向待核查</span>}
+        {mode === 'architecture' && vm.edges.length === 0 && vm.nodes.length > 1 && <span className="w-full text-muted-foreground">未识别到可绘制的架构连线，可切换“全部信号”或检查协议规则。</span>}
+      </div>
+
       {/* ─── 无限画布（节点可拖拽，拓扑仍为只读） ───────── */}
       <div className="relative min-h-0 flex-1 overflow-hidden bg-background">
         {vm.nodes.length <= 1 && (
@@ -574,15 +672,19 @@ export function BlockDiagram({ projectId, path }: { projectId: string; path: str
         <ReactFlow
           nodes={rfNodes}
           edges={rfEdges}
-          nodeTypes={nodeTypes}
-          edgeTypes={edgeTypes}
+          nodeTypes={NODE_TYPES}
+          edgeTypes={EDGE_TYPES}
           onInit={setFlow}
           onNodesChange={handleNodesChange}
+          onEdgesChange={handleEdgesChange}
           onNodeDoubleClick={handleNodeDoubleClick}
+          onEdgeClick={(_event, edge) => setSelectedEdge(edge.id)}
+          onPaneClick={() => { setSelectedEdge(null); setHighlightSignal(null); }}
           nodesDraggable
           nodesConnectable={false}
           elementsSelectable
-          edgesFocusable={false}
+          edgesFocusable
+          onlyRenderVisibleElements
           edgesReconnectable={false}
           fitView
           minZoom={0.1}

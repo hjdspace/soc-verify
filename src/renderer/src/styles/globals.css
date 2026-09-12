@@ -3654,6 +3654,12 @@ button.ap-ins-pill:hover {
 }
 /* renderer（z-index 4）不得铺不透明底色：会盖住 Background 点阵层（z-index -1），
    画布底色由外层容器 bg-background 提供 */
+.rtl-diagram {
+  --diagram-clock: var(--info-foreground);
+  --diagram-reset: var(--warning-foreground);
+  --diagram-bus: var(--violet-foreground);
+  --diagram-signal: var(--muted-foreground);
+}
 .rtl-diagram-flow .react-flow__pane { cursor: grab; }
 .rtl-diagram-flow .react-flow__pane.dragging { cursor: grabbing; }
 .rtl-diagram-flow .react-flow__edges { z-index: 1; }
@@ -3669,12 +3675,32 @@ button.ap-ins-pill:hover {
 .rtl-diagram-flow .rtl-diagram-node-header { cursor: grab; touch-action: none; }
 .rtl-diagram-flow .react-flow__node.dragging .rtl-diagram-node-header { cursor: grabbing; }
 .rtl-diagram-flow .react-flow__handle { width: 8px; height: 8px; border: 2px solid var(--card); background: var(--muted-foreground); }
-.rtl-diagram-flow .react-flow__handle-left { left: -9px; }
-.rtl-diagram-flow .react-flow__handle-right { right: -9px; }
+.rtl-diagram-flow .react-flow__handle-left { left: 0; }
+.rtl-diagram-flow .react-flow__handle-right { right: 0; }
 /* 四向锚定的 t/b handle 仅作连线锚点：视觉隐藏（l/r 保留端口圆点） */
 .rtl-diagram-flow .react-flow__handle-top,
 .rtl-diagram-flow .react-flow__handle-bottom { width: 1px; height: 1px; border: none; background: transparent; }
 .rtl-diagram-flow .react-flow__edge-path { vector-effect: non-scaling-stroke; }
+.rtl-diagram-flow .diagram-connection { opacity: 0.75; transition: opacity 180ms var(--ease-out), stroke-width 180ms var(--ease-out); }
+.rtl-diagram-flow .react-flow__edge:hover .diagram-connection,
+.rtl-diagram-flow .react-flow__edge:focus-visible .diagram-connection,
+.rtl-diagram-flow .diagram-connection.is-active { opacity: 1; stroke-width: 4; }
+.rtl-diagram-flow .diagram-connection-flow {
+  fill: none;
+  stroke: var(--card);
+  opacity: 0.85;
+  pointer-events: none;
+  stroke-width: 2;
+  stroke-dasharray: 3 15;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+  animation: diagram-signal-flow 900ms linear infinite;
+}
+@keyframes diagram-signal-flow { to { stroke-dashoffset: -36; } }
+@media (prefers-reduced-motion: reduce) {
+  .rtl-diagram-flow .diagram-connection { transition: none; }
+  .rtl-diagram-flow .diagram-connection-flow { animation: none; }
+}
 .rtl-diagram-flow .diagram-edge-label { white-space: nowrap; }
 .rtl-diagram-flow .diagram-edge-label:hover { border-color: color-mix(in oklch, var(--primary) 42%, var(--border)); box-shadow: 0 8px 28px color-mix(in oklch, var(--foreground) 12%, transparent); }
 .rtl-diagram-flow .react-flow__controls button,

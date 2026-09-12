@@ -82,8 +82,8 @@ const SG: DesignSubgraphRow = {
       { name: 'apb0_psel', direction: 'input', width: 1 },
       { name: 'apb0_pwrite', direction: 'input', width: 1 },
       { name: 'apb0_pwdata', direction: 'input', width: 32 },
-      { name: 'apb0_prdata', direction: 'input', width: 32 },
-      { name: 'apb0_pready', direction: 'input', width: 1 },
+      { name: 'apb0_prdata', direction: 'output', width: 32 },
+      { name: 'apb0_pready', direction: 'output', width: 1 },
     ],
   },
   nodes: [subsysNode('spike_top.u_subsys0', 'u_subsys0'), subsysNode('spike_top.u_subsys1', 'u_subsys1')],
@@ -181,7 +181,7 @@ describe('buildDiagramViewModel 边（issue 05）', () => {
     expect(link!.width).toBe(1);
   });
 
-  it('方向：output 端为 source（h_hrdata output → 图根 apb0_prdata input）', () => {
+  it('方向：output 端为 source（h_hrdata output → 图根 apb0_prdata output）', () => {
     const read = vm.edges.filter((e) => e.kind === 'bundle' && e.source === 'spike_top.u_subsys0');
     expect(read).toHaveLength(1);
     expect(read[0]!.target).toBe('spike_top');
@@ -234,5 +234,75 @@ describe('无打标数据（issue 05：旧数据兼容）', () => {
     expect(vm.edges.every((e) => e.kind === 'signal')).toBe(true);
     // 9 条源边 pairwise 后 > 9（clk 拆 2 对、rst 拆 2 对、link 1 对、6 top2i）
     expect(vm.edges.length).toBeGreaterThanOrEqual(11);
+  });
+});
+
+describe('架构连线正确性', () => {
+  it('架构模式保留时钟、复位和总线，普通网络在展开前被忽略', () => {
+    const vm = buildDiagramViewModel(SG, 'architecture');
+    expect(vm.edges).toHaveLength(6);
+    expect(new Set(vm.edges.map((e) => e.category))).toEqual(new Set(['clock', 'reset', 'bus']));
+    expect(vm.hiddenNetCount).toBe(1);
+    expect(vm.nodes[1]!.leftovers).toEqual([]);
+    expect(buildDiagramViewModel(SG, 'all').edges.some((e) => e.label === 'link_irq')).toBe(true);
+  });
+
+  it('只有一端被识别为时钟时，保留重命名后的接收端', () => {
+    const sg: DesignSubgraphRow = {
+      ...SG, nodes: [{ ...SG.nodes[0]!, ports: [{ name: 'tick', direction: 'input', width: 1 }], bundles: { bundles: [], leftovers: ['tick'] } }],
+      edges: [{ module: 'spike_top', net: 'renamed', kind: 'top2i', width: 1, topPorts: ['clk_i'], cells: [{ inst: SG.nodes[0]!.path, port: 'tick' }] }],
+    };
+    const vm = buildDiagramViewModel(sg, 'architecture');
+    expect(vm.edges[0]).toMatchObject({ category: 'clock', targetPort: 'tick' });
+    expect(vm.nodes[1]!.leftovers).toEqual(['tick']);
+  });
+
+  it('无打标时以常见 clock/reset 名称保留关键网，但不把普通 data 总线猜成协议', () => {
+    const sg = { ...SG, bundles: { bundles: [], leftovers: [] }, nodes: SG.nodes.map((n) => ({ ...n, bundles: { bundles: [], leftovers: [] } })) };
+    const vm = buildDiagramViewModel(sg, 'architecture');
+    expect(vm.edges).toHaveLength(4);
+    expect(vm.hiddenNetCount).toBe(7);
+  });
+
+  it('缺失驱动或多驱动时记录未解析网络，不伪造接收端之间的连线', () => {
+    const edge = { ...SG.edges[6]!, topPorts: [] };
+    const missing = buildDiagramViewModel({ ...SG, edges: [edge] }, 'architecture');
+    expect(missing.edges).toEqual([]);
+    expect(missing.unresolvedNetCount).toBe(1);
+    const conflicting = buildDiagramViewModel({ ...SG, edges: [edge], nodes: SG.nodes.map((n) => ({ ...n, ports: n.ports.map((p) => ({ ...p, direction: 'output' })) })) });
+    expect(conflicting.edges).toEqual([]);
+    expect(conflicting.unresolvedNetCount).toBe(1);
+  });
+
+  it('内部时钟广播只连接驱动端到接收端，边数随扇出线性增长', () => {
+    const nodes = Array.from({ length: 101 }, (_, i) => ({
+      ...subsysNode(`spike_top.u${i}`, `u${i}`),
+      ports: [{ name: 'clk_i', direction: i === 0 ? 'output' : 'input', width: 1 }],
+    }));
+    const vm = buildDiagramViewModel({ ...SG, nodes, edges: [{
+      module: 'spike_top', net: 'sys_clk', kind: 'i2i', width: 1,
+      cells: nodes.map((n) => ({ inst: n.path, port: 'clk_i' })), topPorts: [],
+    }] });
+    expect(vm.edges).toHaveLength(100);
+    expect(vm.edges.every((e) => e.source === nodes[0]!.path)).toBe(true);
+  });
+
+  it('主方向不是首条信号的方向时，锚点仍属于主边两端实例', () => {
+    const vm = buildDiagramViewModel({ ...SG, edges: [SG.edges[4]!, ...SG.edges.slice(0, 4)] });
+    const primary = vm.edges.find((e) => e.signalCount === 5)!;
+    expect(primary.source).toBe('spike_top');
+    expect(primary.sourcePort).toBe('apb0_paddr');
+    expect(primary.targetPort).toBe('h_haddr');
+  });
+
+  it('不同 clock 单例不会因空 prefix 合并为一条边', () => {
+    const ports = ['clk_a', 'clk_b'].map((name) => ({ name, direction: 'input', width: 1 }));
+    const bundles = { bundles: ports.map((p) => ({ protocol: 'clock', prefix: '', singleton: true, role: null, signals: [{ name: p.name, sig: p.name }] })), leftovers: [] };
+    const vm = buildDiagramViewModel({
+      ...SG, root: { ...SG.root!, ports }, bundles,
+      nodes: [{ ...SG.nodes[0]!, ports, bundles }],
+      edges: ports.map((p) => ({ module: 'spike_top', net: p.name, kind: 'top2i', width: 1, topPorts: [p.name], cells: [{ inst: SG.nodes[0]!.path, port: p.name }] })),
+    });
+    expect(vm.edges.map((e) => e.label)).toEqual(['clk_a', 'clk_b']);
   });
 });

@@ -129,7 +129,7 @@ vi.mock('@xyflow/react', () => {
       {children}
     </div>
   );
-  return { ReactFlow, Handle, Position, BaseEdge, EdgeLabelRenderer, getBezierPath, Background, Controls, MiniMap, Panel };
+  return { MarkerType: { ArrowClosed: 'arrowclosed' }, useUpdateNodeInternals: () => () => {}, ReactFlow, Handle, Position, BaseEdge, EdgeLabelRenderer, getBezierPath, Background, Controls, MiniMap, Panel };
 });
 
 vi.mock('@renderer/components/design/block-diagram-layout', () => ({
