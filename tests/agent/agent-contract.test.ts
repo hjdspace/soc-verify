@@ -11,16 +11,9 @@ import { SessionManagerImpl } from '../../src/main/agent/session-manager';
 // ─── tests/session/session-manager.test.ts) ──────────────────────────
 
 vi.mock('../../src/main/agent/paths', () => ({
-  resolveAgentRuntime: vi.fn(() => ({
-    mode: 'binary' as const,
-    runnerPath: '/fake/runner',
-    bunVersionOk: true,
-  })),
-  resolveRunnerBinary: vi.fn(() => '/fake/runner'),
-  resolveRunnerScript: vi.fn(() => null),
-  resolveBunPath: vi.fn(() => null),
+  resolvePiRunnerScript: vi.fn(() => '/fake/pi-runner/index.ts'),
+  resolvePiSessionScanScript: vi.fn(() => '/fake/pi-runner/session-scan.ts'),
   resolveBuiltInExtensionDir: vi.fn(() => null),
-  checkBunVersion: vi.fn(() => ({ ok: true, version: '1.3.14', required: '1.3.14' })),
 }));
 
 vi.mock('../../src/main/agent/officecli-paths', () => ({
@@ -177,7 +170,7 @@ class MockEngineClient implements IAgentClient {
 // ─── Type-level contract checks ──────────────────────────────────────
 
 describe('IAgentClient type contract', () => {
-  it('the omp AgentClient satisfies the contract', () => {
+  it('the AgentClient base class satisfies the contract', () => {
     expectTypeOf<AgentClient>().toExtend<IAgentClient>();
   });
 
@@ -187,9 +180,7 @@ describe('IAgentClient type contract', () => {
 
   it('a factory maps client options to IAgentClient', () => {
     expectTypeOf<AgentClientFactory>().toBeCallableWith({
-      engine: 'omp',
-      mode: 'binary',
-      runnerPath: '/fake/runner',
+      runnerPath: '/fake/pi-runner/index.ts',
       cwd: '/tmp',
     });
   });

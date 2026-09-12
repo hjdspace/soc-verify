@@ -1,16 +1,16 @@
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { AgentClient, type ToolCallHandler } from './agent-client';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { type ToolCallHandler } from './agent-client';
 import { PiAgentClient } from './pi-agent-client';
 import type {
   AgentClientFactory,
   AgentClientFactoryOptions,
   IAgentClient,
 } from './agent-contract';
-import { resolveAgentRuntime, resolveBuiltInExtensionDir, resolvePiRunnerScript, resolveRunnerBinary, resolveRunnerScript, resolveBunPath, checkBunVersion, type AgentRuntime } from './paths';
+import { resolveBuiltInExtensionDir, resolvePiRunnerScript } from './paths';
 import { ensureOfficecliOnPath } from './officecli-paths';
 import type { CustomToolDefinition, InitConfig, ApprovalMode, SeedHistoryMessage, TrustKind } from './types';
 import { TrustStore } from './trust-store';
@@ -170,7 +170,7 @@ function summarizeEvent(event: unknown): string {
 
 /**
  * Format the answer for a single-question `ask` call as a natural-language
- * response the AI can consume. Matches the omp engine's AskTool format.
+ * response the AI can consume. Matches the engine's ask tool format.
  */
 function formatSingleAnswer(question: AskQuestion, answers: AskAnswer[]): string {
   const ans = answers.find((a) => a.questionId === question.id);
@@ -242,7 +242,7 @@ export interface CreateSessionOptions {
   apiFormat?: OpenAiApiFormat;
   sessionDir?: string;
   resumeSessionId?: string;
-  /** UI 存储对话历史，用于 omp 会话文件缺失/部分覆盖时的上下文种子 */
+  /** UI 存储对话历史，用于引擎原生会话文件缺失/部分覆盖时的上下文种子 */
   seedHistory?: SeedHistoryMessage[];
   persistedSessionId?: string;
   /** 凭据 ID —— 记录会话由哪个凭据创建（setModel 冗余 swap 判定用） */
@@ -250,7 +250,7 @@ export interface CreateSessionOptions {
   env?: Record<string, string>;
   enableMCP?: boolean;
   systemPrompt?: string;
-  /** Model context window advertised to omp. Falls back to the global setting. */
+  /** Model context window advertised to the engine. Falls back to the global setting. */
   contextWindow?: number;
   /** User-configured models for this provider. When provided, createSession
    *  uses these instead of fetching from the API. Each model has its own contextWindow. */
@@ -263,18 +263,15 @@ export interface CreateSessionOptions {
   caseStatsService?: CaseStatsService | null;
   /** 工具审批模式 */
   approvalMode?: ApprovalMode;
-  /** 会话初始思考强度（'default'/缺省 = 跟随 omp 引擎默认） */
+  /** 会话初始思考强度（'default'/缺省 = 跟随引擎默认行为） */
   thinkingLevel?: ThinkingLevelSetting;
-  /** 会话绑定的引擎（'omp' | 'pi'）。缺省 'omp'。'pi' 走 runner-pi 脚本（Node 运行），
-   *  不做 omp 的 Bun/engine 运行时解析与版本检查。 */
-  engine?: AgentEngine;
 }
 
 export interface SessionEntry {
   id: string;
   /** The SoC Verify session ID stored in .socverify/sessions.json, if this is a restored runtime session. */
   persistedSessionId?: string;
-  /** Which engine backs this session (e.g. 'omp', 'pi'). */
+  /** Which engine backs this session. issue 10 后运行时会话固定为 'pi'. */
   engine: AgentEngine;
   /** The engine's session ID — needed to resume conversations (engine-neutral). */
   engineSessionId?: string;
@@ -309,29 +306,16 @@ export interface SessionEventData {
 }
 
 /**
- * Default client factory — routes on `options.engine`:
- * 'pi' builds the `PiAgentClient` (plain Node script runner), 'omp' builds
- * the omp-backed `AgentClient` from the resolved runtime mode. Tests and
- * other engines inject their own factory.
+ * Default client factory — builds the `PiAgentClient` (plain Node script
+ * runner via ELECTRON_RUN_AS_NODE=1). issue 10 后运行时引擎固定为 pi；
+ * tests and other engines inject their own factory.
  */
 export const defaultAgentClientFactory: AgentClientFactory = (options) => {
-  if (options.engine === 'pi') {
-    return new PiAgentClient({
-      runnerPath: options.runnerPath,
-      cwd: options.cwd,
-      env: options.env,
-    });
-  }
-  return new AgentClient(
-    options.mode === 'binary'
-      ? { runnerBinaryPath: options.runnerPath, cwd: options.cwd, env: options.env }
-      : {
-          bunPath: options.bunPath!,
-          runnerPath: options.runnerPath,
-          cwd: options.cwd,
-          env: options.env,
-        },
-  );
+  return new PiAgentClient({
+    runnerPath: options.runnerPath,
+    cwd: options.cwd,
+    env: options.env,
+  });
 };
 
 export class SessionManagerImpl extends EventEmitter {
@@ -365,36 +349,18 @@ export class SessionManagerImpl extends EventEmitter {
 
     const contextWindow = options.contextWindow ?? await contextSettings.getContextWindow();
 
-    // 引擎路由：'pi' 走 runner-pi 脚本（Node 运行，无需 Bun/engine）；
-    // 'omp'（缺省）走 resolveAgentRuntime（预编译二进制 → Bun + 脚本）。
-    const engine: AgentEngine = options.engine ?? 'omp';
-    let runtime: AgentRuntime;
-    if (engine === 'pi') {
-      const piScript = resolvePiRunnerScript();
-      if (!piScript) {
-        throw new Error(
-          'pi runner not found. Expected runner-pi/index.ts in the packaged resources or repository root.',
-        );
-      }
-      runtime = { mode: 'script', runnerPath: piScript };
-      console.log(`[agent:session] engine=pi, pi runner script: ${piScript}`);
-    } else {
-      const ompRuntime = resolveAgentRuntime();
-      if (!ompRuntime) {
-        throw new Error(
-          'Agent runtime not found. Please run `npm run setup:agent` to download the agent binary, ' +
-          'or ensure Bun and the engine submodule are available.',
-        );
-      }
-      // Version check only applies to script mode (binary mode has Bun embedded)
-      if (ompRuntime.mode === 'script' && !ompRuntime.bunVersionOk) {
-        throw new Error(
-          `Bun runtime must be >= 1.3.14 (found v${ompRuntime.bunVersion}). ` +
-          'Please upgrade: bun upgrade',
-        );
-      }
-      runtime = ompRuntime;
+    // 引擎路由（issue 10）：运行时会话固定为 pi —— runner-pi 脚本以
+    // Node（ELECTRON_RUN_AS_NODE=1）运行，omp 的 Bun/engine 运行时与
+    // binary/script 双模式已移除。session 记录的 engine 取自
+    // client.engine（defaultAgentClientFactory 只构造 PiAgentClient）。
+    const piScript = resolvePiRunnerScript();
+    if (!piScript) {
+      throw new Error(
+        'pi runner not found. Expected runner-pi/index.ts in the packaged resources or repository root.',
+      );
     }
+    const runtime = { mode: 'script' as const, runnerPath: piScript };
+    console.log(`[agent:session] engine=pi, pi runner script: ${piScript}`);
 
     const sessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
@@ -420,7 +386,7 @@ export class SessionManagerImpl extends EventEmitter {
       approval: 'read',
     }));
 
-    // Register `ask` as a custom host tool so the omp engine routes it to the
+    // Register `ask` as a custom host tool so the engine routes it to the
     // host instead of using its built-in terminal-based AskTool (which requires
     // a TTY not available in the subprocess). The toolCallHandler below
     // intercepts `ask` calls and surfaces them as interactive UI in the renderer.
@@ -496,7 +462,7 @@ export class SessionManagerImpl extends EventEmitter {
       const apiKeyValue = options.apiKey;
       // Use user-configured models when available; otherwise fetch from the API.
       // Each configured model has its own contextWindow — we write them all to
-      // models.json so the omp engine's `set_model` RPC can switch to any of
+      // models.json so the engine's `set_model` RPC can switch to any of
       // them at runtime with the correct context window.
       let allModels: OpenAICompatibleModel[] = [];
       modelContextWindow = contextWindow;
@@ -520,7 +486,7 @@ export class SessionManagerImpl extends EventEmitter {
       } else {
         // Fallback: fetch ALL models from the API so we can write the complete
         // list to models.json. This is essential for runtime model switching via
-        // the omp engine's `set_model` RPC — if a model isn't in models.json,
+        // the engine's `set_model` RPC — if a model isn't in models.json,
         // `set_model` silently fails and messages are still sent with the old
         // model (causing 503 errors when the user switches models in RightPanel).
         try {
@@ -569,13 +535,9 @@ export class SessionManagerImpl extends EventEmitter {
       console.log(`[agent:session:${sessionId}] runtimeDir: ${runtimeDir}`);
       // issue 07: pi 引擎不劫持 PI_CODING_AGENT_DIR —— 原生 session 必须落在
       // 用户级 canonical cwd bucket（临时 runtimeDir 会在会话销毁时删除）。
-      // pi 的模型配置经 InitConfig.modelsPath 显式注入；omp 保持原行为。
-      if (engine !== 'pi') {
-        env.PI_CODING_AGENT_DIR = runtimeDir;
-        env.XDG_STATE_HOME = join(runtimeDir, 'state');
-      }
+      // pi 的模型配置经 InitConfig.modelsPath 显式注入。
       env[OPENAI_COMPATIBLE_API_KEY_ENV] = apiKeyValue;
-      // Also set OPENAI_API_KEY / OPENAI_BASE_URL so the omp engine's
+      // Also set OPENAI_API_KEY / OPENAI_BASE_URL so the engine's
       // openai-completions provider can resolve the key via $env fallback
       // (resolveOpenAIRequestSetup checks options.apiKey, then $env.OPENAI_API_KEY).
       // This is critical for packaged builds where the env var might not be
@@ -602,36 +564,12 @@ export class SessionManagerImpl extends EventEmitter {
       await writeFile(join(runtimeDir, 'models.json'), modelsJson, 'utf-8');
       await writeFile(join(runtimeDir, 'models.yml'), modelsJson, 'utf-8');
       console.log(`[agent:session:${sessionId}] models.yml (override): ${modelsJson.slice(0, 500)}`);
-      if (engine !== 'pi') {
-        env.PI_CODING_AGENT_DIR = runtimeDir;
-        env.XDG_STATE_HOME = join(runtimeDir, 'state');
-      }
-    }
-
-    // Ensure ~/.omp/natives/ exists so the omp engine's native-addon search
-    // doesn't fail with "open dir error: No such file or directory" on first run.
-    try {
-      const ompNativesDir = join(homedir(), '.omp', 'natives');
-      if (!existsSync(ompNativesDir)) {
-        mkdirSync(ompNativesDir, { recursive: true });
-      }
-    } catch {
-      // Best-effort: the runner also searches the binaries directory.
-    }
-
-    // Tell the runner where to find pi_natives.*.node so it doesn't have to
-    // search ~/.omp/natives/<version>/ (which may not exist).
-    const runnerBinary = resolveRunnerBinary();
-    if (runnerBinary) {
-      env.OMP_NATIVES_DIR = dirname(runnerBinary);
     }
 
     // On Linux, detect the system CA certificate bundle path and set
-    // NODE_EXTRA_CA_CERTS so Bun's fetch can verify TLS connections.
-    // Bun's compiled binary may not always find the system's CA store,
-    // especially in packaged environments like AppImage. The omp engine's
-    // `withExtraCaFetch` wrapper reads this env var and merges the CA
-    // bundle into Bun's TLS config.
+    // NODE_EXTRA_CA_CERTS so Node's fetch can verify TLS connections.
+    // Electron's embedded Node may not always find the system's CA store,
+    // especially in packaged environments like AppImage.
     if (process.platform === 'linux' && !env.NODE_EXTRA_CA_CERTS && !process.env.NODE_EXTRA_CA_CERTS) {
       const caCandidates = [
         '/etc/ssl/certs/ca-certificates.crt',   // Debian/Ubuntu
@@ -650,7 +588,7 @@ export class SessionManagerImpl extends EventEmitter {
 
     // 注入 officecli 二进制路径到子进程 PATH（Issue #6）
     // 同步内置 officecli 到 ~/.officecli/bin/ 并将该目录注入 env.PATH 前面，
-    // 使 omp 子进程及其衍生的 Host Tool（create_docx 等）可直接调用 officecli。
+    // 使 agent 子进程及其衍生的 Host Tool（create_docx 等）可直接调用 officecli。
     try {
       await ensureOfficecliOnPath(env);
     } catch (err) {
@@ -658,7 +596,7 @@ export class SessionManagerImpl extends EventEmitter {
     }
 
     // Ensure built-in MCP servers (TraceWeave) are registered in the
-    // user-level MCP config so the omp engine discovers them on init.
+    // user-level MCP config so the engine discovers them on init.
     // This is idempotent: if the server is already in the config, it is
     // not overridden. If TraceWeave or Python is unavailable, it is
     // silently skipped (graceful degradation) with a one-time notification
@@ -722,23 +660,18 @@ export class SessionManagerImpl extends EventEmitter {
       thinkingLevel: options.thinkingLevel,
       // pi 引擎：独立 models.json（issue 07）—— session 归用户级目录，
       // 模型配置归临时 runtimeDir，二者经 modelsPath 解耦。
-      ...(engine === 'pi' && runtimeDir
-        ? { modelsPath: join(runtimeDir, 'models.json') }
-        : {}),
-      // pi 引擎：有序 skill 装载列表（issue 09）—— 与 UI 发现同源
+      ...(runtimeDir ? { modelsPath: join(runtimeDir, 'models.json') } : {}),
+      // 有序 skill 装载列表（issue 09）—— 与 UI 发现同源
       // （resolveSkillLoadPaths），canonical 优先于 legacy，runner 不自行发现。
-      ...(engine === 'pi' ? { skillPaths: await resolveSkillLoadPaths(options.cwd) } : {}),
+      skillPaths: await resolveSkillLoadPaths(options.cwd),
       trustedMcpServers: trustStore?.getTrustedMcpServers(options.cwd),
       trustedProjectDirs: trustStore?.getTrustedProjectDirs(options.cwd),
     };
 
-    // Helper: create an AgentClient configured for the given runtime mode
-    const createClientForRuntime = (rt: { mode: 'binary' | 'script'; runnerPath: string; bunPath?: string }): IAgentClient => {
+    // Helper: create an AgentClient for the resolved pi runner
+    const createClientForRuntime = (rt: { runnerPath: string }): IAgentClient => {
       const factoryOptions: AgentClientFactoryOptions = {
-        engine,
-        mode: rt.mode,
         runnerPath: rt.runnerPath,
-        bunPath: rt.bunPath,
         cwd: options.cwd,
         env,
       };
@@ -843,7 +776,7 @@ export class SessionManagerImpl extends EventEmitter {
       });
     };
 
-    let client = createClientForRuntime(runtime);
+    const client = createClientForRuntime(runtime);
     attachEventForwarding(client);
 
     // Log env vars being passed (mask API keys)
@@ -868,72 +801,10 @@ export class SessionManagerImpl extends EventEmitter {
       console.log(`[agent:session:${sessionId}] engine (${client.engine}) sessionId=${engineSessionId}`);
     } catch (err) {
       client.stop();
-
-      // If binary mode failed, try script mode (Bun + engine) as fallback.
-      // This handles the case where the pre-compiled runner binary exists
-      // but can't execute (e.g., missing shared libraries on Linux AppImage).
-      if (runtime.mode === 'binary') {
-        const scriptPath = resolveRunnerScript();
-        const bunPath = resolveBunPath();
-        if (scriptPath && bunPath) {
-          const versionCheck = checkBunVersion(bunPath);
-          if (versionCheck.ok) {
-            console.warn(
-              `[agent:session:${sessionId}] Binary runner failed (${err instanceof Error ? err.message : String(err)}). ` +
-              `Falling back to script mode (Bun ${versionCheck.version} + engine).`,
-            );
-            client = createClientForRuntime({
-              mode: 'script',
-              runnerPath: scriptPath,
-              bunPath,
-            });
-            attachEventForwarding(client);
-            try {
-              await client.start();
-              console.log(`[agent:session:${sessionId}] agent process started successfully (script mode)`);
-              const initResult = await client.init(initConfig);
-              engineSessionId = initResult.engineSessionId;
-              console.log(`[agent:session:${sessionId}] engine (${client.engine}) sessionId=${engineSessionId} (script mode)`);
-            } catch (scriptErr) {
-              client.stop();
-              if (runtimeDir) {
-                await rm(runtimeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-              }
-              throw new Error(
-                `Failed to initialize agent session. ` +
-                `Binary mode error: ${err instanceof Error ? err.message : String(err)}. ` +
-                `Script mode error: ${scriptErr instanceof Error ? scriptErr.message : String(scriptErr)}.`,
-              );
-            }
-          } else {
-            // Bun version too old
-            if (runtimeDir) {
-              await rm(runtimeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-            }
-            throw new Error(
-              `Failed to initialize agent session: ${err instanceof Error ? err.message : String(err)}. ` +
-              `Script mode fallback unavailable: Bun >= ${versionCheck.required} required (found ${versionCheck.version}).`,
-            );
-          }
-        } else {
-          // No script mode available
-          if (runtimeDir) {
-            await rm(runtimeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-          }
-          throw new Error(
-            `Failed to initialize agent session: ${err instanceof Error ? err.message : String(err)}. ` +
-            `Script mode fallback unavailable: ${!scriptPath ? 'engine submodule not found' : 'Bun not found'}. ` +
-            `On Linux AppImage, the runner binary may have missing shared libraries. ` +
-            `Try running 'ldd <runner-binary>' to diagnose, or install Bun and initialize the engine submodule.`,
-          );
-        }
-      } else {
-        // Script mode failed (no fallback)
-        if (runtimeDir) {
-          await rm(runtimeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-        }
-        throw new Error(`Failed to initialize agent session: ${err instanceof Error ? err.message : String(err)}`);
+      if (runtimeDir) {
+        await rm(runtimeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
       }
+      throw new Error(`Failed to initialize agent session: ${err instanceof Error ? err.message : String(err)}`);
     }
     console.log(`[agent:session:${sessionId}] agent session initialized`);
 

@@ -2,9 +2,9 @@
  * Engine-neutral agent client contract.
  *
  * This module is the seam that decouples the host (SessionManager, routers,
- * services) from any specific agent engine. Today the only implementation is
- * the omp-backed `AgentClient`; a future pi client (or any other engine)
- * implements the same interface and is handed to `SessionManagerImpl` via an
+ * services) from any specific agent engine. The runtime engine is the pi
+ * coding agent (`PiAgentClient`); tests and other engines implement the same
+ * interface and are handed to `SessionManagerImpl` via an
  * `AgentClientFactory`.
  *
  * Rules (issue 02):
@@ -58,7 +58,7 @@ export type AgentRegenerateResult = { engineSessionId: string };
  * callbacks, and event subscription.
  */
 export interface IAgentClient {
-  /** Engine identity of this client instance (e.g. 'omp', 'pi'). */
+  /** Engine identity of this client instance. Runtime sessions are 'pi'. */
   readonly engine: AgentEngine;
 
   // ── Process lifecycle ──
@@ -134,25 +134,20 @@ export interface IAgentClient {
 // ─── Factory seam ───────────────────────────────────────────────
 
 /**
- * Options handed to a client factory. `mode` mirrors the runner launch mode
- * resolved by `resolveAgentRuntime()`; the factory maps it onto whatever
- * launch options its engine client needs.
+ * Options handed to a client factory. issue 10 移除 omp 运行时后，
+ * 工厂入参只描述"用哪个 runner 脚本在哪个 cwd 启动"——引擎身份固定为
+ * pi，不再携带 omp 时代的 binary/script 模式与 Bun 路径。
  */
 export type AgentClientFactoryOptions = {
-  /** Which engine this client should drive ('omp' | 'pi'). */
-  engine: AgentEngine;
-  mode: 'binary' | 'script';
-  /** Runner binary path (binary mode) or runner script path (script mode). */
+  /** pi runner 脚本路径（runner-pi/index.ts）。 */
   runnerPath: string;
-  /** Bun executable path (script mode only). */
-  bunPath?: string;
   cwd: string;
   env?: Record<string, string>;
 };
 
 /**
  * Factory that creates engine clients for `SessionManagerImpl`.
- * The default implementation builds the omp-backed `AgentClient`; tests and
- * future engines inject their own.
+ * The default implementation builds the `PiAgentClient`; tests and
+ * other engines inject their own.
  */
 export type AgentClientFactory = (options: AgentClientFactoryOptions) => IAgentClient;

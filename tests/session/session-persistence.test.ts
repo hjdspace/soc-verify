@@ -8,7 +8,6 @@ import {
   saveSessions,
   addSession,
   updateSessionEngineId,
-  updateSessionOmpId,
   type PersistedSession,
 } from '../../src/main/agent/session-persistence';
 
@@ -122,16 +121,6 @@ describe('session persistence — engine-neutral fields', () => {
     const sessions = await loadSessions(projectRoot);
     expect(sessions[0].engine).toBe('pi');
     expect(sessions[0].engineSessionId).toBe('pi-9');
-  });
-
-  it('updateSessionOmpId (deprecated) still works by delegating to the engine-neutral update', async () => {
-    await addSession(projectRoot, makeSession());
-
-    await updateSessionOmpId(projectRoot, 's1', 'omp-after-regen');
-
-    const sessions = await loadSessions(projectRoot);
-    expect(sessions[0].engine).toBe('omp');
-    expect(sessions[0].engineSessionId).toBe('omp-after-regen');
   });
 
   it('updateSessionEngineId is a no-op for unknown sessions', async () => {

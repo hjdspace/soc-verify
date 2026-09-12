@@ -98,9 +98,17 @@ export function diagnoseSpawnFailure(binaryPath: string, err: Error): string {
   return parts.join('\n');
 }
 
-export class AgentClient implements IAgentClient {
-  /** Engine identity — this client drives the oh-my-pi coding agent. */
-  readonly engine: AgentEngine = 'omp';
+/**
+ * Engine-neutral JSONL client base class.
+ *
+ * 持有与引擎无关的客户端机制：ready 握手、请求/响应关联、tool_call/
+ * approval/trust 桥、事件转发、进程树清理。引擎身份（`engine`）与
+ * 启动方式（`resolveSpawn`）由子类决定 —— issue 10 移除 omp 运行时后，
+ * 基类不再提供 binary（预编译二进制）或 Bun 脚本两种启动模式。
+ */
+export abstract class AgentClient implements IAgentClient {
+  /** Engine identity — declared by the concrete engine subclass. */
+  abstract readonly engine: AgentEngine;
 
   private process: ChildProcess | null = null;
   /** The PID captured at spawn time, used for process-tree kill on Windows. */
@@ -131,20 +139,14 @@ export class AgentClient implements IAgentClient {
   /**
    * Resolve the runner spawn command.
    *
-   * Template-method seam: subclasses override this to change the launch mode
-   * (e.g. PiAgentClient runs the runner-pi script with Node instead of Bun).
+   * Template-method seam: engine subclasses override this to launch their
+   * runner (e.g. PiAgentClient runs the runner-pi script with Node via
+   * ELECTRON_RUN_AS_NODE=1). The base class has no default launch mode —
+   * omp 时代的 binary/Bun 双模式已随运行时移除（issue 10）。
    */
   protected resolveSpawn(): { cmd: string; args: string[] } {
-    if (this.options.runnerBinaryPath) {
-      // Binary mode: directly execute the pre-compiled runner
-      return { cmd: this.options.runnerBinaryPath, args: [] };
-    }
-    if (this.options.bunPath && this.options.runnerPath) {
-      // Script mode: use Bun to run the runner script
-      return { cmd: this.options.bunPath, args: ['run', this.options.runnerPath] };
-    }
     throw new Error(
-      'Agent client requires either runnerBinaryPath (binary mode) or bunPath + runnerPath (script mode)',
+      'Engine-neutral AgentClient subclass must override resolveSpawn() to launch its runner',
     );
   }
 
@@ -171,20 +173,15 @@ export class AgentClient implements IAgentClient {
     const { promise: readyPromise, resolve: readyResolve, reject: readyReject } = Promise.withResolvers<void>();
     let readySettled = false;
 
-    // Handle spawn errors (e.g. binary not found, missing shared library,
-    // wrong ELF format).  Without this listener, Node.js treats the 'error'
+    // Handle spawn errors (e.g. runner not found, incompatible binary).
+    //  Without this listener, Node.js treats the 'error'
     // event as an uncaught exception and crashes the Electron main process
     // with a "A JavaScript error occurred in the main process" dialog.
-    //
-    // On Linux AppImage, this is the primary failure mode when the
-    // socverify-runner binary can't execute (missing system libs, wrong
-    // architecture, or the binary simply wasn't packaged for thi platform).
     child.on('error', (err: Error) => {
       const diagnostic = diagnoseSpawnFailure(spawnCmd, err);
       const enriched = new Error(
         `Failed to spawn agent process '${spawnCmd}': ${err.message}. ` +
-        `This usually means the runner binary is missing, not executable, ` +
-        `or has missing shared libraries on this system.${diagnostic}`,
+        `This usually means the runner is missing or not executable on this system.${diagnostic}`,
       );
       if (!readySettled) {
         readySettled = true;
@@ -287,7 +284,7 @@ export class AgentClient implements IAgentClient {
    *
    * On POSIX (Linux/macOS): sends SIGTERM to the process group (negative
    * PID), then escalates to SIGKILL after a 1s grace period. This catches
-   * subagents spawned by the omp engine that would otherwise survive.
+   * any descendants the engine spawned that would otherwise survive.
    *
    * On Windows: uses `taskkill /F /T /PID` which recursively terminates
    * all child processes. Windows has no process groups in the POSIX sense,
@@ -450,19 +447,10 @@ export class AgentClient implements IAgentClient {
   /**
    * Regenerate the last assistant response.
    *
-   * The runner branches the engine session back to the latest user message
-   * (which forks the engine session file — the omp session id changes) and
-   * re-prompts with that message. The response frame arrives right after the
-   * branch and carries the post-branch ompSessionId so the host can
-   * re-persist it; the regenerated turn itself streams back via the normal
-   * event channel.
+   * 分支语义由各引擎子类实现（如 PiAgentClient 分支到最后一条 user
+   * message 之前并返回新的 engineSessionId）；基类不提供默认实现。
    */
-  async regenerate(): Promise<AgentRegenerateResult> {
-    const response = await this.send({ type: 'regenerate' }, 60_000);
-    const data = this.getData<{ ompSessionId: string }>(response);
-    // Map the runner's omp-native `ompSessionId` onto the engine-neutral name.
-    return { engineSessionId: data.ompSessionId };
-  }
+  abstract regenerate(): Promise<AgentRegenerateResult>;
 
   /**
    * Abort the current agent turn.
@@ -529,8 +517,8 @@ export class AgentClient implements IAgentClient {
   }
 
   /**
-   * 当前生效的系统提示词（issue 06）。旧 runner（omp）不认识该命令会返回
-   * 失败响应 —— 这里优雅降级为 null，调用方（设置/会话 UI）无需感知引擎差异。
+   * 当前生效的系统提示词（issue 06）。引擎未实现该命令时返回失败响应 ——
+   * 这里优雅降级为 null，调用方（设置/会话 UI）无需感知引擎差异。
    */
   async getSystemPrompt(): Promise<string | null> {
     try {

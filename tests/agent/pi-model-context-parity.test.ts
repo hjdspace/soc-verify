@@ -2,7 +2,7 @@
  * host 侧模型/上下文 parity 契约（issue 06）。
  *
  * - AgentClient.getSystemPrompt：pi runner 返回生效系统提示词；
- *   引擎不支持（omp runner 失败响应）时优雅降级为 null，
+ *   runner 对未知命令返回失败响应时优雅降级为 null，
  *   UI 可以无差别调用。
  * - ContextUsage.approximate：shared 类型带近似标记（pi 原生值为
  *   false，runner 估算值为 true），renderer 据此展示。
@@ -26,7 +26,6 @@ vi.mock('node:child_process', async (importOriginal) => {
 });
 
 const { PiAgentClient } = await import('../../src/main/agent/pi-agent-client');
-const { AgentClient } = await import('../../src/main/agent/agent-client');
 
 // ─── Fake runner 子进程 ─────────────────────────────────
 
@@ -78,14 +77,6 @@ async function startPiClient(): Promise<InstanceType<typeof PiAgentClient>> {
   return client;
 }
 
-async function startOmpClient(): Promise<InstanceType<typeof AgentClient>> {
-  const client = new AgentClient({ runnerBinaryPath: 'C:/fake/socverify-runner.exe', cwd: tmpdir() });
-  const startPromise = client.start();
-  fromRunner({ type: 'ready' });
-  await startPromise;
-  return client;
-}
-
 beforeEach(() => {
   currentChild = makeFakeChild();
   h.spawnImpl = () => currentChild;
@@ -113,8 +104,8 @@ describe('AgentClient.getSystemPrompt', () => {
     client.stop();
   });
 
-  it('引擎不支持时（runner 失败响应）优雅返回 null', async () => {
-    const client = await startOmpClient();
+  it('runner 对未知命令返回失败响应时优雅返回 null', async () => {
+    const client = await startPiClient();
     const promise = client.getSystemPrompt();
     fromRunner({ id: 'req_1', type: 'response', success: false, error: 'Unknown command type: getSystemPrompt' });
 

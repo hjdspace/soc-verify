@@ -11,7 +11,7 @@
  *     （mcp-server）独立于审批模式 —— yolo 只放宽单次审批，不跳过信任。
  */
 
-import { needsApproval, type ApprovalMode } from "./approval-logic";
+import { needsApproval, type ApprovalMode } from "./approval-logic.ts";
 import type { McpConfigIgnore, McpConfigResolution, McpServerEntry } from "./mcp-config";
 import type { TrustKind } from "./protocol";
 

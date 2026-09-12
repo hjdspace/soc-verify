@@ -4,10 +4,12 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { sessionManager } from '../../src/main/agent/session-manager';
-import { resolveAgentRuntime } from '../../src/main/agent/paths';
+import { resolvePiRunnerScript } from '../../src/main/agent/paths';
 
-const runtime = resolveAgentRuntime();
-const itWithRuntime = runtime ? it : it.skip;
+// issue 10：omp runtime 解析已移除 —— 该集成测试需要真实 pi runner 脚本
+// （仓库内始终存在），仅在脚本缺失（异常环境）时跳过。
+const piRunnerAvailable = resolvePiRunnerScript() !== null;
+const itWithPiRunner = piRunnerAvailable ? it : it.skip;
 
 describe('OpenAI-compatible Agent session', () => {
   let server: Server | undefined;
@@ -23,7 +25,7 @@ describe('OpenAI-compatible Agent session', () => {
     homeDir = undefined;
   });
 
-  itWithRuntime('uses chat/completions instead of the Responses API', async () => {
+  itWithPiRunner('uses chat/completions instead of the Responses API', async () => {
     const requestPaths: string[] = [];
     const requestBodies: Array<Record<string, unknown>> = [];
 

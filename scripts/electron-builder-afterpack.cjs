@@ -57,7 +57,6 @@ module.exports = async function afterPack(context) {
         try { chmodSync(p, 0o755); } catch { /* best effort */ }
       }
     };
-    chmodIf(join(linuxBinaries, 'socverify-runner'));
     // yosys Linux 布局：wrapper + 自带 glibc loader + libexec 真身（bash loader
     // 脚本缺执行位 → 127；loader 缺执行位 → Permission denied，都不容丢失）
     chmodIf(join(linuxBinaries, 'yosys', 'bin', 'yosys'));

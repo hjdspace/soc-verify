@@ -193,20 +193,6 @@ export async function updateSessionEngineId(
 }
 
 /**
- * Update the omp engine's session id on a persisted session.
- *
- * @deprecated Use `updateSessionEngineId` — kept so existing callers keep
- * working while they migrate to the engine-neutral naming.
- */
-export async function updateSessionOmpId(
-  projectRoot: string,
-  sessionId: string,
-  ompSessionId: string,
-): Promise<void> {
-  return updateSessionEngineId(projectRoot, sessionId, 'omp', ompSessionId);
-}
-
-/**
  * Update the lastActivityAt timestamp on a persisted session.
  * Called when the user sends a message so the history list stays sorted by recency.
  */

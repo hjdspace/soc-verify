@@ -2,22 +2,14 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import type { AskAnswer } from '@shared/ask-types';
 
 // ─── Mock path resolvers and heavy dependencies ────────────────────
-// createSession() calls resolveAgentRuntime(), which checks for the
-// runner binary or Bun + engine submodule. In the test environment these
-// are not available, so we mock the resolver to return a fake runtime.
+// issue 10：omp runtime 解析器已删除 —— paths 模块只导出 pi runner 解析。
+// 这里刻意不提供 resolveAgentRuntime 等旧导出：若 session-manager 重新
+// 引用它们，mock 会以 undefined 暴露问题。
 
 vi.mock('../../src/main/agent/paths', () => ({
-  resolveAgentRuntime: vi.fn(() => ({
-    mode: 'binary' as const,
-    runnerPath: '/fake/runner',
-    bunVersionOk: true,
-  })),
   resolvePiRunnerScript: vi.fn(() => '/fake/pi-runner/index.ts'),
-  resolveRunnerBinary: vi.fn(() => '/fake/runner'),
-  resolveRunnerScript: vi.fn(() => null),
-  resolveBunPath: vi.fn(() => null),
+  resolvePiSessionScanScript: vi.fn(() => '/fake/pi-runner/session-scan.ts'),
   resolveBuiltInExtensionDir: vi.fn(() => null),
-  checkBunVersion: vi.fn(() => ({ ok: true, version: '1.3.14', required: '1.3.14' })),
 }));
 
 vi.mock('../../src/main/agent/officecli-paths', () => ({
@@ -38,7 +30,7 @@ vi.mock('../../src/main/agent/context-settings', () => ({
   },
 }));
 
-// Mock AgentClient — it would otherwise spawn a child process
+// Mock PiAgentClient — it would otherwise spawn a child process
 const { MockAgentClient } = vi.hoisted(() => {
   const { EventEmitter } = require('node:events') as typeof import('node:events');
 
@@ -90,9 +82,8 @@ const { MockAgentClient } = vi.hoisted(() => {
   return { MockAgentClient };
 });
 
-vi.mock('../../src/main/agent/agent-client', () => ({
-  AgentClient: MockAgentClient,
-  ToolCallHandler: {},
+vi.mock('../../src/main/agent/pi-agent-client', () => ({
+  PiAgentClient: MockAgentClient,
 }));
 
 // Mock HostToolsRegistry and HostUriRouter (they do real file system operations)
@@ -794,7 +785,6 @@ describe('SessionManager — pi engine agentDir decoupling (issue 07)', () => {
       apiKey: 'sk-pi',
       baseUrl: 'http://llm.local/v1',
       enableMCP: false,
-      engine: 'pi',
     });
     const client = manager.getClient(id) as unknown as InstanceType<typeof MockAgentClient>;
     return { id, client };
@@ -812,22 +802,5 @@ describe('SessionManager — pi engine agentDir decoupling (issue 07)', () => {
     const initConfig = client.lastInitConfig as { modelsPath?: string };
     expect(initConfig.modelsPath).toBeDefined();
     expect(initConfig.modelsPath).toContain('models.json');
-  });
-
-  it('omp 会话保持 PI_CODING_AGENT_DIR = runtimeDir（行为不变）', async () => {
-    const id = await manager.createSession({
-      projectId: 'proj_omp',
-      cwd: '/tmp/test-omp',
-      provider: 'test-provider',
-      model: 'test-model',
-      apiKey: 'test-key',
-      baseUrl: 'http://localhost:1234/v1',
-      enableMCP: false,
-    });
-    const client = manager.getClient(id) as unknown as InstanceType<typeof MockAgentClient>;
-
-    expect(client.capturedEnv?.PI_CODING_AGENT_DIR).toBeDefined();
-    const initConfig = client.lastInitConfig as { modelsPath?: string };
-    expect(initConfig.modelsPath).toBeUndefined();
   });
 });

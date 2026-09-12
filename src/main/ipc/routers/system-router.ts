@@ -5,7 +5,7 @@
 import { shell } from 'electron';
 import { join } from 'node:path';
 import { t } from '../router-context';
-import { resolveAgentRuntime, resolveRunnerBinary, resolveRunnerScript, resolveBunPath } from '../../agent/paths';
+import { resolvePiRunnerScript } from '../../agent/paths';
 import { listNerdFontFaces, resolveNerdFontsDir } from '../../fonts/nerd-font-paths';
 import { toLocalResourceUrl } from '../../local-resource-protocol';
 
@@ -18,17 +18,13 @@ export const versionProcedure = t.procedure.query(() => ({
 }));
 
 export const systemRouter = t.router({
+  // issue 10：AI 引擎固定为 pi —— 状态只描述 pi runner 脚本可用性，
+  // 不再有 binary/Bun 双模式与 omp 运行时解析。
   resolveAgent: t.procedure.query(() => {
-    const runtime = resolveAgentRuntime();
+    const runnerPath = resolvePiRunnerScript();
     return {
-      available: runtime !== null,
-      mode: runtime?.mode ?? null,
-      runnerBinaryPath: resolveRunnerBinary(),
-      runnerScriptPath: resolveRunnerScript(),
-      bunPath: resolveBunPath(),
-      runnerPath: runtime?.runnerPath ?? null,
-      bunVersion: runtime?.bunVersion ?? null,
-      bunVersionOk: runtime?.bunVersionOk ?? false,
+      available: runnerPath !== null,
+      runnerPath,
     };
   }),
   // Nerd Font 可用字体列表（Issue #1）。

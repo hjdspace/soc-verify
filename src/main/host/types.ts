@@ -257,31 +257,6 @@ export interface RpcSessionState {
   contextUsage?: unknown;
 }
 
-// ─── AgentClient 配置 ─────────────────────────────────────────
-
-export interface AgentClientOptions {
-  /** Bun 可执行文件路径 */
-  bunPath?: string;
-  /** runner 脚本路径（如 engine/oh-my-pi/packages/coding-agent/src/socverify-runner.ts） */
-  runnerPath?: string;
-  /** 工作目录（项目目录） */
-  cwd: string;
-  /** 环境变量 */
-  env?: Record<string, string>;
-  /** LLM provider */
-  provider?: string;
-  /** LLM model ID */
-  model?: string;
-  /** API key for the LLM provider */
-  apiKey?: string;
-  /** 会话存储目录 */
-  sessionDir?: string;
-  /** 额外 CLI 参数 */
-  extraArgs?: string[];
-  /** 就绪超时（ms，默认 30000） */
-  readyTimeoutMs?: number;
-}
-
 // ─── 事件回调 ───────────────────────────────────────────────
 
 export type AgentEventListener = (event: unknown) => void;

@@ -1,6 +1,6 @@
 /**
  * Agent Event Contract — engine-neutral definitions for the event stream an
- * agent engine (omp today, pi tomorrow) emits into the SoC Verify host.
+ * agent engine emits into the SoC Verify host.
  *
  * This module is the single source of truth for:
  *   1. `AgentEngine`     — identifiers of the engines a session may be bound to.
@@ -10,10 +10,8 @@
  *   3. Type guards       — runtime validation for events that cross the
  *                          process boundary as untyped JSON.
  *
- * The omp runner forwards engine events verbatim, so the omp engine's shapes
- * are the reference shapes below. A future pi runner must normalize its native
- * events to these types at the runner boundary — the host side never grows
- * engine-specific event handling.
+ * Runner-side adapters normalize engine-native events to these types at the
+ * runner boundary — the host side never grows engine-specific event handling.
  */
 
 import type { ContextBreakdown, ContextUsage } from '@shared/context-management';
@@ -22,7 +20,10 @@ import type { ContextBreakdown, ContextUsage } from '@shared/context-management'
 
 /**
  * Identifier of the agent engine backing a session.
- * 'omp' = oh-my-pi coding agent (current); 'pi' = pi coding agent (migration target).
+ *
+ * issue 10 后运行时会话固定为 'pi'；'omp' 仅作为历史数据标识保留
+ * （旧持久化记录 / Token Monitor 历史行的只读兼容与清理），不再有
+ * omp 运行时。
  */
 export type AgentEngine = 'omp' | 'pi';
 

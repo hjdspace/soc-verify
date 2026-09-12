@@ -195,14 +195,7 @@ export interface TrustResponseCommand {
 // ─── Agent Client 配置 ─────────────────────────────────────
 
 export interface AgentClientOptions {
-  /**
-   * 预编译 runner 二进制路径（binary 模式）。
-   * 设置后直接执行该二进制，不需要 Bun。
-   */
-  runnerBinaryPath?: string;
-  /** Bun 可执行文件路径（script 模式必需） */
-  bunPath?: string;
-  /** runner 脚本路径（script 模式必需） */
+  /** runner 脚本路径（如 runner-pi/index.ts） */
   runnerPath?: string;
   /**
    * Node 可执行文件路径（pi runner 脚本模式）。

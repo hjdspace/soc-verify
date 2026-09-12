@@ -11,6 +11,7 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
+    "allowImportingTsExtensions": true,
     "jsx": "react-jsx",
     "noEmit": true,
     "paths": {
@@ -31,14 +32,15 @@
     "tests/**/*"
   ],
   "exclude": [
-    // pi runner 中与 pi SDK 接线的入口（index/session/session-scan）使用 .ts
-    // 后缀导入，有独立 tsconfig.runner-pi.json（allowImportingTsExtensions），
-    // 与 node tsconfig 不兼容。纯逻辑模块（approval-logic/protocol/
-    // event-normalizer/mcp-config/extensions/mcp-runtime/thinking-level/
-    // system-prompt/message-blocks）无 .ts 后缀导入，纳入本工程，供
-    // tests/agent 下的 pi-* 测试正常引用（否则触发 TS6307）。context-usage.ts
-    // 与 session-scan.ts 因运行时（Node ESM spawn）需要 .ts 后缀导入，
-    // 同样排除在 node 工程外。
+    // pi runner 中与 pi SDK 接线的入口（index/session）走 Node 原生 ESM
+    // spawn（type-stripping），其运行时相对导入必须带 .ts 后缀
+    // （ERR_MODULE_NOT_FOUND），有独立 tsconfig.runner-pi.json。
+    // 纯逻辑模块（approval-logic/protocol/event-normalizer/mcp-config/
+    // extensions/mcp-runtime/thinking-level/system-prompt/message-blocks）
+    // 纳入本工程，供 tests/agent 下的 pi-* 测试正常引用；本工程已开启
+    // allowImportingTsExtensions（noEmit 前提满足），.ts 后缀导入合法，
+    // 与 runner-pi 工程行为一致。context-usage.ts 与 session-scan.ts
+    // 同样是 .ts 后缀导入，一并排除在 node 工程外。
     "runner-pi/index.ts",
     "runner-pi/session.ts",
     "runner-pi/context-usage.ts",
