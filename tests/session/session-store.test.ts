@@ -1422,6 +1422,145 @@ describe('SessionStore — subagent activity (subagent_* frames)', () => {
     expect(getSubagent('sa-3')?.status).toBe('failed');
     expect(getSubagent('sa-3')?.blockedReason).toContain('pi-subagents not installed');
   });
+
+  it('keeps parallel child streams and token usage isolated after tool calls', () => {
+    const store = useSessionMessagesStore.getState();
+    for (const [index, id] of ['child-0', 'child-1'].entries()) {
+      store.handleSessionEvent(sessionId, {
+        type: 'subagent_lifecycle',
+        payload: {
+          id,
+          index,
+          agent: `delegate-${index}`,
+          status: 'running',
+          parentToolCallId: 'tc_parallel',
+        },
+      });
+    }
+
+    store.handleSessionEvent(sessionId, {
+      type: 'subagent_stream',
+      payload: {
+        id: 'child-0',
+        event: { type: 'message_start', message: { role: 'assistant', content: [] } },
+      },
+    });
+    store.handleSessionEvent(sessionId, {
+      type: 'subagent_stream',
+      payload: {
+        id: 'child-0',
+        event: {
+          type: 'message_update',
+          assistantMessageEvent: { type: 'text_delta', delta: 'First child output' },
+        },
+      },
+    });
+    store.handleSessionEvent(sessionId, {
+      type: 'subagent_stream',
+      payload: {
+        id: 'child-0',
+        event: {
+          type: 'message_end',
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'First child output' }],
+            usage: { input: 120, output: 30 },
+          },
+        },
+      },
+    });
+
+    store.handleSessionEvent(sessionId, {
+      type: 'subagent_stream',
+      payload: {
+        id: 'child-1',
+        event: {
+          type: 'tool_execution_start',
+          toolCallId: 'child-tool-1',
+          toolName: 'bash',
+          args: { command: 'npm test' },
+        },
+      },
+    });
+    store.handleSessionEvent(sessionId, {
+      type: 'subagent_stream',
+      payload: {
+        id: 'child-1',
+        event: {
+          type: 'tool_execution_end',
+          toolCallId: 'child-tool-1',
+          toolName: 'bash',
+          result: { content: [{ type: 'text', text: 'passed' }] },
+          isError: false,
+        },
+      },
+    });
+    store.handleSessionEvent(sessionId, {
+      type: 'subagent_stream',
+      payload: {
+        id: 'child-1',
+        event: { type: 'message_start', message: { role: 'assistant', content: [] } },
+      },
+    });
+    store.handleSessionEvent(sessionId, {
+      type: 'subagent_stream',
+      payload: {
+        id: 'child-1',
+        event: {
+          type: 'message_update',
+          assistantMessageEvent: { type: 'text_delta', delta: 'LLM output after tool' },
+        },
+      },
+    });
+    store.handleSessionEvent(sessionId, {
+      type: 'subagent_stream',
+      payload: {
+        id: 'child-1',
+        event: {
+          type: 'message_end',
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'LLM output after tool' }],
+            usage: { input: 200, output: 50 },
+          },
+        },
+      },
+    });
+
+    expect(getSubagent('child-0')?.messages?.map((message) => message.content)).toEqual([
+      'First child output',
+    ]);
+    expect(getSubagent('child-0')?.tokens).toBe(150);
+    expect(getSubagent('child-1')?.messages?.map((message) => [message.role, message.content])).toEqual([
+      ['tool', ''],
+      ['assistant', 'LLM output after tool'],
+    ]);
+    expect(getSubagent('child-1')?.tokens).toBe(250);
+
+    store.handleSessionEvent(sessionId, {
+      type: 'subagent_progress',
+      payload: {
+        id: 'child-1',
+        progress: { tokens: 0, toolCount: 0, requests: 0 },
+      },
+    });
+    expect(getSubagent('child-1')?.tokens).toBe(250);
+    expect(getSubagent('child-1')?.toolCount).toBe(1);
+    expect(getSubagent('child-1')?.requests).toBe(1);
+
+    store.handleSessionEvent(sessionId, {
+      type: 'subagent_lifecycle',
+      payload: {
+        id: 'different-run-id:1',
+        index: 1,
+        agent: 'delegate-1',
+        status: 'completed',
+        parentToolCallId: 'tc_parallel',
+      },
+    });
+    expect(getSubagent('child-1')?.status).toBe('completed');
+    expect(getSubagent('different-run-id:1')).toBeUndefined();
+  });
 });
 
 describe('SessionStore — MCP mount notice suppression', () => {

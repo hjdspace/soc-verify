@@ -38,7 +38,17 @@ let subagentModuleError: Error | null = null;
 // child-session seam（子会话模型继承修复）mock
 const setChildSessionFactory = vi.fn();
 const setChildSessionFactoryModule = vi.fn();
-const createDefaultChildSessionFactory = vi.fn(() => ({ __fakeFactory: true }));
+let childEventListener: ((event: unknown) => void) | undefined;
+const baseChildFactory = {
+  create: vi.fn(async () => ({
+    subscribe: (listener: (event: unknown) => void) => {
+      childEventListener = listener;
+      return vi.fn();
+    },
+  })),
+  dispose: vi.fn(async () => undefined),
+};
+const createDefaultChildSessionFactory = vi.fn(() => baseChildFactory);
 let seamModuleError: Error | null = null;
 
 // esmResolve mock 必须返回平台合法的绝对路径 file URL（fileURLToPath 会校验）
@@ -147,6 +157,9 @@ beforeEach(() => {
   setChildSessionFactory.mockClear();
   setChildSessionFactoryModule.mockClear();
   createDefaultChildSessionFactory.mockClear();
+  baseChildFactory.create.mockClear();
+  baseChildFactory.dispose.mockClear();
+  childEventListener = undefined;
   piModelRuntimeCreate.mockClear();
   piModelRuntimeSetRuntimeApiKey.mockClear();
   subagentModuleError = null;
@@ -346,6 +359,52 @@ describe('handleInit 子会话模型继承装配', () => {
 });
 
 describe('handleInit pi-subagents UI 事件关联', () => {
+  it('订阅前台 child session，并按并行 index 转发结构化消息增量', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'socverify-subagent-stream-'));
+    const ctx = makeCtx();
+    await handleInit({ id: 'req_ui_stream', type: 'init', config: { cwd: '/p', modelsPath: join(dir, 'models.json') } }, ctx);
+
+    const bridge = (lastLoader().extensionFactories as Array<{
+      name: string;
+      factory: (pi: unknown) => void;
+    }>).find((factory) => factory.name === 'socverify-subagent-bridge');
+    const piHandlers = new Map<string, (event: Record<string, unknown>) => void>();
+    bridge?.factory({
+      events: { emit: vi.fn(), on: vi.fn(() => vi.fn()) },
+      on: (event: string, handler: (payload: Record<string, unknown>) => void) => {
+        piHandlers.set(event, handler);
+      },
+    });
+    piHandlers.get('tool_execution_start')?.({
+      toolCallId: 'call_parallel',
+      toolName: 'subagent',
+      args: { tasks: [{ agent: 'scout' }, { agent: 'reviewer' }] },
+    });
+
+    const installedFactory = setChildSessionFactory.mock.calls.at(-1)?.[0] as {
+      create: (launch: unknown) => Promise<unknown>;
+    };
+    await installedFactory.create({ runtime: { runId: 'run-parallel', agent: 'reviewer', childIndex: 1 } });
+    childEventListener?.({
+      type: 'message_update',
+      assistantMessageEvent: { type: 'text_delta', delta: 'reviewing' },
+    });
+
+    expect(sendEvent).toHaveBeenCalledWith({
+      type: 'subagent_stream',
+      payload: expect.objectContaining({
+        id: 'call_parallel:1',
+        index: 1,
+        agent: 'reviewer',
+        parentToolCallId: 'call_parallel',
+        event: {
+          type: 'message_update',
+          assistantMessageEvent: { type: 'text_delta', delta: 'reviewing' },
+        },
+      }),
+    });
+  });
+
   it('把 async run 关联到触发它的 subagent 工具调用', async () => {
     const ctx = makeCtx();
     await handleInit({ id: 'req_ui', type: 'init', config: { cwd: '/p' } }, ctx);
@@ -417,6 +476,14 @@ describe('handleInit pi-subagents UI 事件关联', () => {
 
     try {
       await writeStatus(120, ['Inspecting package.json']);
+      await writeFile(join(asyncDir, 'events.jsonl'), `${JSON.stringify({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', delta: 'Inspecting package.json' },
+        subagentSource: 'child',
+        subagentRunId: 'run-pi-live',
+        subagentStepIndex: 0,
+        subagentAgent: 'scout',
+      })}\n`, 'utf8');
       const ctx = makeCtx();
       await handleInit({ id: 'req_ui_live', type: 'init', config: { cwd: '/p' } }, ctx);
 
@@ -460,6 +527,19 @@ describe('handleInit pi-subagents UI 事件关联', () => {
             tokens: 120,
             recentOutput: ['Inspecting package.json'],
           }),
+        }),
+      });
+      expect(sendEvent).toHaveBeenCalledWith({
+        type: 'subagent_stream',
+        payload: expect.objectContaining({
+          id: 'run-pi-live',
+          index: 0,
+          agent: 'scout',
+          parentToolCallId: 'call_pi_subagent_live',
+          event: {
+            type: 'message_update',
+            assistantMessageEvent: { type: 'text_delta', delta: 'Inspecting package.json' },
+          },
         }),
       });
 

@@ -82,6 +82,225 @@ function extractTextFromMessage(message: unknown): ExtractedContent {
   return { text: textParts.join('\n'), thinking: thinkingParts.join('\n') };
 }
 
+function subagentUsageTokens(message: Record<string, unknown>): number {
+  const usage = typeof message.usage === 'object' && message.usage !== null
+    ? message.usage as Record<string, unknown>
+    : undefined;
+  if (!usage) return 0;
+  const input = typeof usage.input === 'number'
+    ? usage.input
+    : typeof usage.inputTokens === 'number' ? usage.inputTokens : 0;
+  const output = typeof usage.output === 'number'
+    ? usage.output
+    : typeof usage.outputTokens === 'number' ? usage.outputTokens : 0;
+  return input + output;
+}
+
+function emptySubagent(id: string, payload: Record<string, unknown>): SubagentActivity {
+  return {
+    id,
+    index: typeof payload.index === 'number' ? payload.index : 0,
+    agent: typeof payload.agent === 'string' ? payload.agent : 'subagent',
+    status: 'running',
+    parentToolCallId: typeof payload.parentToolCallId === 'string' ? payload.parentToolCallId : undefined,
+    parentSessionId: typeof payload.parentSessionId === 'string' ? payload.parentSessionId : undefined,
+    recentOutput: [],
+    messages: [],
+    toolCount: 0,
+    tokens: 0,
+    requests: 0,
+    tokenHistory: [],
+    startedAt: Date.now(),
+  };
+}
+
+function updateSubagentStream(
+  previous: SubagentActivity,
+  event: Record<string, unknown>,
+): SubagentActivity {
+  let messages = previous.messages ?? [];
+  let currentTool = previous.currentTool;
+  let currentToolArgs = previous.currentToolArgs;
+  let toolCount = previous.toolCount;
+  let streamTokens = previous.streamTokens ?? 0;
+  let streamRequests = previous.streamRequests ?? 0;
+
+  switch (event.type) {
+    case 'agent_start':
+      return { ...previous, status: 'running' };
+
+    case 'agent_end':
+      return {
+        ...previous,
+        messages: messages.map((message) => message.isStreaming
+          ? { ...message, isStreaming: false }
+          : message),
+      };
+
+    case 'message_start': {
+      const message = event.message as Record<string, unknown> | undefined;
+      const initial = extractTextFromMessage(message);
+      const activeIndex = messages.findLastIndex((item) => item.role === 'assistant' && item.isStreaming);
+      if (activeIndex >= 0) {
+        messages = messages.map((item, index) => index === activeIndex
+          ? {
+            ...item,
+            content: initial.text || item.content,
+            thinking: initial.thinking || item.thinking,
+          }
+          : item);
+      } else {
+        messages = [...messages, {
+          id: `${previous.id}:assistant:${messages.length}`,
+          role: 'assistant',
+          content: initial.text,
+          thinking: initial.thinking || undefined,
+          timestamp: Date.now(),
+          isStreaming: true,
+        }];
+      }
+      break;
+    }
+
+    case 'message_update': {
+      const update = typeof event.assistantMessageEvent === 'object' && event.assistantMessageEvent !== null
+        ? event.assistantMessageEvent as Record<string, unknown>
+        : undefined;
+      const delta = typeof update?.delta === 'string' ? update.delta : '';
+      if (!delta) break;
+      let activeIndex = messages.findLastIndex((item) => item.role === 'assistant' && item.isStreaming);
+      if (activeIndex < 0) {
+        messages = [...messages, {
+          id: `${previous.id}:assistant:${messages.length}`,
+          role: 'assistant',
+          content: '',
+          timestamp: Date.now(),
+          isStreaming: true,
+        }];
+        activeIndex = messages.length - 1;
+      }
+      messages = messages.map((item, index) => {
+        if (index !== activeIndex) return item;
+        return update?.type === 'thinking_delta'
+          ? { ...item, thinking: `${item.thinking ?? ''}${delta}` }
+          : update?.type === 'text_delta'
+            ? { ...item, content: `${item.content}${delta}` }
+            : item;
+      });
+      break;
+    }
+
+    case 'message_end': {
+      const message = event.message as Record<string, unknown> | undefined;
+      const final = extractTextFromMessage(message);
+      const activeIndex = messages.findLastIndex((item) => item.role === 'assistant' && item.isStreaming);
+      if (activeIndex >= 0) {
+        messages = messages.flatMap((item, index) => {
+          if (index !== activeIndex) return [item];
+          const completed = {
+            ...item,
+            content: final.text || item.content,
+            thinking: final.thinking || item.thinking,
+            isStreaming: false,
+          };
+          return completed.content || completed.thinking ? [completed] : [];
+        });
+      } else if (final.text || final.thinking) {
+        messages = [...messages, {
+          id: `${previous.id}:assistant:${messages.length}`,
+          role: 'assistant',
+          content: final.text,
+          thinking: final.thinking || undefined,
+          timestamp: Date.now(),
+          isStreaming: false,
+        }];
+      }
+      if (message) {
+        const usageTokens = subagentUsageTokens(message);
+        if (usageTokens > 0) streamTokens += usageTokens;
+        streamRequests += 1;
+      }
+      break;
+    }
+
+    case 'tool_execution_start': {
+      const toolCallId = typeof event.toolCallId === 'string'
+        ? event.toolCallId
+        : `${previous.id}:tool:${messages.length}`;
+      currentTool = typeof event.toolName === 'string' ? event.toolName : 'tool';
+      currentToolArgs = event.args === undefined ? undefined : JSON.stringify(event.args);
+      if (!messages.some((item) => item.role === 'tool' && item.toolCallId === toolCallId)) {
+        messages = [...messages, {
+          id: `tool_${toolCallId}`,
+          role: 'tool',
+          content: '',
+          timestamp: Date.now(),
+          toolName: currentTool,
+          toolCallId,
+          toolArgs: event.args,
+          toolStartTime: Date.now(),
+        }];
+        toolCount += 1;
+      }
+      break;
+    }
+
+    case 'tool_execution_update':
+      currentTool = typeof event.toolName === 'string' ? event.toolName : currentTool;
+      break;
+
+    case 'tool_execution_end': {
+      const toolCallId = typeof event.toolCallId === 'string' ? event.toolCallId : undefined;
+      const toolName = typeof event.toolName === 'string' ? event.toolName : currentTool ?? 'tool';
+      const result = event.isError === true && typeof event.result === 'object' && event.result !== null
+        ? { ...(event.result as Record<string, unknown>), isError: true }
+        : event.result;
+      const match = messages.findIndex((item) => item.role === 'tool'
+        && (toolCallId ? item.toolCallId === toolCallId : item.toolName === toolName)
+        && !item.toolResult);
+      if (match >= 0) {
+        messages = messages.map((item, index) => index === match
+          ? { ...item, toolResult: result, toolEndTime: Date.now() }
+          : item);
+      } else {
+        const fallbackId = toolCallId ?? `${previous.id}:tool:${messages.length}`;
+        messages = [...messages, {
+          id: `tool_${fallbackId}`,
+          role: 'tool',
+          content: '',
+          timestamp: Date.now(),
+          toolName,
+          toolCallId: fallbackId,
+          toolResult: result,
+          toolStartTime: Date.now(),
+          toolEndTime: Date.now(),
+        }];
+        toolCount += 1;
+      }
+      currentTool = undefined;
+      currentToolArgs = undefined;
+      break;
+    }
+  }
+
+  const tokens = Math.max(previous.tokens, streamTokens);
+  const delta = Math.max(0, tokens - previous.tokens);
+  return {
+    ...previous,
+    messages,
+    currentTool,
+    currentToolArgs,
+    toolCount: Math.max(previous.toolCount, toolCount),
+    tokens,
+    streamTokens,
+    requests: Math.max(previous.requests, streamRequests),
+    streamRequests,
+    tokenHistory: delta > 0
+      ? [...previous.tokenHistory, delta].slice(-16)
+      : previous.tokenHistory,
+  };
+}
+
 interface PendingToolCall {
   id: string;
   name: string;
@@ -924,9 +1143,15 @@ export const useSessionMessagesStore = create<SessionMessagesState>(() => ({
         switch (type) {
           case 'subagent_lifecycle': {
             const p = evt.payload as Record<string, unknown> | undefined;
-            const id = typeof p?.id === 'string' ? p.id : '';
-            console.log(`[store] subagent_lifecycle id=${id} status=${p?.status} parentToolCallId=${p?.parentToolCallId}`);
-            if (!p || !id) return sess;
+            const eventId = typeof p?.id === 'string' ? p.id : '';
+            console.log(`[store] subagent_lifecycle id=${eventId} status=${p?.status} parentToolCallId=${p?.parentToolCallId}`);
+            if (!p || !eventId) return sess;
+            const matchedId = Object.entries(sess.subagents ?? {}).find(([, activity]) =>
+              activity.parentToolCallId === p.parentToolCallId
+              && activity.index === p.index
+              && activity.agent === p.agent,
+            )?.[0];
+            const id = sess.subagents?.[eventId] ? eventId : (matchedId ?? eventId);
             const rawStatus = p.status;
             const status: SubagentActivity['status'] =
               rawStatus === 'completed' || rawStatus === 'failed' || rawStatus === 'aborted'
@@ -946,9 +1171,12 @@ export const useSessionMessagesStore = create<SessionMessagesState>(() => ({
               currentToolArgs: status === 'running' ? prev?.currentToolArgs : undefined,
               lastIntent: prev?.lastIntent,
               recentOutput: prev?.recentOutput ?? [],
+              messages: prev?.messages,
               toolCount: prev?.toolCount ?? 0,
               tokens: prev?.tokens ?? 0,
+              streamTokens: prev?.streamTokens,
               requests: prev?.requests ?? 0,
+              streamRequests: prev?.streamRequests,
               tokenHistory: prev?.tokenHistory ?? [],
               startedAt: prev?.startedAt ?? Date.now(),
               endedAt: status !== 'running' ? Date.now() : undefined,
@@ -976,7 +1204,10 @@ export const useSessionMessagesStore = create<SessionMessagesState>(() => ({
             if (!p || !id) return sess;
             const prev = sess.subagents?.[id];
             if (prev && prev.status !== 'running') return sess;
-            const tokens = typeof prog?.tokens === 'number' ? prog.tokens : (prev?.tokens ?? 0);
+            const tokens = Math.max(
+              prev?.tokens ?? 0,
+              typeof prog?.tokens === 'number' ? prog.tokens : 0,
+            );
             const delta = prev ? Math.max(0, tokens - prev.tokens) : tokens;
             const tokenHistory = [...(prev?.tokenHistory ?? []), delta].slice(-16);
             const rawWindow = Array.isArray(prog?.recentOutput)
@@ -999,12 +1230,35 @@ export const useSessionMessagesStore = create<SessionMessagesState>(() => ({
                 typeof prog?.currentToolArgs === 'string' ? prog.currentToolArgs : prev?.currentToolArgs,
               lastIntent: typeof prog?.lastIntent === 'string' ? prog.lastIntent : prev?.lastIntent,
               recentOutput,
-              toolCount: typeof prog?.toolCount === 'number' ? prog.toolCount : (prev?.toolCount ?? 0),
+              messages: prev?.messages,
+              toolCount: Math.max(prev?.toolCount ?? 0, typeof prog?.toolCount === 'number' ? prog.toolCount : 0),
               tokens,
-              requests: typeof prog?.requests === 'number' ? prog.requests : (prev?.requests ?? 0),
+              streamTokens: prev?.streamTokens,
+              requests: Math.max(prev?.requests ?? 0, typeof prog?.requests === 'number' ? prog.requests : 0),
+              streamRequests: prev?.streamRequests,
               tokenHistory,
               startedAt: prev?.startedAt ?? Date.now(),
             };
+            return { ...sess, subagents: { ...sess.subagents, [id]: next } };
+          }
+
+          case 'subagent_stream': {
+            const p = evt.payload as Record<string, unknown> | undefined;
+            const id = typeof p?.id === 'string' ? p.id : '';
+            const childEvent = p?.event as Record<string, unknown> | undefined;
+            if (!p || !id || !childEvent || typeof childEvent.type !== 'string') return sess;
+            const previous = sess.subagents?.[id] ?? emptySubagent(id, p);
+            const next = updateSubagentStream({
+              ...previous,
+              index: typeof p.index === 'number' ? p.index : previous.index,
+              agent: typeof p.agent === 'string' ? p.agent : previous.agent,
+              parentToolCallId: typeof p.parentToolCallId === 'string'
+                ? p.parentToolCallId
+                : previous.parentToolCallId,
+              parentSessionId: typeof p.parentSessionId === 'string'
+                ? p.parentSessionId
+                : previous.parentSessionId,
+            }, childEvent);
             return { ...sess, subagents: { ...sess.subagents, [id]: next } };
           }
 

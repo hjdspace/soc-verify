@@ -10,6 +10,7 @@ import {
   buildRpcStopRequest,
   extractSubagentUsage,
   mapTerminalStatus,
+  normalizeChildStreamFrame,
   normalizeForegroundProgressFrames,
   normalizeSubagentFrame,
   RPC_REPLY_CHANNEL_PREFIX,
@@ -437,7 +438,7 @@ describe('normalizeForegroundProgressFrames', () => {
     expect(normalizeForegroundProgressFrames('tc', [], { parentSessionId: 'p' })).toEqual([]);
   });
 
-  it('非对象条目跳过；缺 turnCount 时 requests 兜底 0', () => {
+  it('非对象条目跳过；缺 turnCount 时不发送会覆盖旧值的 requests', () => {
     const frames = normalizeForegroundProgressFrames(
       'tc_sub_4',
       ['not-an-object', null, { tokens: 7 }],
@@ -445,6 +446,44 @@ describe('normalizeForegroundProgressFrames', () => {
     );
     expect(frames).toHaveLength(1);
     const payload = (frames[0] as { payload: Record<string, unknown> }).payload;
-    expect(payload.progress).toMatchObject({ tokens: 7, requests: 0 });
+    expect(payload.progress).toMatchObject({ tokens: 7 });
+    expect(payload.progress).not.toHaveProperty('requests');
+  });
+});
+
+describe('normalizeChildStreamFrame', () => {
+  it('projects assistant deltas and tool lifecycle events into an isolated child stream', () => {
+    expect(normalizeChildStreamFrame(
+      'call-1:1',
+      {
+        type: 'message_update',
+        message: { private: 'partial snapshot must not cross the boundary' },
+        assistantMessageEvent: { type: 'thinking_delta', delta: 'checking', partial: {} },
+      },
+      { parentSessionId: 'parent-1', parentToolCallId: 'call-1', index: 1, agent: 'reviewer' },
+    )).toEqual([{
+      type: 'subagent_stream',
+      payload: {
+        id: 'call-1:1',
+        index: 1,
+        agent: 'reviewer',
+        parentSessionId: 'parent-1',
+        parentToolCallId: 'call-1',
+        event: {
+          type: 'message_update',
+          assistantMessageEvent: { type: 'thinking_delta', delta: 'checking' },
+        },
+      },
+    }]);
+  });
+
+  it('drops non-assistant messages and private child events', () => {
+    expect(normalizeChildStreamFrame('child', {
+      type: 'message_end',
+      message: { role: 'toolResult', content: [] },
+    }, { parentSessionId: 'parent' })).toEqual([]);
+    expect(normalizeChildStreamFrame('child', {
+      type: 'agent_settled',
+    }, { parentSessionId: 'parent' })).toEqual([]);
   });
 });

@@ -600,6 +600,45 @@ describe('ToolCard pi-subagents rendering', () => {
     expect(log.textContent).toContain('Analyzing coverage...');
     expect(log.textContent).toContain('Found 3 gaps');
   });
+
+  it('renders the child assistant stream and tool cards with the main chat components', () => {
+    setStoreSubagents({
+      'sa-1': agent({
+        id: 'sa-1',
+        parentToolCallId: 'tc_subagent_1',
+        agent: 'reviewer',
+        status: 'running',
+        messages: [
+          {
+            id: 'tool-child-1',
+            role: 'tool',
+            content: '',
+            timestamp: Date.now(),
+            toolName: 'bash',
+            toolCallId: 'child-1',
+            toolArgs: { command: 'npm test' },
+            toolResult: { content: [{ type: 'text', text: 'passed' }] },
+          },
+          {
+            id: 'assistant-child-1',
+            role: 'assistant',
+            content: 'Streaming analysis after the tool call',
+            thinking: 'Checking the result',
+            timestamp: Date.now(),
+            isStreaming: true,
+          },
+        ],
+      }),
+    });
+
+    render(<ToolCard message={subagentMessage()} />);
+    fireEvent.click(screen.getByTitle('展开'));
+    fireEvent.click(screen.getByTestId('subagent-tile-sa-1'));
+
+    expect(screen.getByTestId('subagent-transcript')).toHaveTextContent('Streaming analysis after the tool call');
+    expect(screen.getByText('Checking the result')).toBeInTheDocument();
+    expect(screen.getByTestId('subagent-transcript').querySelector('[data-testid="tool-card"]')).not.toBeNull();
+  });
 });
 
 describe('ToolCard pi-subagents native results', () => {

@@ -51,8 +51,8 @@ describe('AGENT_EVENT_TYPES', () => {
     }
   });
 
-  it('covers subagent lifecycle and progress', () => {
-    for (const t of ['subagent_lifecycle', 'subagent_progress']) {
+  it('covers subagent lifecycle, progress, and child stream', () => {
+    for (const t of ['subagent_lifecycle', 'subagent_progress', 'subagent_stream']) {
       expect(AGENT_EVENT_TYPES).toContain(t);
     }
   });
@@ -144,6 +144,16 @@ describe('isAgentEvent', () => {
   it('accepts subagent lifecycle and progress events', () => {
     expect(isAgentEvent({ type: 'subagent_lifecycle', payload: { id: 's1' } })).toBe(true);
     expect(isAgentEvent({ type: 'subagent_progress', payload: { id: 's1' } })).toBe(true);
+    expect(isAgentEvent({
+      type: 'subagent_stream',
+      payload: {
+        id: 's1',
+        event: {
+          type: 'message_update',
+          assistantMessageEvent: { type: 'text_delta', delta: 'hello' },
+        },
+      },
+    })).toBe(true);
   });
 
   it('accepts notice and error events', () => {

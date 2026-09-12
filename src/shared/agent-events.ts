@@ -108,7 +108,43 @@ export type SubagentProgressPayload = {
     toolCount?: number;
     requests?: number;
   };
-}
+};
+
+/** 子会话中允许跨 runner 边界的结构化事件。 */
+export type SubagentStreamEvent =
+  | { type: 'agent_start' }
+  | { type: 'agent_end'; willContinue?: boolean }
+  | { type: 'message_start'; message: AgentMessage }
+  | {
+      type: 'message_update';
+      assistantMessageEvent: { type: string; delta?: string };
+    }
+  | { type: 'message_end'; message: AgentMessage }
+  | { type: 'tool_execution_start'; toolCallId: string; toolName: string; args?: unknown }
+  | {
+      type: 'tool_execution_update';
+      toolCallId: string;
+      toolName: string;
+      args?: unknown;
+      partialResult?: unknown;
+    }
+  | {
+      type: 'tool_execution_end';
+      toolCallId: string;
+      toolName: string;
+      result?: unknown;
+      isError: boolean;
+    };
+
+/** subagent_stream 帧负载：按 child id 隔离的原始会话增量。 */
+export type SubagentStreamPayload = {
+  id: string;
+  index?: number;
+  agent?: string;
+  parentToolCallId?: string;
+  parentSessionId?: string;
+  event: SubagentStreamEvent;
+};
 
 // ─── Agent Event union ───────────────────────────────────────
 
@@ -167,6 +203,7 @@ export type AgentEvent =
   // ── Subagent lifecycle / progress ──
   | { type: 'subagent_lifecycle'; payload: SubagentLifecyclePayload }
   | { type: 'subagent_progress'; payload: SubagentProgressPayload }
+  | { type: 'subagent_stream'; payload: SubagentStreamPayload }
   // ── Notice / error ──
   | { type: 'notice'; text?: string; message?: string }
   | { type: 'error'; error?: string; message?: string };
@@ -189,6 +226,7 @@ export const AGENT_EVENT_TYPES = [
   'auto_compaction_end',
   'subagent_lifecycle',
   'subagent_progress',
+  'subagent_stream',
   'notice',
   'error',
 ] as const satisfies ReadonlyArray<AgentEvent['type']>;
@@ -208,6 +246,30 @@ function isMessagePayload(value: unknown): boolean {
 
 function isMessageEvent(value: Record<string, unknown>): boolean {
   return isMessagePayload(value.message);
+}
+
+function isSubagentStreamEvent(value: unknown): boolean {
+  if (!isRecord(value) || typeof value.type !== 'string') return false;
+  switch (value.type) {
+    case 'agent_start':
+    case 'agent_end':
+      return true;
+    case 'message_start':
+    case 'message_end':
+      return isMessagePayload(value.message);
+    case 'message_update':
+      return isRecord(value.assistantMessageEvent)
+        && typeof value.assistantMessageEvent.type === 'string';
+    case 'tool_execution_start':
+    case 'tool_execution_update':
+      return typeof value.toolCallId === 'string' && typeof value.toolName === 'string';
+    case 'tool_execution_end':
+      return typeof value.toolCallId === 'string'
+        && typeof value.toolName === 'string'
+        && typeof value.isError === 'boolean';
+    default:
+      return false;
+  }
 }
 
 /**
@@ -234,6 +296,10 @@ export function isAgentEvent(value: unknown): value is AgentEvent {
     case 'notice':
     case 'error':
       return true;
+    case 'subagent_stream':
+      return isRecord(value.payload)
+        && typeof value.payload.id === 'string'
+        && isSubagentStreamEvent(value.payload.event);
     case 'message_start':
     case 'message_update':
     case 'message_end':

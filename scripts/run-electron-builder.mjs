@@ -15,6 +15,21 @@
  * Usage:
  *   node scripts/run-electron-builder.mjs --win
  *   node scripts/run-electron-builder.mjs
+ *   node scripts/run-electron-builder.mjs --win --compression-level 9
+ *
+ * Compression level:
+ *   electron-builder maps yml `compression: normal|maximum` to 7z `-mx=9`
+ *   for the NSIS app archive (app-builder-lib/out/targets/archive.js,
+ *   compute7zCompressArgs). For this app (~817MB, 31k files) that single
+ *   step takes ~5.5 minutes of pure CPU time. The env var
+ *   ELECTRON_BUILDER_COMPRESSION_LEVEL (single digit 0-9) overrides the yml
+ *   setting; `--compression-level N` sets it from the CLI.
+ *
+ *   Defaults:
+ *     - CI (release.yml): no override → full -mx=9 compression, smallest
+ *       published installer.
+ *     - Local: 3 → ~24s instead of ~5.5min (installer grows ~45MB). Pass
+ *       `--compression-level 9` for a locally-built, size-optimized installer.
  */
 
 import { spawn } from 'node:child_process';
@@ -56,6 +71,29 @@ async function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+// ─── Compression level ──────────────────────────────────────────────────────
+// `--compression-level N` (single digit 0-9) — parsed here, NOT forwarded to
+// electron-builder (it doesn't know this flag; an unknown flag would make it
+// fail). Also skipped when ELECTRON_BUILDER_COMPRESSION_LEVEL is already set in
+// the environment (caller wins). Local default is 3 (fast iteration); CI
+// keeps the yml's full compression (no override, smallest release artifacts).
+const COMPRESSION_LEVEL_FLAG = '--compression-level';
+
+function parseCompressionLevel(args) {
+  const flagIndex = args.indexOf(COMPRESSION_LEVEL_FLAG);
+  if (flagIndex === -1) return { forwardedArgs: args, level: null };
+
+  const value = args[flagIndex + 1];
+  if (!/^[0-9]$/.test(value ?? '')) {
+    console.error(`[electron-builder] Invalid ${COMPRESSION_LEVEL_FLAG}: expected a single digit 0-9, got "${value ?? 'nothing'}".`);
+    process.exit(1);
+  }
+  return {
+    forwardedArgs: args.filter((_, i) => i !== flagIndex && i !== flagIndex + 1),
+    level: value,
+  };
+}
+
 function runElectronBuilder() {
   return new Promise((resolve, reject) => {
     // Pass through all CLI arguments to electron-builder.
@@ -63,7 +101,7 @@ function runElectronBuilder() {
     // and uploads installer assets to the GitHub Release). Local runs never
     // publish — releases are driven by GitHub Actions. An explicit --publish
     // argument passed by the caller always wins.
-    const userArgs = process.argv.slice(2);
+    const { forwardedArgs: userArgs, level: cliCompressionLevel } = parseCompressionLevel(process.argv.slice(2));
     const hasPublishArg = userArgs.some((a) => a.startsWith('--publish'));
     const args = hasPublishArg
       ? userArgs
@@ -78,6 +116,17 @@ function runElectronBuilder() {
     // Falls back to npmmirror.com if neither is set, matching the project .npmrc.
     env.ELECTRON_MIRROR ??= env.npm_config_electron_mirror || 'https://npmmirror.com/mirrors/electron/';
     env.ELECTRON_BUILDER_BINARIES_MIRROR ??= env.npm_config_electron_builder_binaries_mirror || 'https://npmmirror.com/mirrors/electron-builder-binaries/';
+
+    // Compression level: CLI flag > pre-set env var > (CI: no override) > (local: 3).
+    // Only the 7z archive step reads it; NSIS installer-level compression is unaffected.
+    if (cliCompressionLevel != null) {
+      env.ELECTRON_BUILDER_COMPRESSION_LEVEL = cliCompressionLevel;
+    } else if (env.ELECTRON_BUILDER_COMPRESSION_LEVEL == null && !IS_ACTIONS) {
+      env.ELECTRON_BUILDER_COMPRESSION_LEVEL = '3';
+    }
+    if (env.ELECTRON_BUILDER_COMPRESSION_LEVEL != null) {
+      console.log(`[electron-builder] 7z compression level: ${env.ELECTRON_BUILDER_COMPRESSION_LEVEL} (ELECTRON_BUILDER_COMPRESSION_LEVEL)`);
+    }
 
     // In GitHub Actions, use a project-local cache directory so it can be
     // cached between runs.

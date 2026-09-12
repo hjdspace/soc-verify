@@ -31,7 +31,7 @@ import {
 import { classifyContentBlock } from "./message-blocks.ts";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs";
 import { createJiti } from "jiti";
 import type { ApprovalMode } from "./approval-logic";
 import {
@@ -66,6 +66,7 @@ import { buildSkillLoaderOptions } from "./skills.ts";
 import {
 	buildRpcStopRequest,
 	normalizeAsyncStatusProgressFrames,
+	normalizeChildStreamFrame,
 	normalizeSubagentFrame,
 	normalizeForegroundProgressFrames,
 	resolveSubagentCeiling,
@@ -247,10 +248,23 @@ interface ChildSessionSeam {
 	createDefaultChildSessionFactory(options?: {
 		loadPiCodingAgent?: () => Promise<unknown>;
 		shutdownTimeoutMs?: number;
-	}): unknown;
-	setChildSessionFactory(factory: unknown): void;
+	}): ChildSessionFactory;
+	setChildSessionFactory(factory: ChildSessionFactory): void;
 	setChildSessionFactoryModule(modulePath: string | undefined): void;
 }
+
+type ChildSessionLaunch = {
+	runtime: { runId?: string; agent?: string; childIndex?: number };
+};
+
+type ChildSession = {
+	subscribe(listener: (event: unknown) => void): () => void;
+};
+
+type ChildSessionFactory = {
+	create(launch: ChildSessionLaunch): Promise<ChildSession>;
+	dispose(): Promise<void>;
+};
 
 // ─── retry 治理（HTTP 层预算 + 会话层预算 + 误标错误改写） ───
 
@@ -493,9 +507,28 @@ async function installSubagentModelInheritance(
 			provider: config.provider,
 			apiKey: config.apiKey,
 		});
-		const factory = seam.createDefaultChildSessionFactory({
+		const baseFactory = seam.createDefaultChildSessionFactory({
 			loadPiCodingAgent: () => Promise.resolve(patchedPi),
 		});
+		const childSubscriptions = new Set<() => void>();
+		const factory: ChildSessionFactory = {
+			async create(launch) {
+				const child = await baseFactory.create(launch);
+				const unsubscribe = child.subscribe((event) => runtime.onChildEvent?.({
+					runId: launch.runtime.runId,
+					agent: launch.runtime.agent,
+					index: launch.runtime.childIndex ?? 0,
+					event,
+				}));
+				childSubscriptions.add(unsubscribe);
+				return child;
+			},
+			async dispose() {
+				for (const unsubscribe of childSubscriptions) unsubscribe();
+				childSubscriptions.clear();
+				await baseFactory.dispose();
+			},
+		};
 		seam.setChildSessionFactory(factory);
 
 		// 2) 异步：detached runner 的工厂经 env 驱动 wrapper 注入
@@ -627,11 +660,17 @@ function buildSubagentBridgeExtension(ctx: PiRunnerContext, runtime: SubagentRun
 			const events = (pi as { events?: SubagentEventBus }).events ?? null;
 			runtime.events = events;
 			if (!events) return;
-			const activeToolCalls = new Map<string, string | undefined>();
+			const activeToolCalls = new Map<string, { agent?: string; childCount?: number }>();
 			const runParents = new Map<string, string>();
 			// 前台流式进度变化检测签名（id → sig），tool_execution_end 时清理
 			const progressKeys = new Map<string, string>();
-			const asyncProgressRuns = new Map<string, { asyncDir: string; parentToolCallId?: string }>();
+			const asyncProgressRuns = new Map<string, {
+				asyncDir: string;
+				parentToolCallId?: string;
+				eventOffset: number;
+				eventRemainder: string;
+				childCount?: number;
+			}>();
 			let asyncProgressTimer: ReturnType<typeof setInterval> | undefined;
 			const parentSessionId = () => ctx.session != null
 				? ((ctx.session as { sessionId?: string }).sessionId ?? null)
@@ -646,11 +685,55 @@ function buildSubagentBridgeExtension(ctx: PiRunnerContext, runtime: SubagentRun
 					asyncProgressTimer = undefined;
 				}
 			};
+			const childId = (parentId: string, index: number, count: number | undefined) =>
+				count === 1 ? parentId : `${parentId}:${index}`;
+			const readAsyncStream = (runId: string) => {
+				const run = asyncProgressRuns.get(runId);
+				if (!run || run.childCount === undefined) return;
+				const eventsPath = join(run.asyncDir, "events.jsonl");
+				try {
+					const size = statSync(eventsPath).size;
+					if (size < run.eventOffset) {
+						run.eventOffset = 0;
+						run.eventRemainder = "";
+					}
+					if (size === run.eventOffset) return;
+					const buffer = Buffer.alloc(size - run.eventOffset);
+					const file = openSync(eventsPath, "r");
+					let bytesRead = 0;
+					try {
+						bytesRead = readSync(file, buffer, 0, buffer.length, run.eventOffset);
+					} finally {
+						closeSync(file);
+					}
+					run.eventOffset += bytesRead;
+					const lines = `${run.eventRemainder}${buffer.subarray(0, bytesRead).toString("utf8")}`.split("\n");
+					run.eventRemainder = lines.pop() ?? "";
+					for (const line of lines) {
+						if (!line.trim()) continue;
+						const raw = JSON.parse(line) as Record<string, unknown>;
+						if (raw.subagentSource !== "child" || raw.subagentRunId !== runId) continue;
+						const index = typeof raw.subagentStepIndex === "number" ? raw.subagentStepIndex : 0;
+						for (const frame of normalizeChildStreamFrame(childId(runId, index, run.childCount), raw, {
+							parentSessionId: parentSessionId(),
+							parentToolCallId: run.parentToolCallId,
+							index,
+							agent: typeof raw.subagentAgent === "string" ? raw.subagentAgent : undefined,
+						})) sendEvent(frame);
+					}
+				} catch {
+					// events.jsonl is best-effort and may not exist until the child emits its first event.
+				}
+			};
 			const refreshAsyncProgress = (runId: string) => {
 				const run = asyncProgressRuns.get(runId);
 				if (!run) return;
 				try {
 					const status = JSON.parse(readFileSync(join(run.asyncDir, "status.json"), "utf8")) as unknown;
+					const steps = typeof status === "object" && status !== null
+						? (status as { steps?: unknown }).steps
+						: undefined;
+					run.childCount = Array.isArray(steps) ? steps.length : run.childCount;
 					for (const frame of normalizeAsyncStatusProgressFrames(runId, status, {
 						parentSessionId: parentSessionId(),
 						parentToolCallId: run.parentToolCallId,
@@ -661,12 +744,18 @@ function buildSubagentBridgeExtension(ctx: PiRunnerContext, runtime: SubagentRun
 						progressKeys.set(id, sig);
 						sendEvent(frame);
 					}
+					readAsyncStream(runId);
 				} catch {
 					// status.json is created and atomically replaced by the detached runner; retry on the next tick.
 				}
 			};
 			const startAsyncProgress = (runId: string, asyncDir: string, parentToolCallId?: string) => {
-				asyncProgressRuns.set(runId, { asyncDir, parentToolCallId });
+				asyncProgressRuns.set(runId, {
+					asyncDir,
+					parentToolCallId,
+					eventOffset: 0,
+					eventRemainder: "",
+				});
 				refreshAsyncProgress(runId);
 				if (asyncProgressTimer) return;
 				asyncProgressTimer = setInterval(() => {
@@ -679,7 +768,39 @@ function buildSubagentBridgeExtension(ctx: PiRunnerContext, runtime: SubagentRun
 				asyncProgressTimer = undefined;
 				asyncProgressRuns.clear();
 				progressKeys.clear();
+				runtime.onChildEvent = undefined;
 			});
+
+			const countChildren = (args: Record<string, unknown>): number | undefined => {
+				if (Array.isArray(args.tasks)) return args.tasks.length;
+				if (Array.isArray(args.chain)) {
+					return args.chain.reduce((total, item) => {
+						if (typeof item !== "object" || item === null) return total;
+						const parallel = (item as Record<string, unknown>).parallel;
+						return total + (Array.isArray(parallel) ? parallel.length : 1);
+					}, 0);
+				}
+				return typeof args.agent === "string" ? 1 : undefined;
+			};
+			runtime.onChildEvent = ({ runId, agent, index, event }) => {
+				let parentToolCallId = runId ? runParents.get(runId) : undefined;
+				if (!parentToolCallId) {
+					const matches = [...activeToolCalls].filter(([, active]) =>
+						agent !== undefined && active.agent === agent,
+					);
+					if (matches.length === 1) parentToolCallId = matches[0]?.[0];
+					else if (activeToolCalls.size === 1) parentToolCallId = activeToolCalls.keys().next().value;
+				}
+				if (!parentToolCallId) return;
+				if (runId) runParents.set(runId, parentToolCallId);
+				const count = activeToolCalls.get(parentToolCallId)?.childCount;
+				for (const frame of normalizeChildStreamFrame(childId(parentToolCallId, index, count), event, {
+					parentSessionId: parentSessionId(),
+					parentToolCallId,
+					index,
+					agent,
+				})) sendEvent(frame);
+			};
 
 			pi.on("tool_execution_start", (event) => {
 				if (event.toolName !== "subagent") return;
@@ -689,7 +810,10 @@ function buildSubagentBridgeExtension(ctx: PiRunnerContext, runtime: SubagentRun
 				// pi-subagents uses `action` for management/control calls. Only
 				// execution calls own child lifecycle events and UI activity cards.
 				if (typeof args.action === "string") return;
-				activeToolCalls.set(event.toolCallId, typeof args.agent === "string" ? args.agent : undefined);
+				activeToolCalls.set(event.toolCallId, {
+					agent: typeof args.agent === "string" ? args.agent : undefined,
+					childCount: countChildren(args),
+				});
 			});
 			pi.on("tool_execution_end", (event) => {
 				if (event.toolName !== "subagent") return;
@@ -722,6 +846,8 @@ function buildSubagentBridgeExtension(ctx: PiRunnerContext, runtime: SubagentRun
 					: undefined;
 				const list = Array.isArray(details?.progress) ? details.progress : [];
 				if (list.length === 0) return;
+				const active = activeToolCalls.get(event.toolCallId);
+				if (active) active.childCount = list.length;
 				for (const frame of normalizeForegroundProgressFrames(event.toolCallId, list, {
 					parentSessionId:
 						ctx.session != null
@@ -755,8 +881,8 @@ function buildSubagentBridgeExtension(ctx: PiRunnerContext, runtime: SubagentRun
 								: undefined;
 					if (!parentToolCallId) {
 						const agent = typeof native.agent === "string" ? native.agent : undefined;
-						const matches = [...activeToolCalls].filter(([, activeAgent]) =>
-							agent !== undefined && activeAgent === agent,
+						const matches = [...activeToolCalls].filter(([, active]) =>
+							agent !== undefined && active.agent === agent,
 						);
 						if (matches.length === 1) parentToolCallId = matches[0]?.[0];
 						else if (activeToolCalls.size === 1) parentToolCallId = activeToolCalls.keys().next().value;

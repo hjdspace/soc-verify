@@ -4,6 +4,8 @@ import { Wrench, X } from 'lucide-react';
 import { cn } from '@renderer/lib/utils';
 import type { SubagentActivity } from '@renderer/stores/session-types';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { ThinkingBlock } from './ThinkingBlock';
+import { ToolCard } from './ToolCard';
 import { ThinkingOrb } from '@renderer/components/visual';
 
 /**
@@ -147,10 +149,11 @@ function Drawer({ agent, onClose }: { agent: SubagentActivity; onClose: () => vo
     if (!followRef.current) return;
     const el = logRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [agent.recentOutput.length, agent.currentTool]);
+  }, [agent.recentOutput.length, agent.messages, agent.currentTool]);
 
   // store 侧已将引擎滚动窗口合并为正序累积日志，直接渲染
   const lines = agent.recentOutput;
+  const messages = agent.messages ?? [];
   const duration = (agent.endedAt ?? Date.now()) - agent.startedAt;
   const currentTool = running ? agent.currentTool : undefined;
   const currentToolArgs = running ? agent.currentToolArgs : undefined;
@@ -256,17 +259,43 @@ function Drawer({ agent, onClose }: { agent: SubagentActivity; onClose: () => vo
               {agent.lastIntent}
             </div>
           )}
-          <div className="space-y-0.5 font-mono text-[10.5px] leading-relaxed" data-testid="subagent-log">
-            {lines.length === 0 && <div className="text-muted-foreground/50">暂无输出…</div>}
-            {lines.map((line, i) => (
-              <div key={i} className="whitespace-pre-wrap break-all text-muted-foreground">
-                {line}
-              </div>
-            ))}
-            {running && (
-              <span className="inline-block h-3 w-1 animate-pulse bg-primary align-middle" />
-            )}
-          </div>
+          {messages.length > 0 ? (
+            <div className="space-y-2" data-testid="subagent-transcript">
+              {messages.map((message) => {
+                if (message.role === 'tool') return <ToolCard key={message.id} message={message} />;
+                if (message.role !== 'assistant') return null;
+                return (
+                  <div key={message.id} className="space-y-0.5">
+                    {message.thinking && (
+                      <ThinkingBlock
+                        thinking={message.thinking}
+                        isStreaming={message.isStreaming === true}
+                        hasContent={message.content.length > 0}
+                      />
+                    )}
+                    {message.content && (
+                      <MarkdownRenderer
+                        content={message.content}
+                        streaming={message.isStreaming === true}
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="space-y-0.5 font-mono text-[10.5px] leading-relaxed" data-testid="subagent-log">
+              {lines.length === 0 && <div className="text-muted-foreground/50">暂无输出…</div>}
+              {lines.map((line, i) => (
+                <div key={i} className="whitespace-pre-wrap break-all text-muted-foreground">
+                  {line}
+                </div>
+              ))}
+              {running && (
+                <span className="inline-block h-3 w-1 animate-pulse bg-primary align-middle" />
+              )}
+            </div>
+          )}
         </div>
 
         <footer className="flex items-center gap-3 border-t border-[var(--dsw-border-l1)] px-3 py-2 font-mono text-[10px] tabular-nums text-muted-foreground/70">

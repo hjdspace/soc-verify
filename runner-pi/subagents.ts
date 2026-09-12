@@ -89,7 +89,7 @@ export type SubagentUsage = {
 }
 
 export type SubagentFrame = {
-	type: "subagent_lifecycle" | "subagent_progress";
+	type: "subagent_lifecycle" | "subagent_progress" | "subagent_stream";
 	payload: Record<string, unknown>;
 }
 
@@ -106,6 +106,83 @@ function num(value: unknown): number {
 
 function str(value: unknown): string | undefined {
 	return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+	return typeof value === "object" && value !== null && !Array.isArray(value)
+		? value as Record<string, unknown>
+		: undefined;
+}
+
+/**
+ * 子会话原生事件的最小白名单投影。前台订阅和异步 events.jsonl 共用，
+ * 防止 pi 私有事件或 message_update 的 partial 快照越过 runner 边界。
+ */
+export function normalizeChildStreamFrame(
+	id: string,
+	raw: unknown,
+	metadata: SubagentNormalizeContext & { index?: number; agent?: string },
+): SubagentFrame[] {
+	const event = record(raw);
+	if (!id || !event || typeof event.type !== "string") return [];
+	let projected: Record<string, unknown> | undefined;
+
+	switch (event.type) {
+		case "agent_start":
+			projected = { type: "agent_start" };
+			break;
+		case "agent_end":
+			projected = { type: "agent_end", ...(event.willRetry === true ? { willContinue: true } : {}) };
+			break;
+		case "message_start":
+		case "message_end": {
+			const message = record(event.message);
+			if (!message || message.role !== "assistant") return [];
+			projected = { type: event.type, message };
+			break;
+		}
+		case "message_update": {
+			const update = record(event.assistantMessageEvent);
+			if (!update || typeof update.type !== "string") return [];
+			projected = {
+				type: "message_update",
+				assistantMessageEvent: {
+					type: update.type,
+					...(typeof update.delta === "string" ? { delta: update.delta } : {}),
+				},
+			};
+			break;
+		}
+		case "tool_execution_start":
+		case "tool_execution_update":
+		case "tool_execution_end": {
+			if (typeof event.toolCallId !== "string" || typeof event.toolName !== "string") return [];
+			projected = {
+				type: event.type,
+				toolCallId: event.toolCallId,
+				toolName: event.toolName,
+				...(event.args !== undefined ? { args: event.args } : {}),
+				...(event.partialResult !== undefined ? { partialResult: event.partialResult } : {}),
+				...(event.result !== undefined ? { result: event.result } : {}),
+				...(event.type === "tool_execution_end" ? { isError: event.isError === true } : {}),
+			};
+			break;
+		}
+		default:
+			return [];
+	}
+
+	return [{
+		type: "subagent_stream",
+		payload: {
+			id,
+			...(metadata.index !== undefined ? { index: metadata.index } : {}),
+			...(metadata.agent ? { agent: metadata.agent } : {}),
+			parentSessionId: metadata.parentSessionId,
+			parentToolCallId: metadata.parentToolCallId,
+			event: projected,
+		},
+	}];
 }
 
 /** delegation/async 终态状态 → host 契约终态 */
@@ -276,14 +353,14 @@ export function normalizeForegroundProgressFrames(
 			parentToolCallId: ctx.parentToolCallId ?? toolCallId,
 			index,
 			progress: {
-				tokens: num(p.tokens),
+				...(typeof p.tokens === "number" && Number.isFinite(p.tokens) ? { tokens: p.tokens } : {}),
 				currentTool: str(p.currentTool),
 				currentToolArgs: str(p.currentToolArgs),
 				recentOutput: Array.isArray(p.recentOutput)
 					? p.recentOutput.filter((l): l is string => typeof l === "string" && l.trim().length > 0)
 					: [],
-				toolCount: num(p.toolCount),
-				requests: num(p.turnCount),
+				...(typeof p.toolCount === "number" && Number.isFinite(p.toolCount) ? { toolCount: p.toolCount } : {}),
+				...(typeof p.turnCount === "number" && Number.isFinite(p.turnCount) ? { requests: p.turnCount } : {}),
 			},
 		};
 		if (agent) payload.agent = agent;
@@ -364,6 +441,13 @@ export type SubagentRuntime = {
 	events: SubagentEventBus | null;
 	/** 审批继承 ceiling 句柄（yolo 模式为 null） */
 	ceilingHandle: SubagentCeilingHandle | null;
+	/** 前台 child session 的结构化事件入口，由 bridge extension 在装载时注入。 */
+	onChildEvent?: (input: {
+		runId?: string;
+		agent?: string;
+		index: number;
+		event: unknown;
+	}) => void;
 }
 
 export const trackSubagentRun = {

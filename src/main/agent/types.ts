@@ -123,14 +123,14 @@ export interface EventFrame {
 // progress：subagent 实时进度（~150ms 节流合并）
 
 export type SubagentFrame = {
-  type: 'subagent_lifecycle' | 'subagent_progress';
+  type: 'subagent_lifecycle' | 'subagent_progress' | 'subagent_stream';
   payload: unknown;
 };
 
 export function isSubagentFrame(value: unknown): value is SubagentFrame {
   return (
     isRecord(value) &&
-    (value.type === 'subagent_lifecycle' || value.type === 'subagent_progress')
+    (value.type === 'subagent_lifecycle' || value.type === 'subagent_progress' || value.type === 'subagent_stream')
   );
 }
 

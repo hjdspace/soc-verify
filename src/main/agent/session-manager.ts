@@ -51,7 +51,7 @@ const DEFAULT_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 
 // High-frequency streaming events excluded from the terminal log to avoid
 // flooding the console — content is still emitted via the 'sessionEvent' stream.
-const SILENT_EVENT_TYPES = new Set(['message_update', 'message_chunk', 'message_delta', 'subagent_progress']);
+const SILENT_EVENT_TYPES = new Set(['message_update', 'message_chunk', 'message_delta', 'subagent_progress', 'subagent_stream']);
 
 // Maximum length of content snippets printed to the terminal log. Full content
 // remains available via the 'sessionEvent' stream consumed by the renderer.

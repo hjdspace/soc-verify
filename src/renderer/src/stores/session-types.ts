@@ -96,9 +96,14 @@ export interface SubagentActivity {
    * progress 帧可能只携带当前输出窗口，这里经滚动窗口合并成完整运行日志。
    */
   recentOutput: string[];
+  /** 子会话的结构化消息流；旧 runner 仅有 recentOutput 时可缺省。 */
+  messages?: ChatMessage[];
   toolCount: number;
   tokens: number;
+  /** message_end usage 的累计值，用于与 progress 快照去重。 */
+  streamTokens?: number;
   requests: number;
+  streamRequests?: number;
   /** token 增量历史（sparkline 用，保留尾部若干个） */
   tokenHistory: number[];
   startedAt: number;
