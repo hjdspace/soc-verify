@@ -939,7 +939,7 @@ export const useSessionMessagesStore = create<SessionMessagesState>(() => ({
               index: typeof p.index === 'number' ? p.index : (prev?.index ?? 0),
               agent: typeof p.agent === 'string' ? p.agent : (prev?.agent ?? 'subagent'),
               description: typeof p.description === 'string' ? p.description : prev?.description,
-              assignment: prev?.assignment,
+              assignment: typeof p.assignment === 'string' ? p.assignment : prev?.assignment,
               status,
               parentToolCallId:
                 typeof p.parentToolCallId === 'string' ? p.parentToolCallId : prev?.parentToolCallId,

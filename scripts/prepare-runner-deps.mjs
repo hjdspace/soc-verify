@@ -9,6 +9,16 @@
  *
  * After install, the payload is pruned to cut bytes that cannot affect the
  * runner at runtime (spec: platform-scoped payload discipline):
+ *   - platform binaries  — keep only the target build platform. npm ci honours
+ *                         the top-level lockfile's os/cpu filtering, but
+ *                         @earendil-works/pi-coding-agent ships an
+ *                         npm-shrinkwrap.json, so npm treats it as
+ *                         self-contained and installs ALL its nested deps —
+ *                         including every @esbuild/<platform> optional dep
+ *                         (26 platforms, ~283 MB) and every
+ *                         @mariozechner/clipboard-<platform> (~12 MB) —
+ *                         bypassing os/cpu filtering. Only the target
+ *                         platform's copy is reachable at runtime.
  *   - `*.map` (recursive) — source maps, debug-only
  *   - `recheck-jar/`    — recheck's JVM backend; on Node/Windows the auto
  *                         backend resolves `recheck-windows-x64/recheck.exe`
@@ -23,9 +33,10 @@
  * where the runner's ESM resolution (and jiti) finds them.
  *
  * Usage:
- *   node scripts/prepare-runner-deps.mjs           # install + prune
- *   node scripts/prepare-runner-deps.mjs --prune-only  # prune an existing install
- *   node scripts/prepare-runner-deps.mjs --check   # verify install is present & complete
+ *   node scripts/prepare-runner-deps.mjs                       # install + prune (target = this machine)
+ *   node scripts/prepare-runner-deps.mjs --prune-only         # prune an existing install
+ *   node scripts/prepare-runner-deps.mjs --check              # verify install is present & complete
+ *   node scripts/prepare-runner-deps.mjs --platform win32-x64 # target platform-arch override
  */
 
 import { spawnSync } from 'node:child_process';
@@ -35,9 +46,32 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
-const DEPS_DIR = join(ROOT, 'resources', 'runner-deps');
+// RUNNER_DEPS_DIR: 测试注入 fixture 目录用（默认真实 runner-deps）
+const DEPS_DIR = process.env.RUNNER_DEPS_DIR
+  ? resolve(process.env.RUNNER_DEPS_DIR)
+  : join(ROOT, 'resources', 'runner-deps');
 const CHECK_ONLY = process.argv.includes('--check');
 const PRUNE_ONLY = process.argv.includes('--prune-only');
+
+function argValue(flag) {
+  const idx = process.argv.indexOf(flag);
+  return idx >= 0 ? process.argv[idx + 1] : undefined;
+}
+
+/**
+ * Target platform for platform-binary pruning, as a platform-arch pair
+ * ("win32-x64" / "darwin-arm64" / "linux-x64"). Accepts a plain platform too
+ * ("win32" keeps every arch of that OS). Defaults to the machine running the
+ * pack — the same os+cpu pair npm itself filters the top-level tree by, so
+ * local `npm run package` keeps working without arguments.
+ */
+function resolveTargetPlatform() {
+  const raw = argValue('--platform');
+  if (!raw) return `${process.platform}-${process.arch}`;
+  return raw;
+}
+
+const TARGET_PLATFORM = resolveTargetPlatform();
 
 function npmCommand() {
   // Windows needs npm.cmd; a bare `npm` there spawns the shell shim that
@@ -62,6 +96,67 @@ function verifyInstalled() {
 
 const PRUNED_DIRS = new Set(['recheck-jar', 'docs', 'examples']);
 const LICENSE_FILE = /^(licen[sc]e|notice|unlicense|authors|contributors)/i;
+
+/**
+ * Scoped packages whose sub-directories are per-platform binary variants.
+ *
+ * These arrive unfiltered because pi-coding-agent ships an npm-shrinkwrap.json:
+ * `npm ci` treats it as self-contained and installs every optional platform
+ * dep inside its nested node_modules, bypassing the os/cpu filtering that
+ * normally keeps only this machine's variant at the top level. Only the
+ * target platform's variant is ever resolved at runtime.
+ */
+const PLATFORM_BINARY_SCOPES = [
+  { scope: '@esbuild', prefix: '' },
+  { scope: '@mariozechner', prefix: 'clipboard-' },
+];
+
+/**
+ * OS prefixes of known platform-binary package names (esbuild, clipboard, …).
+ * Only directories whose platform part starts with one of these are treated
+ * as platform variants — anything unrecognised is kept (conservative: an
+ * unknown platform costs disk, a wrongly-deleted package breaks the runner).
+ */
+const KNOWN_OS_PREFIXES = [
+  'aix', 'android', 'darwin', 'freebsd', 'linux', 'netbsd', 'openbsd',
+  'openharmony', 'sunos', 'win32',
+];
+
+/**
+ * Does a platform-binary directory name (e.g. "win32-x64", "linux-arm64-gnu",
+ * "darwin-universal") belong to the target build platform? A fat
+ * ("universal"/"all") binary runs on either arch of its OS — keep it only
+ * when that OS is the target.
+ */
+function isTargetPlatformDir(platformName) {
+  if (/-universal$|-all$/.test(platformName)) {
+    return platformName.startsWith(`${TARGET_PLATFORM.split('-')[0]}-`);
+  }
+  return platformName === TARGET_PLATFORM || platformName.startsWith(`${TARGET_PLATFORM}-`);
+}
+
+function isKnownPlatformName(platformName) {
+  return KNOWN_OS_PREFIXES.some((os) => platformName === os || platformName.startsWith(`${os}-`));
+}
+
+function prunePlatformScope(scopeDir, rule, removeDir) {
+  let entries;
+  try {
+    entries = readdirSync(scopeDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const name = entry.name;
+    // e.g. the `clipboard` JS wrapper inside @mariozechner — not a platform dir
+    if (rule.prefix && !name.startsWith(rule.prefix)) continue;
+    const platformName = rule.prefix ? name.slice(rule.prefix.length) : name;
+    if (!isKnownPlatformName(platformName)) continue;
+    if (isTargetPlatformDir(platformName)) continue;
+    removeDir(join(scopeDir, name));
+  }
+}
 // 发布载荷里的 demo 媒体文件（pi-web-access 的宣传 banner + 演示视频，
 // 约 6.4MB，运行时无用）——按包目录圈定，避免误伤其他包的同名资源。
 const PRUNED_FILES_BY_PACKAGE = {
@@ -120,43 +215,52 @@ function prunePayload() {
     rmSync(fp, { force: true });
   };
 
-const walk = (dir, pkgName) => {
-  let entries;
-  try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    const fp = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (PRUNED_DIRS.has(entry.name)) {
-        removeDir(fp);
+  const PLATFORM_RULE_BY_SCOPE = new Map(
+    PLATFORM_BINARY_SCOPES.map((rule) => [rule.scope, rule]),
+  );
+
+  const walk = (dir, pkgName) => {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const fp = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (PRUNED_DIRS.has(entry.name)) {
+          removeDir(fp);
+          continue;
+        }
+        // 平台二进制 scope：按目标平台保留变体（win32 → win32-x64 等）
+        const platformRule = PLATFORM_RULE_BY_SCOPE.get(entry.name);
+        if (platformRule) {
+          prunePlatformScope(fp, platformRule, removeDir);
+        }
+        // scoped 包目录：node_modules/<scope>/<pkg> 跳过 scope 层取包名
+        const isScopeLayer = !pkgName && entry.name.startsWith('@');
+        walk(fp, isScopeLayer ? undefined : (pkgName ?? entry.name));
         continue;
       }
-      // scoped 包目录：node_modules/<scope>/<pkg> 跳过 scope 层取包名
-      const isScopeLayer = !pkgName && entry.name.startsWith('@');
-      walk(fp, isScopeLayer ? undefined : (pkgName ?? entry.name));
-      continue;
+      if (
+        pkgName &&
+        PRUNED_FILES_BY_PACKAGE[pkgName]?.has(entry.name)
+      ) {
+        removeFile(fp);
+        continue;
+      }
+      if (entry.name.endsWith('.map')) {
+        removeFile(fp);
+        continue;
+      }
+      if (entry.name.endsWith('.md') && !LICENSE_FILE.test(entry.name)) {
+        removeFile(fp);
+      }
     }
-    if (
-      pkgName &&
-      PRUNED_FILES_BY_PACKAGE[pkgName]?.has(entry.name)
-    ) {
-      removeFile(fp);
-      continue;
-    }
-    if (entry.name.endsWith('.map')) {
-      removeFile(fp);
-      continue;
-    }
-    if (entry.name.endsWith('.md') && !LICENSE_FILE.test(entry.name)) {
-      removeFile(fp);
-    }
-  }
-};
+  };
 
-walk(nmRoot);
+  walk(nmRoot);
   return { files, bytes };
 }
 
@@ -203,7 +307,7 @@ function main() {
 
   const pruned = prunePayload();
   console.log(
-    `[prepare-runner-deps] pruned payload: ${pruned.files} paths, ${(pruned.bytes / 1024 / 1024).toFixed(1)} MB removed`,
+    `[prepare-runner-deps] pruned payload: ${pruned.files} paths, ${(pruned.bytes / 1024 / 1024).toFixed(1)} MB removed (target platform: ${TARGET_PLATFORM})`,
   );
 
   try {

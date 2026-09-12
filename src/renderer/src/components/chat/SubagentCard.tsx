@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
-import { X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { Wrench, X } from 'lucide-react';
 import { cn } from '@renderer/lib/utils';
 import type { SubagentActivity } from '@renderer/stores/session-types';
 import { MarkdownRenderer } from './MarkdownRenderer';
@@ -9,11 +10,17 @@ import { ThinkingOrb } from '@renderer/components/visual';
  * Subagent 树形行卡片（DSH §7 形态：缩进树形行，无独立磁贴网格）。
  *
  * subagent 工具派遣子代理后作为其展开内容渲染：
- * - 每个 subagent 一行：状态点（running=追逐点阵）+ 名称 + 活动摘要 + tabular 指标
- * - 点击行：右侧抽屉展示完整实时日志流（recentOutput 正序）
+ * - 每个 subagent 一行：状态点（running=追逐点阵）+ 名称 + 任务概要 + tabular 指标
+ * - 点击行：右侧抽屉展示任务指令、当前工具活动与实时输出流
+ *
+ * 抽屉经 createPortal 挂到 document.body：行卡片的 fade-up 入场动画带
+ * fill-mode both，最终帧 transform 会长期保留，使该祖先成为 position:fixed
+ * 的包含块——不 portal 的话抽屉会被定位/裁剪在卡片内部（历史 bug）。
  *
  * 数据由 session store 的 subagent_lifecycle / subagent_progress 帧驱动，
- * 经 parentToolCallId 过滤后传入。
+ * 经 parentToolCallId 过滤后传入。任务概要优先取派遣参数快照
+ * （assignment/description，经 resolvePiSubagentActivities 合并），实时帧只
+ * 补充运行态字段（currentTool / recentOutput / tokens）。
  */
 
 function fmtTokens(n: number): string {
@@ -24,6 +31,16 @@ function fmtDuration(ms: number): string {
   const s = Math.round(ms / 1000);
   if (s < 60) return `${s}s`;
   return `${Math.floor(s / 60)}m${s % 60}s`;
+}
+
+/** 运行中每秒重渲染（刷新用时指标），终态停止 */
+function useTicker(active: boolean): void {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (!active) return;
+    const interval = setInterval(() => tick((t) => t + 1), 1000);
+    return () => clearInterval(interval);
+  }, [active]);
 }
 
 /** 状态点样式：running 语义编织动画 / completed 绿 / failed 红 / aborted 灰 */
@@ -46,17 +63,29 @@ function statusLabel(status: SubagentActivity['status']): string {
   }
 }
 
+/** 任务概要：派遣参数快照优先，退回角色描述 */
+function taskSummary(agent: SubagentActivity): string | undefined {
+  const text = agent.assignment ?? agent.description;
+  if (typeof text !== 'string') return undefined;
+  const trimmed = text.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 /** 单个树形行 */
 function AgentRow({ agent, onClick }: { agent: SubagentActivity; onClick: () => void }) {
   const running = agent.status === 'running';
+  useTicker(running);
   const duration = (agent.endedAt ?? Date.now()) - agent.startedAt;
+  const summary = taskSummary(agent);
+  const currentTool = running ? agent.currentTool : undefined;
+
   return (
     <button
       type="button"
       onClick={onClick}
       data-testid={`subagent-tile-${agent.id}`}
       className="ml-2 flex w-[calc(100%-0.5rem)] flex-col gap-px rounded-r-lg border-l border-[var(--dsw-border-l2)] px-1.5 py-1 text-left transition-colors hover:bg-[var(--dsw-hover-bg)]"
-      title={agent.description ?? agent.agent}
+      title={summary ?? agent.agent}
     >
       <div className="flex items-center gap-1.5">
         {statusDotEl(agent.status)}
@@ -71,31 +100,39 @@ function AgentRow({ agent, onClick }: { agent: SubagentActivity; onClick: () => 
         )}>
           {statusLabel(agent.status)}
         </span>
-      </div>
-      <div className="flex items-center gap-2 pl-4">
-        <span
-          className={cn(
-            'min-w-0 flex-1 truncate font-mono text-[10px]',
-            running ? 'text-muted-foreground' : 'text-muted-foreground/60',
-          )}
-        >
-          {running
-            ? (agent.currentTool ?? agent.lastIntent ?? '…')
-            : agent.blockedReason ? `\u26a0 ${agent.blockedReason}`
-            : agent.status === 'completed' ? '\u2713 完成'
-            : agent.status === 'failed' ? '\u2717 失败'
-            : '\u2013 已中止'}
-        </span>
-        <span className="shrink-0 font-mono text-[9px] tabular-nums text-muted-foreground/70">
+        <span className="ml-auto shrink-0 font-mono text-[9px] tabular-nums text-muted-foreground/70">
           {fmtTokens(agent.tokens)} tok · {fmtDuration(duration)}
         </span>
       </div>
+      {/* 任务概要：无快照时退回当前活动，再退回终态文案 */}
+      <div className="flex items-center gap-2 pl-4">
+        <span
+          className={cn(
+            'min-w-0 flex-1 truncate text-[10.5px]',
+            summary ? 'text-[var(--dsw-label-secondary)]' : 'font-mono text-muted-foreground/60',
+          )}
+        >
+          {summary
+            ?? (running ? (currentTool ?? agent.lastIntent ?? '…') : '…')}
+        </span>
+      </div>
+      {/* 运行中的当前工具活动（与概要同行会互相挤占，单列一行） */}
+      {running && currentTool && summary && (
+        <div className="flex items-center gap-1 pl-4 text-[10px] text-primary/80">
+          <Wrench className="h-2.5 w-2.5 shrink-0" />
+          <span className="min-w-0 flex-1 truncate font-mono">{currentTool}</span>
+        </div>
+      )}
     </button>
   );
 }
 
-/** 右侧抽屉：完整实时日志 */
+/** 右侧抽屉：任务指令 + 当前工具活动 + 实时输出流（portal 到 body，见文件头注释） */
 function Drawer({ agent, onClose }: { agent: SubagentActivity; onClose: () => void }) {
+  const running = agent.status === 'running';
+  useTicker(running);
+  const logRef = useRef<HTMLDivElement | null>(null);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -104,11 +141,21 @@ function Drawer({ agent, onClose }: { agent: SubagentActivity; onClose: () => vo
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
+  // 输出流追加时自动滚动到底部；用户手动上滚后停止跟随
+  const followRef = useRef(true);
+  useEffect(() => {
+    if (!followRef.current) return;
+    const el = logRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [agent.recentOutput.length, agent.currentTool]);
+
   // store 侧已将引擎滚动窗口合并为正序累积日志，直接渲染
   const lines = agent.recentOutput;
   const duration = (agent.endedAt ?? Date.now()) - agent.startedAt;
+  const currentTool = running ? agent.currentTool : undefined;
+  const currentToolArgs = running ? agent.currentToolArgs : undefined;
 
-  return (
+  return createPortal(
     <>
       <div
         className="fixed inset-0 z-40 bg-black/25 backdrop-blur-[1px]"
@@ -116,7 +163,7 @@ function Drawer({ agent, onClose }: { agent: SubagentActivity; onClose: () => vo
         data-testid="subagent-drawer-mask"
       />
       <aside
-        className="fixed right-0 top-0 z-50 flex h-full w-[320px] max-w-[85vw] flex-col rounded-l-xl border-l border-[var(--dsw-border-l2)] bg-[var(--dsw-layer-1)] shadow-[var(--dsw-shadow-lv3)]"
+        className="fixed right-0 top-0 z-50 flex h-full w-[360px] max-w-[85vw] flex-col rounded-l-xl border-l border-[var(--dsw-border-l2)] bg-[var(--dsw-layer-1)] shadow-[var(--dsw-shadow-lv3)]"
         data-testid="subagent-drawer"
       >
         <header className="flex items-center gap-1.5 border-b border-[var(--dsw-border-l1)] px-3 py-2.5">
@@ -178,8 +225,33 @@ function Drawer({ agent, onClose }: { agent: SubagentActivity; onClose: () => vo
           </div>
         )}
 
-        <div className="flex-1 overflow-y-auto px-3 py-2">
-          {agent.lastIntent && agent.status === 'running' && (
+        {/* 当前工具活动：与主聊天框的工具行形态对齐 */}
+        {(currentTool ?? (!running && agent.lastIntent)) && (
+          <div
+            className="flex items-center gap-1.5 border-b border-[var(--dsw-border-l1)] px-3 py-1.5"
+            data-testid="subagent-current-tool"
+          >
+            <Wrench className="h-3 w-3 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-foreground">
+              {currentTool ?? agent.lastIntent}
+            </span>
+            {currentToolArgs && (
+              <span className="truncate font-mono text-[10px] text-muted-foreground/60" title={agent.currentToolArgs}>
+                {agent.currentToolArgs}
+              </span>
+            )}
+          </div>
+        )}
+
+        <div
+          ref={logRef}
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            followRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+          }}
+          className="flex-1 overflow-y-auto px-3 py-2"
+        >
+          {agent.lastIntent && running && (
             <div className="mb-2 font-mono text-[11px] italic text-primary/80" data-testid="subagent-intent">
               {agent.lastIntent}
             </div>
@@ -191,7 +263,7 @@ function Drawer({ agent, onClose }: { agent: SubagentActivity; onClose: () => vo
                 {line}
               </div>
             ))}
-            {agent.status === 'running' && (
+            {running && (
               <span className="inline-block h-3 w-1 animate-pulse bg-primary align-middle" />
             )}
           </div>
@@ -204,7 +276,8 @@ function Drawer({ agent, onClose }: { agent: SubagentActivity; onClose: () => vo
           <span className="ml-auto">{fmtTokens(agent.tokens)} tokens</span>
         </footer>
       </aside>
-    </>
+    </>,
+    document.body,
   );
 }
 

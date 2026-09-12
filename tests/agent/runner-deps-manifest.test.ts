@@ -24,9 +24,11 @@ const RUNNER_DEPENDENCIES = [
   '@earendil-works/pi-ai',
   '@earendil-works/pi-coding-agent',
   '@earendil-works/pi-tui',
+  '@juicesharp/rpiv-todo',
   'jiti',
   'pi-mcp-adapter',
   'pi-subagents',
+  'pi-web-access',
   'typebox',
 ] as const;
 
@@ -111,6 +113,26 @@ describe('runner-deps manifest', () => {
     expect(source).toContain('--omit=dev');
     expect(source).toContain('--ignore-scripts');
     expect(source).toContain('runner-deps');
+  });
+
+  it('prepare script prunes non-target platform binaries (shrinkwrap nested install)', () => {
+    // pi-coding-agent 自带 npm-shrinkwrap.json，npm ci 嵌套安装全部平台变体
+    // （@esbuild 26 平台 ~283MB + clipboard 全平台），绕过顶层 os/cpu 过滤。
+    // prunePayload 必须按目标平台裁剪 —— 该逻辑丢失会让安装包膨胀 ~300MB。
+    const source = readFileSync(join(ROOT, 'scripts', 'prepare-runner-deps.mjs'), 'utf-8');
+    expect(source).toContain('PLATFORM_BINARY_SCOPES');
+    expect(source).toMatch(/scope:\s*'@esbuild'/);
+    expect(source).toMatch(/scope:\s*'@mariozechner'/);
+    expect(source).toContain('--platform');
+  });
+
+  it('electron-builder excludes officecli self-update leftovers from binaries', () => {
+    // officecli CLI 自更新会在 binaries 目录残留 .old 备份（~32MB）；
+    // .update.partial 为下载中断残留。两者都不是有效载荷，不得入包。
+    const yml = readFileSync(join(ROOT, 'electron-builder.yml'), 'utf-8');
+    expect(yml).toMatch(/from:\s*resources\/binaries/);
+    expect(yml).toMatch(/!\*\*\/\*\.old/);
+    expect(yml).toMatch(/!\*\*\/\*\.update\.partial/);
   });
 
   it('electron-builder ships runner-pi and its node_modules as extraResources', () => {
