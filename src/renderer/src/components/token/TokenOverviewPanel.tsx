@@ -459,15 +459,18 @@ function TokenSparkline({ entries }: { entries: HeatmapEntry[] }) {
   // 悬停状态：数据点索引 + 鼠标视口坐标（tooltip 跟随鼠标）
   const [hover, setHover] = useState<{ idx: number; x: number; y: number } | null>(null);
 
-  const values = sparkData.map((d) => d.entry?.totalTokens ?? 0);
+  const values = useMemo(() => sparkData.map((d) => d.entry?.totalTokens ?? 0), [sparkData]);
   const hasData = values.some((v) => v > 0);
   const points = useMemo(() => buildSparklinePoints(values, SPARK_W, SPARK_H), [values]);
-  const path = buildSmoothPath(points);
+  const path = useMemo(() => buildSmoothPath(points), [points]);
   // 面积填充路径：曲线 + 底边闭合（渐变从线上透明度 0.2 → 底部 0.02）
-  const areaPath =
-    points.length > 1
-      ? `${path} L ${points[points.length - 1].x.toFixed(1)} ${SPARK_H} L ${points[0].x.toFixed(1)} ${SPARK_H} Z`
-      : '';
+  const areaPath = useMemo(
+    () =>
+      points.length > 1
+        ? `${path} L ${points[points.length - 1].x.toFixed(1)} ${SPARK_H} L ${points[0].x.toFixed(1)} ${SPARK_H} Z`
+        : '',
+    [path, points],
+  );
 
   const handleMouseMove = (ev: ReactMouseEvent<SVGSVGElement>): void => {
     const rect = ev.currentTarget.getBoundingClientRect();
