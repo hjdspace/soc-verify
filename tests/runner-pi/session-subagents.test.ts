@@ -6,6 +6,11 @@
  * ceiling 注册与动态更新、cancelSubagent RPC stop 命令。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { existsSync, readFileSync } from 'node:fs';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type { PiRunnerContext } from '../../runner-pi/protocol';
 
 const sendResponse = vi.fn();
@@ -30,8 +35,25 @@ const registerSubagentCapabilityCeiling = vi.fn(() => ({
 
 let subagentModuleError: Error | null = null;
 
+// child-session seam（子会话模型继承修复）mock
+const setChildSessionFactory = vi.fn();
+const setChildSessionFactoryModule = vi.fn();
+const createDefaultChildSessionFactory = vi.fn(() => ({ __fakeFactory: true }));
+let seamModuleError: Error | null = null;
+
+// esmResolve mock 必须返回平台合法的绝对路径 file URL（fileURLToPath 会校验）
+const MOCK_PI_SUBAGENTS_ROOT = join(tmpdir(), 'socverify-mock-pi-subagents');
+const MOCK_PI_ENTRY_URL = pathToFileURL(join(tmpdir(), 'socverify-mock-pi-entry', 'dist', 'index.js')).href;
+const MOCK_JITI_URL = pathToFileURL(join(tmpdir(), 'socverify-mock-jiti', 'dist', 'jiti.cjs')).href;
+
 vi.mock('jiti', () => ({
   createJiti: () => ({
+    esmResolve: (id: string) => {
+      if (id === 'pi-subagents') return pathToFileURL(join(MOCK_PI_SUBAGENTS_ROOT, 'index.ts')).href;
+      if (id === '@earendil-works/pi-coding-agent') return MOCK_PI_ENTRY_URL;
+      if (id === 'jiti') return MOCK_JITI_URL;
+      throw new Error(`unexpected esmResolve: ${id}`);
+    },
     import: async (id: string) => {
       if (id === 'pi-subagents') {
         if (subagentModuleError) throw subagentModuleError;
@@ -40,12 +62,17 @@ vi.mock('jiti', () => ({
       if (id === 'pi-subagents/capability-ceiling') {
         return { registerSubagentCapabilityCeiling };
       }
+      if (id.replaceAll('\\', '/').endsWith('/src/runs/shared/child-session.ts')) {
+        if (seamModuleError) throw seamModuleError;
+        return { createDefaultChildSessionFactory, setChildSessionFactory, setChildSessionFactoryModule };
+      }
       throw new Error(`unexpected jiti import: ${id}`);
     },
   }),
 }));
 
 const createAgentSession = vi.fn();
+const piModelRuntimeCreate = vi.fn(async () => ({ __fakeModelRuntime: true }));
 
 vi.mock('@earendil-works/pi-coding-agent', () => ({
   createAgentSession: (...args: unknown[]) => createAgentSession(...args),
@@ -60,6 +87,7 @@ vi.mock('@earendil-works/pi-coding-agent', () => ({
   getAgentDir: () => '/fake/agent-dir',
   hasTrustRequiringProjectResources: () => false,
   SettingsManager: { create: () => ({ __fakeSettingsManager: true, applyOverrides: () => {} }) },
+  ModelRuntime: { create: (...args: unknown[]) => piModelRuntimeCreate(...args) },
 }));
 
 const { handleInit, handleSetApprovalMode, handleCancelSubagent } = await import(
@@ -112,13 +140,23 @@ beforeEach(() => {
   sendEvent.mockClear();
   fakeExtensionFactory.mockClear();
   registerSubagentCapabilityCeiling.mockClear();
+  setChildSessionFactory.mockClear();
+  setChildSessionFactoryModule.mockClear();
+  createDefaultChildSessionFactory.mockClear();
+  piModelRuntimeCreate.mockClear();
   subagentModuleError = null;
+  seamModuleError = null;
   createAgentSession.mockReset();
   createAgentSession.mockImplementation(async () => ({ session: makeSession() }));
 });
 
 afterEach(() => {
   subagentModuleError = null;
+  seamModuleError = null;
+  delete process.env.SOCVERIFY_SUBAGENT_MODELS_PATH;
+  delete process.env.SOCVERIFY_SUBAGENT_PI_ENTRY_URL;
+  delete process.env.SOCVERIFY_SUBAGENT_SEAM_URL;
+  delete process.env.SOCVERIFY_SUBAGENT_JITI_URL;
 });
 
 // ─── init 装配 ──────────────────────────────────────────
@@ -200,6 +238,64 @@ describe('handleInit subagent 装配', () => {
     );
     expect(fakeExtensionFactory).not.toHaveBeenCalled();
     expect(ctx.subagentRuntime).toMatchObject({ enabled: false, blockedReason: null });
+  });
+});
+
+// ─── 子会话模型继承（subagent 模型修复）─────────────────
+
+describe('handleInit 子会话模型继承装配', () => {
+  it('config.modelsPath 存在时安装模型继承工厂：前台注入 + 异步 wrapper + env 下发', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'socverify-subagent-test-'));
+    const modelsPath = join(dir, 'models.json');
+    const ctx = makeCtx();
+    await handleInit({ id: 'req_6', type: 'init', config: { cwd: '/p', modelsPath } }, ctx);
+
+    expect(ctx.subagentRuntime).toMatchObject({ enabled: true, blockedReason: null });
+    // 前台：进程级工厂替换，loadPiCodingAgent 代理注入 modelsPath
+    expect(setChildSessionFactory).toHaveBeenCalledTimes(1);
+    expect(createDefaultChildSessionFactory).toHaveBeenCalledWith({
+      loadPiCodingAgent: expect.any(Function),
+    });
+    const loadPiCodingAgent = (createDefaultChildSessionFactory.mock.calls[0]?.[0] as {
+      loadPiCodingAgent: () => Promise<{ ModelRuntime: { create: (o?: unknown) => Promise<unknown> } }>;
+    }).loadPiCodingAgent;
+    const patchedPi = await loadPiCodingAgent();
+    await patchedPi.ModelRuntime.create();
+    expect(piModelRuntimeCreate).toHaveBeenCalledWith(expect.objectContaining({ modelsPath }));
+    // 异步：wrapper 写入 models.json 同目录并注册为 detached runner 工厂模块
+    const wrapperPath = join(dir, 'socverify-subagent-child-factory.mjs');
+    expect(setChildSessionFactoryModule).toHaveBeenCalledWith(wrapperPath);
+    expect(existsSync(wrapperPath)).toBe(true);
+    // env 下发（detached runner 经 spawnRunner 继承）
+    expect(process.env.SOCVERIFY_SUBAGENT_MODELS_PATH).toBe(modelsPath);
+    expect(process.env.SOCVERIFY_SUBAGENT_PI_ENTRY_URL).toBe(MOCK_PI_ENTRY_URL);
+    expect(process.env.SOCVERIFY_SUBAGENT_SEAM_URL).toContain('child-session.ts');
+    expect(process.env.SOCVERIFY_SUBAGENT_JITI_URL).toBe(MOCK_JITI_URL);
+    // wrapper 必须经 jiti 转译加载 seam（node_modules 下 .ts 禁止原生 stripping）
+    const wrapperSource = readFileSync(wrapperPath, 'utf-8');
+    expect(wrapperSource).toContain('tryNative: false');
+    expect(wrapperSource).toContain('jiti.import(seamUrl)');
+  });
+
+  it('seam 模块加载失败时显式 blockedReason，不停用 subagent 能力', async () => {
+    seamModuleError = new Error('seam module gone');
+    const ctx = makeCtx();
+    await handleInit(
+      { id: 'req_7', type: 'init', config: { cwd: '/p', modelsPath: join(tmpdir(), 'socverify-nonexistent', 'models.json') } },
+      ctx,
+    );
+    expect(ctx.subagentRuntime).toMatchObject({
+      enabled: true,
+      blockedReason: expect.stringContaining('Subagent model inheritance unavailable'),
+    });
+  });
+
+  it('无 modelsPath 时不安装模型继承工厂（无自定义 provider 可注入）', async () => {
+    const ctx = makeCtx();
+    await handleInit({ id: 'req_8', type: 'init', config: { cwd: '/p' } }, ctx);
+    expect(setChildSessionFactory).not.toHaveBeenCalled();
+    expect(setChildSessionFactoryModule).not.toHaveBeenCalled();
+    expect(ctx.subagentRuntime).toMatchObject({ enabled: true, blockedReason: null });
   });
 });
 
