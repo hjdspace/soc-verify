@@ -1,8 +1,10 @@
 /**
  * KbHeader — 知识库头部组件（库切换器 + 统计 + 上传按钮）。
+ *
+ * wiki 布局挂载时：文档导入/分类能力尚未就绪，上传按钮禁用并提示。
  */
 
-import { BookOpen, ChevronDown, Upload, CheckCircle } from 'lucide-react';
+import { BookOpen, ChevronDown, Upload, CheckCircle, CircleSlash } from 'lucide-react';
 import { useKbStore } from '@renderer/stores/kb';
 import { cn } from '@renderer/lib/utils';
 
@@ -14,13 +16,13 @@ export function KbHeader() {
   const setKbModalOpen = useKbStore((s) => s.setKbModalOpen);
 
   const mountedKb = kbStatus?.mounted;
+  const isWikiFormat = mountedKb?.format === 'wiki';
   const docCount = documents.length;
   const catCount = categories.length;
-  const indexReady = kbStatus?.health.hasIndex ?? false;
-
-  const handleUploadClick = () => {
-    void useKbStore.getState().pickAndUpload();
-  };
+  // wiki 布局没有 index.md：用 manifest 就绪度替代索引导航提示
+  const indexReady = isWikiFormat
+    ? (kbStatus?.wikiHealth?.hasManifest ?? false)
+    : (kbStatus?.health.hasIndex ?? false);
 
   return (
     <div className="flex items-center gap-3 border-b border-border bg-card px-4 py-2">
@@ -34,11 +36,17 @@ export function KbHeader() {
         <ChevronDown className="h-3 w-3 text-muted-foreground" />
       </button>
 
-      {/* 库路径 */}
+      {/* 库路径 + 格式 */}
       {mountedKb && (
         <span className="font-mono text-[11px] text-muted-foreground">
-          {mountedKb.path}
+          {mountedKb.path} · {mountedKb.format}
         </span>
+      )}
+      {mountedKb?.state === 'unreadable' && (
+        <span className="text-[11px] text-status-warn-foreground">目录不可达（离线或权限不足）</span>
+      )}
+      {mountedKb?.state === 'structureChanged' && (
+        <span className="text-[11px] text-status-warn-foreground">目录结构与登记不符</span>
       )}
 
       {/* 统计 */}
@@ -52,23 +60,33 @@ export function KbHeader() {
           <span className="text-[10px] text-muted-foreground">分类</span>
         </div>
         <div className="flex flex-col items-center">
-          <CheckCircle
-            className={cn(
-              'h-3.5 w-3.5',
-              indexReady ? 'text-status-pass-foreground' : 'text-muted-foreground/40',
-            )}
-          />
-          <span className="text-[10px] text-muted-foreground">索引</span>
+          {isWikiFormat ? (
+            <CircleSlash
+              className={cn(
+                'h-3.5 w-3.5',
+                indexReady ? 'text-status-pass-foreground' : 'text-muted-foreground/40',
+              )}
+            />
+          ) : (
+            <CheckCircle
+              className={cn(
+                'h-3.5 w-3.5',
+                indexReady ? 'text-status-pass-foreground' : 'text-muted-foreground/40',
+              )}
+            />
+          )}
+          <span className="text-[10px] text-muted-foreground">{isWikiFormat ? '清单' : '索引'}</span>
         </div>
       </div>
 
       <div className="flex-1" />
 
-      {/* 上传按钮 */}
+      {/* 上传按钮：wiki 布局暂不支持文档导入 */}
       <button
-        onClick={handleUploadClick}
-        disabled={uploading}
-        className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+        onClick={() => void useKbStore.getState().pickAndUpload()}
+        disabled={uploading || isWikiFormat}
+        title={isWikiFormat ? '新布局（LLM Wiki）暂不支持文档导入' : undefined}
+        className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
       >
         <Upload className="h-3.5 w-3.5" />
         {uploading ? '上传中...' : '上传文档'}

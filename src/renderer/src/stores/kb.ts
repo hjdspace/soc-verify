@@ -24,11 +24,15 @@ import type {
   KbMount,
   KbStatus,
   KbListEntry,
+  KbDisposal,
 } from '@shared/kb-types';
 
 // ── 渲染端独有类型（不跨进程） ─────────────────────────────────
 
 export type KbTab = 'list' | 'index' | 'preview';
+
+/** registerKb 结果（渲染端需要区分错误码以提供「注册为副本」入口） */
+export type KbRegisterOutcome = { ok: true } | { ok: false; errorCode?: string; message: string };
 
 // ── 重新导出共享类型（供组件 import 不变） ────────────────────
 
@@ -43,6 +47,7 @@ export type {
   KbMount,
   KbListEntry,
   KbStatus,
+  KbDisposal,
 };
 
 // ── done/failed 事件刷新防抖 ─────────────────────────────────
@@ -118,9 +123,8 @@ interface KbStoreState {
   pickAndUpload: () => Promise<void>;
   retryDocument: (name: string) => Promise<void>;
   deleteDocument: (name: string) => Promise<void>;
-  registerKb: (name: string, path: string) => Promise<boolean>;
+  registerKb: (name: string, path: string, asCopy?: boolean) => Promise<KbRegisterOutcome>;
   unregisterKb: (kbId: string) => Promise<boolean>;
-  deleteKb: (kbId: string) => Promise<boolean>;
   mountKb: (kbId: string) => Promise<boolean>;
   unmountKb: (kbId: string) => Promise<boolean>;
   setKbModalOpen: (open: boolean) => void;
@@ -151,6 +155,11 @@ interface KbStoreState {
   kbEngines: ConvertEngineInfo[];
   loadKbSettings: () => Promise<void>;
   updateKbSettings: (settings: KbSettings) => Promise<boolean>;
+
+  // ── 旧格式处置记录 ──────────────────────────────────────
+  kbDisposals: KbDisposal[];
+  loadDisposals: () => Promise<void>;
+  dismissDisposal: (disposalId: string) => Promise<boolean>;
 }
 
 export const useKbStore = create<KbStoreState>((set, get) => ({
@@ -179,6 +188,7 @@ export const useKbStore = create<KbStoreState>((set, get) => ({
   kbSettings: null,
   kbSettingsLoading: false,
   kbEngines: [],
+  kbDisposals: [],
 
   // ── 加载库列表 ───────────────────────────────────────────
   loadKbList: async () => {
@@ -334,25 +344,25 @@ export const useKbStore = create<KbStoreState>((set, get) => ({
   },
 
   // ── 注册知识库 ───────────────────────────────────────────
-  registerKb: async (name, path) => {
+  registerKb: async (name, path, asCopy) => {
     try {
-      const result = await trpc.kb.register.mutate({ name, path });
+      const result = await trpc.kb.register.mutate({ name, path, ...(asCopy ? { asCopy: true } : {}) });
       if (result.ok) {
         useToastStore.getState().success(`已注册知识库: ${name}`);
         await get().loadKbList();
-        return true;
+        return { ok: true };
       }
       useToastStore.getState().error(
         '注册知识库失败',
         result.ok === false ? `${result.error.code}: ${result.error.message}` : '',
       );
-      return false;
+      return { ok: false, errorCode: result.error.code, message: result.error.message };
     } catch (err) {
       useToastStore.getState().error(
         '注册知识库失败',
         err instanceof Error ? err.message : String(err),
       );
-      return false;
+      return { ok: false, message: err instanceof Error ? err.message : String(err) };
     }
   },
 
@@ -385,6 +395,22 @@ export const useKbStore = create<KbStoreState>((set, get) => ({
       const result = await trpc.kb.mount.mutate({ kbId });
       if (result.ok) {
         useToastStore.getState().success('已挂载知识库');
+        // 事务恢复报告（wiki 库重开时执行）
+        if (result.recovery) {
+          const { cleaned, rolledForward, rolledBack, failures } = result.recovery;
+          if (failures.length > 0) {
+            useToastStore.getState().warning(
+              '挂载时发现未完成事务，部分无法自动恢复（现场已保留）',
+              failures.join('\n'),
+            );
+          } else if (rolledForward > 0 || rolledBack > 0) {
+            useToastStore.getState().success(
+              `挂载时恢复未完成事务：${rolledForward} 个继续完成，${rolledBack} 个回滚到旧版`,
+            );
+          } else if (cleaned > 0) {
+            useToastStore.getState().success(`挂载时清理了 ${cleaned} 个已完成事务`);
+          }
+        }
         await get().refreshAll();
         await get().loadKbList();
         return true;
@@ -426,35 +452,6 @@ export const useKbStore = create<KbStoreState>((set, get) => ({
     } catch (err) {
       useToastStore.getState().error(
         '卸载知识库失败',
-        err instanceof Error ? err.message : String(err),
-      );
-      return false;
-    }
-  },
-
-  // ── 删除知识库（注销 + 删除目录） ──────────────────────────────────────────
-  deleteKb: async (kbId) => {
-    try {
-      const result = await trpc.kb.deleteKb.mutate({ kbId });
-      if (result.ok) {
-        useToastStore.getState().success('已删除知识库');
-        set({
-          kbStatus: null,
-          categories: [],
-          documents: [],
-          selectedCategory: null,
-        });
-        await get().loadKbList();
-        return true;
-      }
-      useToastStore.getState().error(
-        '删除知识库失败',
-        result.ok === false ? `${result.error.code}: ${result.error.message}` : '',
-      );
-      return false;
-    } catch (err) {
-      useToastStore.getState().error(
-        '删除知识库失败',
         err instanceof Error ? err.message : String(err),
       );
       return false;
@@ -730,6 +727,37 @@ export const useKbStore = create<KbStoreState>((set, get) => ({
     } catch (err) {
       useToastStore.getState().error(
         '保存知识库设置失败',
+        err instanceof Error ? err.message : String(err),
+      );
+      return false;
+    }
+  },
+
+  // ── 旧格式处置记录 ──────────────────────────────────────
+  loadDisposals: async () => {
+    try {
+      const result = await trpc.kb.disposals.query({});
+      set({ kbDisposals: result });
+    } catch {
+      set({ kbDisposals: [] });
+    }
+  },
+
+  dismissDisposal: async (disposalId) => {
+    try {
+      const result = await trpc.kb.dismissDisposal.mutate({ disposalId });
+      if (result.ok) {
+        await get().loadDisposals();
+        return true;
+      }
+      useToastStore.getState().error(
+        '移除处置记录失败',
+        result.ok === false ? result.error.message : '',
+      );
+      return false;
+    } catch (err) {
+      useToastStore.getState().error(
+        '移除处置记录失败',
         err instanceof Error ? err.message : String(err),
       );
       return false;

@@ -108,6 +108,13 @@ export function KbView() {
       {/* ── 库头部 ────────────────────────────────────────── */}
       <KbHeader />
 
+      {/* ── wiki 布局能力提示：旧分类入口已停用 ─────────── */}
+      {kbStatus?.mounted?.format === 'wiki' && (
+        <div className="border-b border-border bg-secondary/50 px-4 py-1.5 text-[11px] text-muted-foreground">
+          新布局（LLM Wiki）知识库已挂载：文档导入、分类与索引能力暂未就绪，将由知识库新流水线提供。
+        </div>
+      )}
+
       {/* ── 主体：分类树 + 内容区 ────────────────────────── */}
       <div className="flex flex-1 overflow-hidden">
         {/* 分类树面板 */}

@@ -321,52 +321,152 @@ _Avoid_: chart theme, echarts skin
 ### 知识库域
 
 **Knowledge Base**:
-用户注册的任意目录，作为 Markdown 文档知识资产的容器，自包含（源文档副本、转换产物、索引、图片资产），可整体拷贝迁移。应用级注册，项目级挂载使用。
+用户注册、供项目挂载的知识资产容器，包含原始证据与经审阅发布的知识，可整体拷贝后重新登记使用。
 _Avoid_: 文档库, doc library, document store
 
+**Raw Layer（原始层）**:
+存放来源原件、需保留的历史修订及机械转换产物的知识库层。原件是受保护证据，派生产物只有在对应原件仍在时才能重建。
+_Avoid_: sources layer, 原始资料区
+
+**Wiki Layer（编译层）**:
+存放经审阅发布的知识页和知识库导航、操作记录的层。重新生成知识不能保证复现过去的取舍与审阅结果。
+_Avoid_: 生成层, compiled layer
+
+**Wiki Page**:
+具有类型、标题、摘要、来源与页面引用的知识页面，分为 Source Page 与 Knowledge Page。
+_Avoid_: 知识条目, wiki entry
+
+**Source Page（源摘要页）**:
+针对单一来源修订的结构化摘要，包含要点、参数与章节地图，并链接到它贡献的知识页。
+_Avoid_: 文档摘要, source summary
+
+**Knowledge Page（知识页）**:
+围绕实体、概念、对照、综合、问答、已知问题或接口组织的知识页面，可以从一个来源起步并持续吸收多个来源的贡献。
+_Avoid_: 实体页, concept page, 主题页
+
+**Pitfall Page（已知问题页）**:
+按现象、根因、规避与证据组织的知识页，区分有证据的经验和未验证的推测。
+_Avoid_: known issue, troubleshooting page
+
+**Interface Page（接口页）**:
+承载接口信号、位段与时序约束的知识页，保留适用范围及精确参数的原始证据。
+_Avoid_: 寄存器页, signal page
+
+**Query Page（问答页）**:
+经用户主动选择并审阅发布的问题与回答，保留适用条件、来源证据和未证实项。
+_Avoid_: 聊天归档, chat dump
+
+**Wiki Schema（wiki 规则）**:
+知识库的页面类型、组织方式与写作约定，约束编译提案的结构。
+_Avoid_: wiki 配置, schema doc
+
 **KB Registration**:
-将一个目录登记为知识库的动作，登记信息存应用全局配置。注册空目录时初始化标准结构（`sources/`、`docs/`、`index.md`）。
+将一个目录登记为应用可管理知识库的动作；登记与文件内容的创建或删除是不同操作。
 _Avoid_: library creation, 库创建
 
 **KB Mount**:
-项目与知识库的挂载关系，存项目配置。挂载后库对项目内 AI Agent 会话可见（索引注入 + kb_search）。v1 单库挂载，架构预留多库。
+项目与已注册知识库的使用关系，使项目会话能够检索和读取该库。当前一个项目同时挂载一个库。
 _Avoid_: library link, 库关联
 
 **Source Document**:
-上传时复制入库的原始文档副本（pdf/docx/pptx 等），存 `sources/`，是重新转换的唯一依据。同名上传即覆盖并触发重转。
-_Avoid_: 原件, original file
+入库后具有稳定身份的来源文档，同一路径的更新属于该来源的新修订；同名但不同目录或格式的文档是不同来源。
+_Avoid_: docName, original file
+
+**Source Revision（来源修订）**:
+某一来源在特定时点的原始内容，知识证据绑定具体修订。被已发布页、页面历史或待审阅提案引用的旧修订须保留。
+_Avoid_: 当前文件, latest source
 
 **Conversion**:
-anydoc 将 Source Document 转为 GitHub-Flavored Markdown 的过程。嵌入图片提取到 `docs/assets/<文档名>/` 并在 markdown 中替换为相对路径链接。
-_Avoid_: transformation, 文档解析
+从来源原件提取全文文本和图像资产的本地机械处理，不包含模型生成的解释。
+_Avoid_: transformation, 知识编译
+
+**Parsed Markdown（转换产物）**:
+来源修订经机械转换得到的全文 Markdown，用于原文检索和引用定位；不混入模型视觉解读。
+_Avoid_: 知识摘要, generated source
 
 **Conversion Failure**:
-anydoc 无法产出有意义 Markdown 的情况，以错误码呈现（扫描版 PDF → `unsupported`、加密文档 → `encrypted` 等）。失败条目在文档列表中可见、可重试。
-_Avoid_: conversion error
+来源无法完成约定转换的情况，包括不支持、加密、损坏或资源限制；须与模型分析失败区分。
+_Avoid_: conversion error, AI failure
+
+**Visual Interpretation（视觉解读）**:
+模型针对来源图像给出的解释，包含可见事实、关系和不确定项，并绑定原图与来源位置。它是待审阅知识，不能充当机械提取的原文。
+_Avoid_: OCR 全文, 原图事实
+
+**Knowledge Evidence（知识证据）**:
+支撑知识论断的原文片段、图像或项目数据引用，能够标识来源修订和定位位置；引用失效与论断被证实是不同状态。
+_Avoid_: 无版本链接, 推测来源
 
 **KB Index**:
-单文件 `index.md`，知识库的目录结构索引：层级目录树 + 每文档的标题、一句话摘要、关键词、相对路径链接。AI Agent 速查知识库的入口地图，用户可直接阅读编辑。
+由已发布知识页的标题、摘要和主题信息聚合而成的完整导航目录。目录登记完整不代表页面间已经充分互联。
 _Avoid_: catalog, 目录清单
 
-**Auto Classification**:
-转换完成后由 LLM 根据文档内容决定其归属的分类子目录（`docs/<分类>/`），与 Fast Reindex 合并为一次 LLM 调用。用户可拖拽改分类后重建索引。
-_Avoid_: auto categorization
+**Wiki Log（wiki 日志）**:
+知识库中可追溯的追加操作记录，不等同于页面历史或可丢弃运行日志。
+_Avoid_: debug log, 页面快照
 
-**Fast Reindex**:
-直连 LLM API 的一次性调用，基于文档骨架（标题结构 + 前若干行）为新增文档生成索引条目并增量合并进 KB Index。上传转换成功后自动触发。
-_Avoid_: quick index
+**Document Tagging（文档标签）**:
+赋予来源摘要的主题标签，用于分组与筛选，不决定原件或转换产物的物理位置。
+_Avoid_: auto classification, 文档分类目录
 
-**Deep Reindex**:
-走完整 pi Agent 会话的索引重建模式，agent 可逐文档深入阅读后重写摘要，质量上限高、耗时更长。用户手动触发。
-_Avoid_: full reindex
+**Wiki Compile（知识编译）**:
+依据来源、既有知识和写作规则生成或修订知识页提案的过程。编译完成不等于知识已发布。
+_Avoid_: index build, 索引重建
+
+**Ingest Queue（摄取队列）**:
+记录并组织来源或选定问答处理任务的持久队列，保留未完成任务及其可恢复进度。
+_Avoid_: build queue, 临时任务列表
+
+**Staging Area（暂存区）**:
+保留未发布知识提案、审阅基线和用户选择的区域，不参与默认知识消费。
+_Avoid_: temp dir, 已发布知识
+
+**Knowledge Change Set（知识变更集）**:
+一次编译或修复产生的关联页面提案，用户选择后以最终候选集进行一致性校验和发布。
+_Avoid_: tool call batch, 单页保存
+
+**Knowledge Publication（知识发布）**:
+把经审阅并校验的知识变更集变为正式可读知识的过程，须能从中断中恢复且不能覆盖过时审阅基线。
+_Avoid_: 编译成功, 自动落盘
+
+**Page History（页面历史）**:
+保留知识页历次内容与变更来源的记录，用于追溯和回滚；其依赖证据也须可定位。
+_Avoid_: 当前页面备份, 可清理缓存
 
 **doc_to_markdown**:
-Host Tool。AI Agent 按需将任意支持格式文档转为 Markdown 返回内容，不入库。Agent 承接"看 word/pdf 文档"类任务时的决策路径。
-_Avoid_: convert tool
+Agent 按需转换库外文档的只读工具，不使文档成为知识库来源。
+_Avoid_: ingest tool
 
 **kb_search**:
-Host Tool。跨挂载知识库检索（KB Index 关键词 + `docs/` 全文匹配），返回匹配文档路径与摘要。
+Agent 对挂载库的已发布知识与可用来源全文进行检索的工具，返回可定位的结果及知识/证据状态。
 _Avoid_: knowledge query, kb query
+
+**kb_read**:
+Agent 按知识或来源身份分页读取挂载库内容的工具，支持定位具体来源修订。
+_Avoid_: 任意文件读取, doc_id 读取
+
+**Knowledge Graph（知识图谱）**:
+已发布知识页及其页面引用构成的关系网络，可从知识内容重建，不包含导航聚合页作为知识节点。
+_Avoid_: link graph, 引用网络
+
+**Graph Expansion（图扩展）**:
+从初步检索命中的知识页出发，补充直接相关联页面的召回过程。
+_Avoid_: neighbor search, 全图查询
+
+**Relatedness（关联度）**:
+用于推荐相关页面的关联强度，综合页面引用、来源重叠、共同邻居和类型关系；不是知识正确率。
+_Avoid_: similarity, 置信度
+
+**Lint**:
+检查知识结构与语义问题的维护操作，结果应说明检查范围与证据，不承诺检出了全部问题。
+_Avoid_: 全库正确性证明, 质量评分
+
+**Knowledge Finding（知识待办）**:
+编译或健康检查提出的矛盾、缺页、过时或关联建议，有待处理、忽略与复核解决等状态。处理待办不等同于批准页面变更。
+_Avoid_: diff hunk, 已确认错误
+
+**Graph Insight（图谱洞察）**:
+从网络结构发现的稀疏社区、桥接节点等启发式线索，需结合内容判断其意义。
+_Avoid_: 已证实知识盲区, 语义矛盾
 
 ### 多目录域
 

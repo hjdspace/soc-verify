@@ -2,18 +2,20 @@
  * Knowledge Base router — 注册、挂载、状态管理、上传流水线。
  *
  * Procedure（inline input validator，非 zod）：
- *   - kb.list       已注册库列表 + 每库文档数/分类数统计
- *   - kb.register   注册知识库（空目录初始化 / 已有目录兼容校验）
- *   - kb.unregister 注销知识库（已挂载的库不可注销）
- *   - kb.mount      挂载知识库到项目（v1 上限 1）
- *   - kb.unmount    卸载知识库
- *   - kb.status     当前挂载库 + 结构健康检查
- *   - kb.upload     上传文档 → 转换 → 分类 → 索引
- *   - kb.documents  文档列表
- *   - kb.delete     删除文档
- *   - kb.retry      重试失败转换
- *   - kb.categories 分类树 + 计数
- *   - kb.getSettings / kb.updateSettings 知识库设置（引擎 + AI 模型）
+ *   - kb.list            已注册库列表（含格式 format 与可达性 state）
+ *   - kb.register        注册知识库（空目录初始化 wiki 布局 / wiki 目录读取
+ *                        库内 kbId；复制库冲突时 asCopy 注册为副本）
+ *   - kb.unregister      注销知识库（不删除文件；已挂载的库不可注销）
+ *   - kb.deleteKb        删除库（尚未支持，返回 deleteNotSupported）
+ *   - kb.disposals       旧格式处置记录查询
+ *   - kb.dismissDisposal 移除处置记录（不触碰库目录）
+ *   - kb.mount           挂载知识库到项目（v1 上限 1；wiki 库挂载时执行事务恢复）
+ *   - kb.unmount         卸载知识库
+ *   - kb.status          当前挂载库 + 健康检查（legacy health + wikiHealth）
+ *   - kb.upload / documents / delete / retry / categories / index / preview /
+ *     moveCategory / renameCategory / reclassify / deepReindex
+ *                        旧分类读写入口——挂载 wiki 布局库时明确不可用
+ *                        （notAvailableForWikiLayout），能力由后继票接入
  *
  * 错误处理：register/unregister/mount/unmount 返回 Result 联合
  * （{ ok: true, ...data } | { ok: false, error: KbError }），
@@ -21,7 +23,8 @@
  *
  * 状态与进度通过原生 IPC 推送（kb:* 通道）。
  *
- * @see ADR 0021 — anydoc 文档知识库
+ * @see ADR 0034 — 知识库重构为 LLM Wiki 双层架构
+ * @see ADR 0021 — anydoc 文档知识库（旧布局，已停用）
  */
 
 import { dialog } from 'electron';
@@ -45,15 +48,23 @@ import {
 } from '../../kb/pipeline';
 import { deepReindex, type DeepReindexEvent } from '../../kb/deep-reindexer';
 import { resolveKbLlmConfig } from '../../kb/llm-config';
-import { autoScanDocuments } from '../../kb/scanner';
 import { kbSettingsManager, ENGINE_IDS, type KbSettings } from '../../kb/kb-settings';
 import { listConvertEngines, type ConvertEngineInfo } from '../../kb/engines';
-import type { KbRegistration, KbMount, KbError, KbDocument, KbCategory, KbDocStatusEvent } from '../../kb/types';
+import type {
+  KbRegistration,
+  KbMount,
+  KbError,
+  KbDocument,
+  KbCategory,
+  KbDocStatusEvent,
+  KbRecoveryReport,
+  KbFormat,
+} from '../../kb/types';
 
 // ── Result 联合类型（供 tRPC 输出推导） ─────────────────────────
 
 type RegisterResult =
-  | { ok: true; id: string; name: string; path: string; registeredAt: number }
+  | { ok: true; id: string; name: string; path: string; registeredAt: number; format: KbFormat }
   | { ok: false; error: KbError };
 
 type UnregisterResult =
@@ -61,7 +72,7 @@ type UnregisterResult =
   | { ok: false; error: KbError };
 
 type MountResult =
-  | { ok: true; data: KbMount }
+  | { ok: true; data: KbMount; recovery: KbRecoveryReport | null }
   | { ok: false; error: KbError };
 
 type UnmountResult =
@@ -74,17 +85,33 @@ type UploadResult =
 
 // ── 辅助函数 ─────────────────────────────────────────────────────
 
+/** 旧分类入口对新布局不可用的统一错误信息 */
+const WIKI_LAYOUT_UNAVAILABLE =
+  '新布局（LLM Wiki）知识库暂不支持此能力：旧分类读写入口已停用，功能将由知识库新流水线提供';
+
 /**
- * 获取当前挂载的知识库路径。
+ * 获取当前挂载的知识库路径与格式。
  * 未挂载时抛出 TRPCError。
  */
-async function getMountedKbPath(): Promise<string> {
+async function getMountedKb(): Promise<{ path: string; format: KbFormat | null }> {
   const rootPath = activeProject().rootPath;
   const status = await kbRegistry.status(rootPath);
   if (!status.mounted) {
     throw new TRPCError({ code: 'PRECONDITION_FAILED', message: '未挂载知识库，请先挂载' });
   }
-  return status.mounted.path;
+  return { path: status.mounted.path, format: status.mounted.format };
+}
+
+/**
+ * 获取当前挂载的知识库路径，并守卫旧分类读写入口：
+ * wiki 布局挂载时这些入口必须明确不可用，不能对新布局误操作。
+ */
+async function getLegacyMountedKbPath(): Promise<string> {
+  const mounted = await getMountedKb();
+  if (mounted.format === 'wiki') {
+    throw new TRPCError({ code: 'PRECONDITION_FAILED', message: WIKI_LAYOUT_UNAVAILABLE });
+  }
+  return mounted.path;
 }
 
 /**
@@ -116,7 +143,7 @@ export const kbRouter = t.router({
   // ─── kb.register ──────────────────────────────────────────
 
   register: t.procedure
-    .input((raw): { name: string; path: string } => {
+    .input((raw): { name: string; path: string; asCopy?: boolean } => {
       const r = raw as Record<string, unknown>;
       if (typeof r.name !== 'string' || r.name.trim().length === 0) {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'name is required' });
@@ -124,10 +151,17 @@ export const kbRouter = t.router({
       if (typeof r.path !== 'string' || r.path.trim().length === 0) {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'path is required' });
       }
-      return { name: r.name.trim(), path: r.path.trim() };
+      if (r.asCopy !== undefined && typeof r.asCopy !== 'boolean') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'asCopy must be a boolean' });
+      }
+      return {
+        name: r.name.trim(),
+        path: r.path.trim(),
+        ...(r.asCopy === true ? { asCopy: true } : {}),
+      };
     })
     .mutation(async ({ input }): Promise<RegisterResult> => {
-      const result = await kbRegistry.register(input.name, input.path);
+      const result = await kbRegistry.register(input.name, input.path, { asCopy: input.asCopy });
       if (!result.ok) {
         return { ok: false, error: result.error };
       }
@@ -138,7 +172,40 @@ export const kbRouter = t.router({
         name: d.name,
         path: d.path,
         registeredAt: d.registeredAt,
+        format: d.format,
       };
+    }),
+
+  // ─── kb.disposals ─────────────────────────────────────────
+  //
+  // 旧格式处置记录查询：已确认旧格式而移出活动使用的库路径。
+
+  disposals: t.procedure
+    .input((_raw): Record<string, never> => {
+      return {};
+    })
+    .query(async () => {
+      return kbRegistry.listDisposals();
+    }),
+
+  // ─── kb.dismissDisposal ───────────────────────────────────
+  //
+  // 移除处置记录（仅删除记录本身，不触碰库目录）。
+
+  dismissDisposal: t.procedure
+    .input((raw): { disposalId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.disposalId !== 'string' || r.disposalId.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'disposalId is required' });
+      }
+      return { disposalId: r.disposalId.trim() };
+    })
+    .mutation(async ({ input }): Promise<UnregisterResult> => {
+      const result = await kbRegistry.dismissDisposal(input.disposalId);
+      if (!result.ok) {
+        return { ok: false, error: result.error };
+      }
+      return { ok: true };
     }),
 
   // ─── kb.unregister ────────────────────────────────────────
@@ -192,28 +259,17 @@ export const kbRouter = t.router({
       }
       return { kbId: r.kbId.trim() };
     })
-    .mutation(async ({ input }): Promise<MountResult & { autoScanned?: number }> => {
+    .mutation(async ({ input }): Promise<MountResult> => {
       const rootPath = activeProject().rootPath;
       const result = await kbRegistry.mount(input.kbId, rootPath);
       if (!result.ok) {
         return { ok: false, error: result.error };
       }
 
-      // 挂载成功后自动扫描库目录下的文档。
-      // status 只做挂载表 + 注册表查询（无目录扫描），此前用 kbRegistry.list()
-      // 取路径会顺带对所有注册库做全量文档统计——挂载时拖慢主进程。
-      try {
-        const status = await kbRegistry.status(rootPath);
-        const mountedPath = status.mounted?.path;
-        if (mountedPath) {
-          const scanResult = await autoScanDocuments(mountedPath, notifyKbStatus);
-          return { ok: true, data: result.data, autoScanned: scanResult.scanned };
-        }
-      } catch {
-        // 自动扫描失败不阻塞挂载
-      }
-
-      return { ok: true, data: result.data };
+      // wiki 库挂载 = 重开：registry.mount 内部已执行 recoverTransactions。
+      // 旧布局的自动扫描（autoScanDocuments）已停用——wiki 布局没有
+      // sources/ 文档流水线，导入由后继票的新链路提供。
+      return { ok: true, data: result.data.mount, recovery: result.data.recovery };
     }),
 
   // ─── kb.unmount ───────────────────────────────────────────
@@ -282,7 +338,7 @@ export const kbRouter = t.router({
       return { filePaths: r.filePaths as string[] };
     })
     .mutation(async ({ input }): Promise<{ results: UploadResult[] }> => {
-      const kbPath = await getMountedKbPath();
+      const kbPath = await getLegacyMountedKbPath();
       const llmConfig = await resolveKbLlmConfig();
 
       const results: UploadResult[] = [];
@@ -305,7 +361,7 @@ export const kbRouter = t.router({
       return {};
     })
     .query(async (): Promise<KbDocument[]> => {
-      const kbPath = await getMountedKbPath();
+      const kbPath = await getLegacyMountedKbPath();
       return listDocuments(kbPath);
     }),
 
@@ -320,7 +376,7 @@ export const kbRouter = t.router({
       return { name: r.name.trim() };
     })
     .mutation(async ({ input }): Promise<{ ok: true }> => {
-      const kbPath = await getMountedKbPath();
+      const kbPath = await getLegacyMountedKbPath();
       await deleteDocument(kbPath, input.name);
       return { ok: true };
     }),
@@ -336,7 +392,7 @@ export const kbRouter = t.router({
       return { name: r.name.trim() };
     })
     .mutation(async ({ input }): Promise<UploadResult> => {
-      const kbPath = await getMountedKbPath();
+      const kbPath = await getLegacyMountedKbPath();
       const llmConfig = await resolveKbLlmConfig();
       const result = await retryDocument(kbPath, input.name, llmConfig, notifyKbStatus);
       if (result.ok) {
@@ -352,7 +408,7 @@ export const kbRouter = t.router({
       return {};
     })
     .query(async (): Promise<KbCategory[]> => {
-      const kbPath = await getMountedKbPath();
+      const kbPath = await getLegacyMountedKbPath();
       return listCategories(kbPath);
     }),
 
@@ -368,7 +424,7 @@ export const kbRouter = t.router({
       return { content: r.content as string | undefined };
     })
     .mutation(async ({ input }): Promise<{ content: string }> => {
-      const kbPath = await getMountedKbPath();
+      const kbPath = await getLegacyMountedKbPath();
       if (input.content !== undefined) {
         // Write mode
         await writeIndexMd(kbPath, input.content);
@@ -390,7 +446,7 @@ export const kbRouter = t.router({
       return { name: r.name.trim() };
     })
     .query(async ({ input }): Promise<{ content: string | null }> => {
-      const kbPath = await getMountedKbPath();
+      const kbPath = await getLegacyMountedKbPath();
       const content = await readMarkdownDoc(kbPath, input.name);
       return { content };
     }),
@@ -409,7 +465,7 @@ export const kbRouter = t.router({
       return { name: r.name.trim(), category: r.category.trim() };
     })
     .mutation(async ({ input }): Promise<{ ok: true; newPath: string } | { ok: false; error: { code: string; message: string } }> => {
-      const kbPath = await getMountedKbPath();
+      const kbPath = await getLegacyMountedKbPath();
       const newPath = await moveDocumentCategory(kbPath, input.name, input.category);
       if (newPath === null) {
         return { ok: false, error: { code: 'notFound', message: `文档未找到: ${input.name}` } };
@@ -431,7 +487,7 @@ export const kbRouter = t.router({
       return { oldName: r.oldName.trim(), newName: r.newName.trim() };
     })
     .mutation(async ({ input }): Promise<{ ok: true } | { ok: false; error: { code: string; message: string } }> => {
-      const kbPath = await getMountedKbPath();
+      const kbPath = await getLegacyMountedKbPath();
       const success = await renameCategory(kbPath, input.oldName, input.newName);
       if (!success) {
         return { ok: false, error: { code: 'notFound', message: `分类不存在: ${input.oldName}` } };
@@ -457,7 +513,7 @@ export const kbRouter = t.router({
       { ok: true; category: string; title: string; summary: string; keywords: string[]; moved: boolean }
       | { ok: false; error: { code: string; message: string } }
     > => {
-      const kbPath = await getMountedKbPath();
+      const kbPath = await getLegacyMountedKbPath();
       const llmConfig = await resolveKbLlmConfig();
       const result = await reclassifyDocument(kbPath, input.name, llmConfig);
       if (!result.ok) {
@@ -480,7 +536,7 @@ export const kbRouter = t.router({
       return {};
     })
     .mutation(async (): Promise<{ ok: true; sessionId: string; documentCount: number } | { ok: false; error: { code: string; message: string } }> => {
-      const kbPath = await getMountedKbPath();
+      const kbPath = await getLegacyMountedKbPath();
       const rootPath = activeProject().rootPath;
       const project = projectManager.getProjectByPath(rootPath);
       if (!project) {

@@ -12,8 +12,10 @@ const { mockKbList, mockKbStatus, mockCategories, mockDocuments } = vi.hoisted((
       name: '芯片验证文档库',
       path: 'D:\\docs\\soc-kb',
       registeredAt: 1700000000000,
-      documentCount: 24,
-      categoryCount: 5,
+      format: 'wiki' as const,
+      state: 'ok' as const,
+      documentCount: 0,
+      categoryCount: 0,
       isMounted: true,
     },
     {
@@ -21,8 +23,10 @@ const { mockKbList, mockKbStatus, mockCategories, mockDocuments } = vi.hoisted((
       name: '通用协议手册库',
       path: 'E:\\shared\\amba-refs',
       registeredAt: 1700000001000,
-      documentCount: 156,
-      categoryCount: 8,
+      format: 'wiki' as const,
+      state: 'ok' as const,
+      documentCount: 0,
+      categoryCount: 0,
       isMounted: false,
     },
   ];
@@ -33,8 +37,11 @@ const { mockKbList, mockKbStatus, mockCategories, mockDocuments } = vi.hoisted((
       mountedAt: 1700000002000,
       name: '芯片验证文档库',
       path: 'D:\\docs\\soc-kb',
+      format: 'wiki' as const,
+      state: 'ok' as const,
     },
-    health: { hasSources: true, hasDocs: true, hasIndex: true },
+    health: { hasSources: false, hasDocs: false, hasIndex: false },
+    wikiHealth: { hasSchema: true, hasPurpose: true, hasManifest: true, hasRaw: true, hasWiki: true },
   };
 
   const mockCategories = [
@@ -110,10 +117,12 @@ vi.mock('@renderer/lib/trpc', () => ({
       upload: { mutate: vi.fn().mockResolvedValue({ results: [{ ok: true, document: mockDocuments[0] }] }) },
       retry: { mutate: vi.fn().mockResolvedValue({ ok: true, document: mockDocuments[0] }) },
       delete: { mutate: vi.fn().mockResolvedValue({ ok: true }) },
-      register: { mutate: vi.fn().mockResolvedValue({ ok: true, id: 'kb-3', name: '新库', path: 'D:\\new', registeredAt: 0 }) },
+      register: { mutate: vi.fn().mockResolvedValue({ ok: true, id: 'kb-3', name: '新库', path: 'D:\\new', registeredAt: 0, format: 'wiki' }) },
       unregister: { mutate: vi.fn().mockResolvedValue({ ok: true }) },
-      mount: { mutate: vi.fn().mockResolvedValue({ ok: true, data: { kbId: 'kb-2', mountedAt: 0 } }) },
+      mount: { mutate: vi.fn().mockResolvedValue({ ok: true, data: { kbId: 'kb-2', mountedAt: 0 }, recovery: { cleaned: 0, rolledForward: 0, rolledBack: 0, failures: [] } }) },
       unmount: { mutate: vi.fn().mockResolvedValue({ ok: true }) },
+      disposals: { query: vi.fn().mockResolvedValue([]) },
+      dismissDisposal: { mutate: vi.fn().mockResolvedValue({ ok: true }) },
       index: { mutate: vi.fn().mockResolvedValue({ content: '# 知识库索引\n\n## 协议手册\n\n### AMBA AXI 协议规范 v4.1\n- **路径**: `协议手册/AMBA_AXI_v4.1.md`\n- **摘要**: AXI4 协议规范\n- **关键词**: `AXI` · `总线`\n' }) },
       preview: { query: vi.fn().mockResolvedValue({ content: '# AMBA AXI 协议规范 v4.1\n\nAXI4 通道信号定义。\n\n## Chapter A2' }) },
       moveCategory: { mutate: vi.fn().mockResolvedValue({ ok: true, newPath: 'D:\\docs\\kb\\docs\\新分类\\test.md' }) },
@@ -227,6 +236,7 @@ describe('KbView', () => {
       vi.mocked(trpc.kb.status.query).mockResolvedValue({
         mounted: null,
         health: { hasSources: false, hasDocs: false, hasIndex: false },
+        wikiHealth: null,
       });
     });
 
@@ -288,10 +298,31 @@ describe('KbView', () => {
       expect(screen.getByText('芯片验证文档库')).toBeTruthy();
     });
 
-    it('renders library path', () => {
+    it('renders library path with format', () => {
       render(<KbView />);
 
-      expect(screen.getByText('D:\\docs\\soc-kb')).toBeTruthy();
+      expect(screen.getByText(/D:\\docs\\soc-kb · wiki/)).toBeTruthy();
+    });
+
+    it('renders wiki capability banner for wiki-format mount', () => {
+      render(<KbView />);
+
+      expect(screen.getByText(/新布局（LLM Wiki）知识库已挂载/)).toBeTruthy();
+    });
+
+    it('disables upload button for wiki-format mount', () => {
+      render(<KbView />);
+
+      const uploadButton = screen.getByText('上传文档').closest('button');
+      expect(uploadButton?.disabled).toBe(true);
+      expect(uploadButton?.title).toContain('暂不支持文档导入');
+    });
+
+    it('renders manifest readiness label instead of index for wiki mount', () => {
+      render(<KbView />);
+
+      expect(screen.getByText('清单')).toBeTruthy();
+      expect(screen.queryByText('索引')).toBeNull();
     });
 
     it('renders document count stat label', () => {
@@ -968,14 +999,99 @@ describe('KbModal', () => {
     expect(screen.getByText('挂载')).toBeTruthy();
   });
 
-  it('renders structure hint with sources/docs/index.md', async () => {
+  it('renders wiki layout structure hint for new registration', async () => {
     useKbStore.setState({ kbModalOpen: true, kbList: mockKbList, kbStatus: mockKbStatus });
     const { KbModal } = await import('@renderer/components/kb/KbModal');
     render(<KbModal />);
 
-    expect(screen.getByText(/sources\/\s+# 原始文档副本/)).toBeTruthy();
-    expect(screen.getByText(/docs\/\s+# Markdown/)).toBeTruthy();
-    expect(screen.getByText(/index\.md\s+# AI 生成/)).toBeTruthy();
+    expect(screen.getByText(/schema\.md\s*# 写作规则/)).toBeTruthy();
+    expect(screen.getByText(/purpose\.md\s*# 库目标描述/)).toBeTruthy();
+    expect(screen.getByText(/raw\/\s*# sources\//)).toBeTruthy();
+    expect(screen.getByText(/wiki\/\s*# 知识页/)).toBeTruthy();
+    expect(screen.getByText(/\.kb\/\s*# manifest\.json/)).toBeTruthy();
+  });
+
+  it('shows copy-conflict hint with "注册为副本" entry on kbIdConflict', async () => {
+    const { trpc } = await import('@renderer/lib/trpc');
+    vi.mocked(trpc.kb.register.mutate).mockResolvedValueOnce({
+      ok: false as const,
+      error: { code: 'kbIdConflict', message: '该目录是已有知识库「正本库」的副本（库 ID 相同）。' },
+    });
+
+    useKbStore.setState({ kbModalOpen: true, kbList: [], kbStatus: null });
+    const { KbModal } = await import('@renderer/components/kb/KbModal');
+    render(<KbModal />);
+
+    fireEvent.change(screen.getByPlaceholderText('库名称'), { target: { value: '副本库' } });
+    fireEvent.change(screen.getByPlaceholderText('目录路径'), { target: { value: 'E:\\copy\\kb' } });
+    fireEvent.click(screen.getByText('注册'));
+
+    // 冲突提示出现，且提供「注册为副本」入口
+    await waitFor(() => {
+      expect(screen.getByText(/该目录是已有知识库「正本库」的副本/)).toBeTruthy();
+    });
+    expect(screen.getByText('注册为副本')).toBeTruthy();
+  });
+
+  it('re-registers as copy with asCopy: true when clicking the hint entry', async () => {
+    const { trpc } = await import('@renderer/lib/trpc');
+    vi.mocked(trpc.kb.register.mutate)
+      .mockResolvedValueOnce({
+        ok: false as const,
+        error: { code: 'kbIdConflict', message: '该目录是已有知识库「正本库」的副本（库 ID 相同）。' },
+      })
+      .mockResolvedValueOnce({ ok: true, id: 'kb-copy-1', name: '副本库', path: 'E:\\copy\\kb', registeredAt: 0, format: 'wiki' });
+
+    useKbStore.setState({ kbModalOpen: true, kbList: [], kbStatus: null });
+    const { KbModal } = await import('@renderer/components/kb/KbModal');
+    render(<KbModal />);
+
+    fireEvent.change(screen.getByPlaceholderText('库名称'), { target: { value: '副本库' } });
+    fireEvent.change(screen.getByPlaceholderText('目录路径'), { target: { value: 'E:\\copy\\kb' } });
+    fireEvent.click(screen.getByText('注册'));
+
+    await waitFor(() => {
+      expect(screen.getByText('注册为副本')).toBeTruthy();
+    });
+    fireEvent.click(screen.getByText('注册为副本'));
+
+    await waitFor(() => {
+      expect(trpc.kb.register.mutate).toHaveBeenLastCalledWith({ name: '副本库', path: 'E:\\copy\\kb', asCopy: true });
+    });
+    // 冲突提示消失
+    await waitFor(() => {
+      expect(screen.queryByText('注册为副本')).toBeNull();
+    });
+  });
+
+  it('renders legacy disposals with dismiss action', async () => {
+    const { trpc } = await import('@renderer/lib/trpc');
+    vi.mocked(trpc.kb.disposals.query).mockResolvedValueOnce([
+      {
+        id: 'legacy-1',
+        path: 'D:\\old-kb',
+        name: '旧格式库',
+        kbId: null,
+        reason: 'legacyFormat' as const,
+        detectedAt: 1700000000000,
+      },
+    ]);
+
+    useKbStore.setState({ kbModalOpen: true, kbList: [], kbStatus: null });
+    const { KbModal } = await import('@renderer/components/kb/KbModal');
+    render(<KbModal />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/旧格式库处置记录/)).toBeTruthy();
+    });
+    expect(screen.getByText('旧格式库')).toBeTruthy();
+    expect(screen.getByText('D:\\old-kb')).toBeTruthy();
+    expect(screen.getByTitle('仅移除处置记录，不触碰库目录')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('移除记录'));
+    await waitFor(() => {
+      expect(trpc.kb.dismissDisposal.mutate).toHaveBeenCalledWith({ disposalId: 'legacy-1' });
+    });
   });
 
   it('closes on close button click', async () => {

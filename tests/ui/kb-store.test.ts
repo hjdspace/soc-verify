@@ -31,8 +31,11 @@ const { mockKbList, mockKbStatus, mockCategories, mockDocuments } = vi.hoisted((
       mountedAt: 1700000002000,
       name: '芯片验证文档库',
       path: 'D:\\docs\\soc-kb',
+      format: 'wiki' as const,
+      state: 'ok' as const,
     },
-    health: { hasSources: true, hasDocs: true, hasIndex: true },
+    health: { hasSources: false, hasDocs: false, hasIndex: false },
+    wikiHealth: { hasSchema: true, hasPurpose: true, hasManifest: true, hasRaw: true, hasWiki: true },
   };
 
   const mockCategories = [
@@ -108,10 +111,12 @@ vi.mock('@renderer/lib/trpc', () => ({
       upload: { mutate: vi.fn().mockResolvedValue({ results: [{ ok: true, document: mockDocuments[0] }] }) },
       retry: { mutate: vi.fn().mockResolvedValue({ ok: true, document: mockDocuments[0] }) },
       delete: { mutate: vi.fn().mockResolvedValue({ ok: true }) },
-      register: { mutate: vi.fn().mockResolvedValue({ ok: true, id: 'kb-3', name: '新知识库', path: 'D:\\docs\\new-kb', registeredAt: 1700000006000 }) },
+      register: { mutate: vi.fn().mockResolvedValue({ ok: true, id: 'kb-3', name: '新知识库', path: 'D:\\docs\\new-kb', registeredAt: 1700000006000, format: 'wiki' }) },
       unregister: { mutate: vi.fn().mockResolvedValue({ ok: true }) },
-      mount: { mutate: vi.fn().mockResolvedValue({ ok: true, data: { kbId: 'kb-2', mountedAt: 1700000007000 } }) },
+      mount: { mutate: vi.fn().mockResolvedValue({ ok: true, data: { kbId: 'kb-2', mountedAt: 1700000007000 }, recovery: { cleaned: 0, rolledForward: 0, rolledBack: 0, failures: [] } }) },
       unmount: { mutate: vi.fn().mockResolvedValue({ ok: true }) },
+      disposals: { query: vi.fn().mockResolvedValue([]) },
+      dismissDisposal: { mutate: vi.fn().mockResolvedValue({ ok: true }) },
       index: { mutate: vi.fn().mockResolvedValue({ content: '# 知识库索引\n\n## 协议手册\n' }) },
       preview: { query: vi.fn().mockResolvedValue({ content: '# 测试文档\n\n内容' }) },
       moveCategory: { mutate: vi.fn().mockResolvedValue({ ok: true, newPath: 'D:\\docs\\kb\\docs\\新分类\\test.md' }) },
@@ -459,9 +464,29 @@ describe('KbStore', () => {
     it('calls tRPC register and refreshes list', async () => {
       const result = await useKbStore.getState().registerKb('新库', 'D:\\docs\\new');
 
-      expect(result).toBe(true);
+      expect(result.ok).toBe(true);
       const { trpc } = await import('@renderer/lib/trpc');
       expect(trpc.kb.register.mutate).toHaveBeenCalledWith({ name: '新库', path: 'D:\\docs\\new' });
+    });
+
+    it('passes asCopy through for copy-conflict registration', async () => {
+      await useKbStore.getState().registerKb('副本库', 'D:\\docs\\copy', true);
+
+      const { trpc } = await import('@renderer/lib/trpc');
+      expect(trpc.kb.register.mutate).toHaveBeenCalledWith({ name: '副本库', path: 'D:\\docs\\copy', asCopy: true });
+    });
+
+    it('returns error code for copy conflict (kbIdConflict)', async () => {
+      const { trpc } = await import('@renderer/lib/trpc');
+      vi.mocked(trpc.kb.register.mutate).mockResolvedValueOnce({
+        ok: false as const,
+        error: { code: 'kbIdConflict', message: '该目录是已有知识库的副本' },
+      });
+
+      const result = await useKbStore.getState().registerKb('副本库', 'D:\\docs\\copy');
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.errorCode).toBe('kbIdConflict');
     });
 
     it('returns false on failure', async () => {
@@ -472,6 +497,50 @@ describe('KbStore', () => {
       });
 
       const result = await useKbStore.getState().registerKb('已存在', 'D:\\docs\\existing');
+
+      expect(result.ok).toBe(false);
+    });
+  });
+
+  // ── 旧格式处置记录 ───────────────────────────────────────
+
+  describe('loadDisposals / dismissDisposal', () => {
+    it('loads disposals from tRPC', async () => {
+      const { trpc } = await import('@renderer/lib/trpc');
+      const disposal = {
+        id: 'legacy-1',
+        path: 'D:\\old-kb',
+        name: '旧库',
+        kbId: null,
+        reason: 'legacyFormat' as const,
+        detectedAt: 1700000000000,
+      };
+      vi.mocked(trpc.kb.disposals.query).mockResolvedValueOnce([disposal]);
+
+      await useKbStore.getState().loadDisposals();
+
+      expect(useKbStore.getState().kbDisposals).toEqual([disposal]);
+    });
+
+    it('dismisses disposal and reloads list', async () => {
+      const { trpc } = await import('@renderer/lib/trpc');
+      vi.mocked(trpc.kb.dismissDisposal.mutate).mockResolvedValueOnce({ ok: true });
+
+      const result = await useKbStore.getState().dismissDisposal('legacy-1');
+
+      expect(result).toBe(true);
+      expect(trpc.kb.dismissDisposal.mutate).toHaveBeenCalledWith({ disposalId: 'legacy-1' });
+      expect(trpc.kb.disposals.query).toHaveBeenCalled();
+    });
+
+    it('returns false when dismiss fails', async () => {
+      const { trpc } = await import('@renderer/lib/trpc');
+      vi.mocked(trpc.kb.dismissDisposal.mutate).mockResolvedValueOnce({
+        ok: false as const,
+        error: { code: 'notRegistered', message: '处置记录不存在' },
+      });
+
+      const result = await useKbStore.getState().dismissDisposal('no-such');
 
       expect(result).toBe(false);
     });

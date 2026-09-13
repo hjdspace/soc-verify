@@ -24,16 +24,48 @@ export type ConvertEngineInfo = {
 
 // ── 注册表 ──────────────────────────────────────────────────────
 
+/** 库目录格式：wiki = LLM Wiki 新布局（ADR 0034）；legacy = 旧 ADR 0021 布局（已停用） */
+export type KbFormat = 'wiki' | 'legacy';
+
+/** 注册条目的目录可达性/结构状态 */
+export type KbEntryState =
+  | 'ok'                // 目录可访问且格式与登记一致
+  | 'unreadable'        // 离线/权限/已删除——保留登记，绝不当旧格式处置
+  | 'structureChanged'; // 目录内容与登记格式不符（被替换/清空/含未知文件）
+
 /** 已注册的知识库条目（存应用全局配置） */
 export type KbRegistration = {
-  /** 库 ID（由 name 生成，唯一标识） */
+  /** 库 ID（kbId）：wiki 格式时持久于库内 .kb/manifest.json，与本机根路径分离 */
   id: string;
   /** 库名称（用户指定） */
   name: string;
-  /** 库根目录绝对路径 */
+  /** 库根目录绝对路径（本机路径） */
   path: string;
   /** 注册时间（Unix ms） */
   registeredAt: number;
+  /** 登记时的目录格式 */
+  format: KbFormat;
+};
+
+/**
+ * 旧格式库处置记录（存应用全局配置 kb-disposals.json）。
+ *
+ * 已确认旧格式的登记条目移出活动表后在此保留路径，不删除任何文件；
+ * 用户可据此手动迁移或清理。离线/权限问题不会产生处置记录。
+ */
+export type KbDisposal = {
+  /** 处置记录 ID（沿用被处置条目的 kbId；注册前拦截的旧目录无 kbId 时用路径哈希） */
+  id: string;
+  /** 被处置的库根路径 */
+  path: string;
+  /** 最后已知库名称 */
+  name: string;
+  /** 最后已知 kbId（未注册过的目录为 null） */
+  kbId: string | null;
+  /** 处置原因 */
+  reason: 'legacyFormat';
+  /** 处置时间（Unix ms） */
+  detectedAt: number;
 };
 
 // ── 挂载关系 ────────────────────────────────────────────────────
@@ -48,7 +80,7 @@ export type KbMount = {
 
 // ── 库状态 ──────────────────────────────────────────────────────
 
-/** 库结构健康检查结果 */
+/** 库结构健康检查结果（legacy 布局；wiki 布局用 KbWikiHealth） */
 export type KbHealthStatus = {
   /** sources/ 目录是否存在 */
   hasSources: boolean;
@@ -58,12 +90,23 @@ export type KbHealthStatus = {
   hasIndex: boolean;
 };
 
+/** wiki 布局健康检查结果（kb.status 使用） */
+export type KbWikiHealth = {
+  hasSchema: boolean;
+  hasPurpose: boolean;
+  hasManifest: boolean;
+  hasRaw: boolean;
+  hasWiki: boolean;
+};
+
 /** kb.status 返回的完整状态 */
 export type KbStatus = {
   /** 当前挂载的库（未挂载时为 null） */
-  mounted: KbMount & { name: string; path: string } | null;
-  /** 结构健康检查 */
+  mounted: (KbMount & { name: string; path: string; format: KbFormat; state: KbEntryState }) | null;
+  /** 结构健康检查（legacy 布局字段；wiki 布局时全 false） */
   health: KbHealthStatus;
+  /** wiki 布局健康检查（挂载库为 wiki 格式时有值） */
+  wikiHealth: KbWikiHealth | null;
 };
 
 /** kb.list 返回的单条库信息（含统计） */
@@ -72,9 +115,15 @@ export type KbListEntry = {
   name: string;
   path: string;
   registeredAt: number;
-  /** docs/ 下的文档数量（.md 文件数，不含 assets/ 子目录） */
+  /** 目录格式 */
+  format: KbFormat;
+  /** 目录可达性/结构状态 */
+  state: KbEntryState;
+  /** state=unreadable 时的底层 errno code（如 EACCES/ENOENT） */
+  stateReason?: string;
+  /** 文档数量（wiki 布局的统计由后继票接入，恒为 0） */
   documentCount: number;
-  /** 分类数量（docs/ 下的一级子目录数） */
+  /** 分类数量（同上，恒为 0） */
   categoryCount: number;
   /** 是否被当前项目挂载 */
   isMounted: boolean;
@@ -88,15 +137,33 @@ export type KbErrorCode =
   | 'notRegistered'       // 库未注册
   | 'pathNotFound'        // 路径不存在
   | 'pathNotDirectory'    // 路径不是目录
+  | 'pathUnreadable'      // 库目录不可访问（离线/权限不足）——不会按旧格式处置
+  | 'kbIdConflict'        // 复制库身份冲突（同 kbId 已登记在别的路径）；可用 asCopy 注册为副本
+  | 'manifestCorrupted'   // .kb/manifest.json 存在但不可解析/结构非法
+  | 'legacyFormat'        // 旧格式目录已停用；处置记录已保留（不删除任何文件）
   | 'mountLimitExceeded'  // 超过挂载上限
   | 'notMounted'          // 库未挂载到当前项目
   | 'alreadyMounted'      // 库已挂载到当前项目
-  | 'structureIncompatible'; // 目录结构不兼容
+  | 'structureIncompatible' // 目录结构不兼容
+  | 'deleteNotSupported'  // 删除库尚未支持（issue 01 范围外）；请使用注销
+  | 'notAvailableForWikiLayout'; // 旧分类读写入口对新布局不可用（能力未就绪）
 
 /** 结构化错误 */
 export type KbError = {
   code: KbErrorCode;
   message: string;
+};
+
+/** 事务恢复报告（挂载 wiki 库时执行 recoverTransactions 的结果） */
+export type KbRecoveryReport = {
+  /** 清理掉的未持久化/已提交事务数 */
+  cleaned: number;
+  /** roll-forward 完成的新版事务数 */
+  rolledForward: number;
+  /** 回滚到旧版的事务数 */
+  rolledBack: number;
+  /** 无法自动恢复的事务描述（现场已保留） */
+  failures: string[];
 };
 
 // ── 文档状态与流水线 ────────────────────────────────────────────
