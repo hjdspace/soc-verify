@@ -33,6 +33,7 @@ import {
   readWikiManifest,
   wikiLayout,
   writeWikiManifest,
+  withManifestLock,
   type WikiKbManifest,
   type WikiLayoutPaths,
 } from './wiki-layout';
@@ -97,6 +98,38 @@ export class WikiSourceError extends Error {
     this.name = 'WikiSourceError';
   }
 }
+
+/**
+ * 转换被中止（AbortSignal）。不落任何产物、不改失败状态：
+ * manifest 停留 converting（parsedStale 可见，可重试）。
+ * 队列据此判定「工作被中止」而非「转换失败」。
+ */
+export class WikiSourceAbortedError extends Error {
+  /** 中止发生在任何转换工作开始之前（未落 parsed/assets，converting 标记可还原） */
+  beforeStart = false;
+
+  constructor() {
+    super('转换已中止');
+    this.name = 'WikiSourceAbortedError';
+  }
+}
+
+function throwIfAborted(signal: AbortSignal | undefined, beforeStart = false): void {
+  if (signal?.aborted) {
+    const err = new WikiSourceAbortedError();
+    err.beforeStart = beforeStart;
+    throw err;
+  }
+}
+
+/** 转换执行的可选控制（持久队列接入，issue 03） */
+export type ConvertControl = {
+  /** 中止信号：在可中止边界检查（引擎调用前后、产物落盘前）；
+   *  最终 manifest 写入（提交临界区）不可中止 */
+  signal?: AbortSignal;
+  /** 进入提交临界区（最终 manifest 写入前）时通知 */
+  onCommitting?: () => void;
+};
 
 // ── 工具 ────────────────────────────────────────────────────────
 
@@ -235,24 +268,60 @@ function markFailed(rec: WikiSourceRecord, code: string, message: string): void 
   rec.assetCount = 0;
 }
 
+/** 把 src 的来源字段同步到 target（含可选字段的删除语义） */
+function syncRecFields(target: WikiSourceRecord, src: WikiSourceRecord): void {
+  Object.assign(target, structuredClone(src));
+  if (src.errorCode === undefined) delete target.errorCode;
+  if (src.errorMessage === undefined) delete target.errorMessage;
+}
+
 /**
- * 执行转换并写入 parsed/assets，随后把 manifest 推到终态（ready/failed）。
+ * 串行化的 manifest 读改写：取锁 → 以最新 manifest 为基 → apply 变更 →
+ * 原子写回。并发转换/导入共享同一 manifest.json，直接以旧读为基写回会
+ * 丢更新，同名 rename 在 Windows 上会 EPERM。
+ */
+async function commitManifestUpdate(
+  kbPath: string,
+  apply: (manifest: WikiKbManifest) => void,
+): Promise<void> {
+  await withManifestLock(kbPath, async () => {
+    const read = await readWikiManifest(kbPath);
+    if (!read.ok) {
+      throw new Error(`库 manifest 不可读（${read.reason}）`);
+    }
+    apply(read.manifest);
+    read.manifest.updatedAt = new Date().toISOString();
+    await writeWikiManifest(kbPath, read.manifest);
+  });
+}
+
+/**
+ * 执行转换并写入 parsed/assets，把 rec 推到终态（ready/failed）。
  * engine = null 表示文本直通。返回 null = 成功；否则返回错误码字符串。
  * rec.currentRevision 必须已是新修订；parsedRevision/parsedHash 在失败时
  * 保持旧值（旧全文不标成新版）。
+ *
+ * 不直接写 manifest：调用方在拿到终态后经 commitManifestUpdate 以最新
+ * manifest 为基提交（并发安全）。
+ *
+ * 可中止边界：引擎调用前后、assets/parsed 落盘前（此时 manifest 已是
+ * converting，无半成品提交）。进入终态提交前触发 onCommitting，提交
+ * 临界区不可中止（写一半丢弃会破坏「完整旧版或完整新版」语义）。
  */
 async function finalizeConversion(
   kbPath: string,
   layout: WikiLayoutPaths,
-  manifest: WikiKbManifest,
   rec: WikiSourceRecord,
   bytes: Buffer,
   engine: ConvertEngine | null,
   fingerprint: string,
+  control: ConvertControl = {},
 ): Promise<string | null> {
+  const { signal, onCommitting } = control;
   try {
     if (engine === null) {
       // 文本直通：机械全文 = 原文本剥 BOM，无隐式特例
+      throwIfAborted(signal, true);
       const parsed = stripBom(bytes.toString('utf-8'));
       await writeParsedFile(layout, rec.sourcePath, parsed);
       rec.engine = 'text';
@@ -264,14 +333,17 @@ async function finalizeConversion(
       delete rec.errorCode;
       delete rec.errorMessage;
     } else {
+      throwIfAborted(signal, true);
       const result = await engine.convert(bytes, rec.sourcePath);
       if (!result.ok) {
         const detail = result.error.detail ? `（${result.error.detail}）` : '';
         markFailed(rec, result.error.code, `${result.error.message}${detail}`);
       } else {
+        throwIfAborted(signal);
         const entries = await writeAssets(layout, rec.sourceId, rec.currentRevision, result.output.assets);
         const relPrefix = relAssetPrefix(rec.sourcePath, rec.sourceId, rec.currentRevision);
         const parsed = rewriteImageRefs(result.output.markdown, entries, relPrefix);
+        throwIfAborted(signal);
         await writeParsedFile(layout, rec.sourcePath, parsed);
         rec.engine = engine.id;
         rec.engineFingerprint = fingerprint;
@@ -284,12 +356,16 @@ async function finalizeConversion(
       }
     }
   } catch (err) {
+    // 中止不是失败：不落失败状态，向上传递（调用方负责还原 converting 标记）
+    if (err instanceof WikiSourceAbortedError) {
+      throw err;
+    }
     // 产物写入失败同样持久失败状态（原件已保存，parsed 停留旧值）
     markFailed(rec, 'ioError', `转换产物写入失败: ${String(err)}`);
   }
+  // 提交临界区：parsed/assets 已落盘，终态 manifest 必须写完（不可中止）
+  onCommitting?.();
   rec.updatedAt = new Date().toISOString();
-  manifest.updatedAt = rec.updatedAt;
-  await writeWikiManifest(kbPath, manifest);
   return rec.status === 'ready' ? null : (rec.errorCode ?? 'ioError');
 }
 
@@ -420,28 +496,46 @@ async function importOne(
   rec.currentRevision = revision;
   sources[sourceId] = rec;
 
-  // 转换中状态先行持久：崩溃后 parsedStale 可见，旧全文不被标成新版
+  // 转换中状态先行持久：崩溃后 parsedStale 可见，旧全文不被标成新版。
+  // 串行化提交（以最新 manifest 为基），本地 batch manifest 同步更新。
   rec.status = 'converting';
   delete rec.errorCode;
   delete rec.errorMessage;
   rec.updatedAt = nowIso;
   manifest.updatedAt = nowIso;
   try {
-    await writeWikiManifest(kbPath, manifest);
+    await commitManifestUpdate(kbPath, (m) => {
+      const target = m.sources?.[sourceId];
+      if (target) {
+        syncRecFields(target, rec);
+      } else {
+        (m.sources ??= {})[sourceId] = structuredClone(rec);
+      }
+    });
   } catch (err) {
     return { ok: false, error: failure('ioError', `写入 manifest 失败: ${String(err)}`) };
   }
+  (manifest.sources ??= {})[sourceId] = rec;
 
-  // 8+9. 转换与终态
+  // 8+9. 转换与终态（ready/failed 都必须持久化）
   try {
-    const failCode = await finalizeConversion(kbPath, layout, manifest, rec, bytes, isText ? null : engine, fingerprint);
-    if (failCode === null) {
-      return { ok: true, source: rec, reused: false };
+    const failCode = await finalizeConversion(kbPath, layout, rec, bytes, isText ? null : engine, fingerprint);
+    await commitManifestUpdate(kbPath, (m) => {
+      const target = m.sources?.[sourceId];
+      if (target) {
+        syncRecFields(target, rec);
+      } else {
+        (m.sources ??= {})[sourceId] = structuredClone(rec);
+      }
+    });
+    manifest.updatedAt = rec.updatedAt;
+    if (failCode !== null) {
+      return {
+        ok: false,
+        error: failure('ioError', `来源已保存但转换失败（${failCode}）: ${rec.errorMessage ?? ''}`),
+      };
     }
-    return {
-      ok: false,
-      error: failure('ioError', `来源已保存但转换失败（${failCode}）: ${rec.errorMessage ?? ''}`),
-    };
+    return { ok: true, source: rec, reused: false };
   } catch (err) {
     return { ok: false, error: failure('ioError', `转换结果持久化失败: ${String(err)}`) };
   }
@@ -453,8 +547,18 @@ async function importOne(
  * 对既有来源重跑转换（失败重试 / 引擎指纹变更后手动重转）。
  * 从 raw/sources/ 的当前原件出发；原件字节与 currentRevision 不符时拒绝
  * （originalHashMismatch —— 不在证据区上猜）。
+ *
+ * 可选中止（持久队列接入）：signal 在标记 converting 之前与引擎调用等
+ * 可中止边界检查。被中止时把 converting 标记还原为运行前状态（队列暂停/
+ * 取消/切库后库清单与运行前一致，被中止的运行不留任何痕迹）；还原失败时
+ * manifest 停留 converting（parsedStale 可见，可重试）。
  */
-export async function convertWikiSource(kbPath: string, sourceId: string): Promise<SourceConvertOutcome> {
+export async function convertWikiSource(
+  kbPath: string,
+  sourceId: string,
+  control: ConvertControl = {},
+): Promise<SourceConvertOutcome> {
+  const { signal } = control;
   const layout = wikiLayout(kbPath);
   const read = await readWikiManifest(kbPath);
   if (!read.ok) {
@@ -500,25 +604,73 @@ export async function convertWikiSource(kbPath: string, sourceId: string): Promi
     return { ok: false, error: failure('ioError', `保留被引用证据失败: ${String(err)}`) };
   }
 
+  // 运行前状态快照：被中止时还原（迟到/被中止的结果不改动运行前的
+  // 失败或旧版状态）
+  const prevStatus = rec.status;
+  const prevErrorCode = rec.errorCode;
+  const prevErrorMessage = rec.errorMessage;
+
+  // 可中止边界：标记 converting 之前（此后的中止由 finalizeConversion 边界处理）
+  throwIfAborted(signal, true);
+
   const nowIso = new Date().toISOString();
+  // 标记 converting（串行化：以最新 manifest 为基，防并发丢更新/EPERM）
+  try {
+    await commitManifestUpdate(kbPath, (m) => {
+      const target = m.sources?.[sourceId];
+      if (!target) {
+        throw new Error(`来源记录不存在: ${sourceId}`);
+      }
+      target.status = 'converting';
+      delete target.errorCode;
+      delete target.errorMessage;
+      target.updatedAt = nowIso;
+    });
+  } catch (err) {
+    return { ok: false, error: failure('ioError', `写入 manifest 失败: ${String(err)}`) };
+  }
   rec.status = 'converting';
   delete rec.errorCode;
   delete rec.errorMessage;
   rec.updatedAt = nowIso;
-  manifest.updatedAt = nowIso;
-  try {
-    await writeWikiManifest(kbPath, manifest);
-  } catch (err) {
-    return { ok: false, error: failure('ioError', `写入 manifest 失败: ${String(err)}`) };
-  }
 
   try {
-    const failCode = await finalizeConversion(kbPath, layout, manifest, rec, bytes, engine, fingerprint);
+    const failCode = await finalizeConversion(kbPath, layout, rec, bytes, engine, fingerprint, control);
+    // 终态提交（串行化：以最新 manifest 为基）
+    await commitManifestUpdate(kbPath, (m) => {
+      const target = m.sources?.[sourceId];
+      if (!target) {
+        throw new Error(`来源记录不存在: ${sourceId}`);
+      }
+      syncRecFields(target, rec);
+    });
     if (failCode === null) {
       return { ok: true, source: rec };
     }
     return { ok: false, error: failure('ioError', `转换失败（${failCode}）: ${rec.errorMessage ?? ''}`) };
   } catch (err) {
+    if (err instanceof WikiSourceAbortedError) {
+      // 被中止的运行不留任何痕迹：还原 converting 标记为运行前状态。
+      // 还原失败不掩盖中止本身（parsedStale 语义仍由 converting 兜底）。
+      try {
+        await commitManifestUpdate(kbPath, (m) => {
+          const target = m.sources?.[sourceId];
+          if (!target) return;
+          target.status = prevStatus;
+          if (prevErrorCode !== undefined) {
+            target.errorCode = prevErrorCode;
+            target.errorMessage = prevErrorMessage;
+          } else {
+            delete target.errorCode;
+            delete target.errorMessage;
+          }
+          target.updatedAt = new Date().toISOString();
+        });
+      } catch {
+        // 保持中止错误向上传递
+      }
+      throw err;
+    }
     return { ok: false, error: failure('ioError', `转换结果持久化失败: ${String(err)}`) };
   }
 }

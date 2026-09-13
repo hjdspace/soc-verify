@@ -68,6 +68,8 @@ import {
   type SourceImportInput,
   type SourceImportOutcome,
 } from '../../kb/source-import';
+import { wikiIngestQueue } from '../../kb/wiki-queue';
+import { WikiQueueError, type WikiQueueAttachResult } from '../../kb/ingest-queue';
 import type {
   KbRegistration,
   KbMount,
@@ -80,8 +82,11 @@ import type {
 } from '../../kb/types';
 import type {
   WikiParsedView,
+  WikiQueueErrorCode,
+  WikiQueueSnapshot,
   WikiSourceRevisionInfo,
   WikiSourceSummary,
+  WikiIngestTask,
 } from '@shared/kb-types';
 
 // ── Result 联合类型（供 tRPC 输出推导） ─────────────────────────
@@ -95,12 +100,24 @@ type UnregisterResult =
   | { ok: false; error: KbError };
 
 type MountResult =
-  | { ok: true; data: KbMount; recovery: KbRecoveryReport | null }
+  | { ok: true; data: KbMount; recovery: KbRecoveryReport | null; /** wiki 库挂载时的队列附着结果 */ queue?: WikiQueueAttachResult }
   | { ok: false; error: KbError };
 
 type UnmountResult =
   | { ok: true }
-  | { ok: false; error: KbError };
+  | { ok: false; error: KbError | { code: WikiQueueErrorCode; message: string } };
+
+type QueueOpResult =
+  | { ok: true }
+  | { ok: false; error: { code: WikiQueueErrorCode; message: string } };
+
+type QueueEnqueueResult = {
+  results: Array<{ ok: true; task: WikiIngestTask } | { ok: false; error: { code: WikiQueueErrorCode; message: string } }>;
+};
+
+type QueueSnapshotResult =
+  | { ok: true; snapshot: WikiQueueSnapshot }
+  | { ok: false; reason: 'notMounted' | 'notWikiLayout' | 'notAttached' };
 
 type UploadResult =
   | { ok: true; document: KbDocument }
@@ -183,6 +200,29 @@ function parseSourceIdInput(
     }
   }
   return out as { sourceId: string } & Record<string, string>;
+}
+
+/**
+ * 获取当前挂载的 wiki 布局知识库（路径 + kbId，队列 procedures 共用）。
+ */
+async function getWikiMountedKb(): Promise<{ path: string; kbId: string }> {
+  const rootPath = activeProject().rootPath;
+  const status = await kbRegistry.status(rootPath);
+  if (!status.mounted) {
+    throw new TRPCError({ code: 'PRECONDITION_FAILED', message: '未挂载知识库，请先挂载' });
+  }
+  if (status.mounted.format !== 'wiki') {
+    throw new TRPCError({ code: 'PRECONDITION_FAILED', message: '当前挂载的不是 wiki 布局知识库' });
+  }
+  return { path: status.mounted.path, kbId: status.mounted.kbId };
+}
+
+/** WikiQueueError → 结构化 Result（不抛错；渲染端按 code 分支处理） */
+function queueErrorResult(err: unknown): { ok: false; error: { code: WikiQueueErrorCode; message: string } } {
+  if (err instanceof WikiQueueError) {
+    return { ok: false, error: { code: err.code, message: err.message } };
+  }
+  return { ok: false, error: { code: 'persistFailed', message: String(err) } };
 }
 
 /**
@@ -313,6 +353,13 @@ export const kbRouter = t.router({
     })
     .mutation(async ({ input }): Promise<UnregisterResult> => {
       const rootPath = activeProject().rootPath;
+      // 先解除队列绑定（中止可中止工作、等待提交、落安全状态）再删库：
+      // flush 面向尚存在的目录；删库后再 flush 会因目录消失写失败。
+      try {
+        await wikiIngestQueue.detach(input.kbId);
+      } catch {
+        // 队列安全状态已尽力落盘；删除意图优先
+      }
       const result = await kbRegistry.deleteKb(input.kbId, rootPath);
       if (!result.ok) {
         return { ok: false, error: result.error };
@@ -340,7 +387,21 @@ export const kbRouter = t.router({
       // wiki 库挂载 = 重开：registry.mount 内部已执行 recoverTransactions。
       // 旧布局的自动扫描（autoScanDocuments）已停用——wiki 布局没有
       // sources/ 文档流水线，导入由后继票的新链路提供。
-      return { ok: true, data: result.data.mount, recovery: result.data.recovery };
+
+      // wiki 库挂载时附着持久导入队列（issue 03）：恢复中断任务到安全状态
+      // 并等待用户继续。附着失败不阻断挂载，结果透传给 UI 呈现（坏队列文件
+      // 保留现场，不静默清空）。
+      let queue: WikiQueueAttachResult | undefined;
+      const status = await kbRegistry.status(rootPath);
+      if (status.mounted && status.mounted.kbId === input.kbId && status.mounted.format === 'wiki') {
+        queue = await wikiIngestQueue.attach(status.mounted.path, input.kbId);
+      }
+      return {
+        ok: true,
+        data: result.data.mount,
+        recovery: result.data.recovery,
+        ...(queue ? { queue } : {}),
+      };
     }),
 
   // ─── kb.unmount ───────────────────────────────────────────
@@ -358,6 +419,13 @@ export const kbRouter = t.router({
       const result = await kbRegistry.unmount(input.kbId, rootPath);
       if (!result.ok) {
         return { ok: false, error: result.error };
+      }
+      // 卸载绑定原任务库：中止可中止工作、等待正在提交的工作、落安全状态。
+      // 持久化失败不确认操作成功（结构化错误码透传）。
+      try {
+        await wikiIngestQueue.detach(input.kbId);
+      } catch (err) {
+        return queueErrorResult(err);
       }
       return { ok: true };
     }),
@@ -788,5 +856,157 @@ export const kbRouter = t.router({
     .query(async (): Promise<{ extensions: string[] }> => {
       const settings = await kbSettingsManager.load();
       return { extensions: listImportExtensions(settings.convertEngine) };
+    }),
+
+  // ─── kb.queueSnapshot（issue 03） ──────────────────────────
+  //
+  // 导入队列快照（重订阅先拉快照再按 seq 应用 kb:task 事件）。
+  // 队列未附着（挂载附着失败或非 wiki 挂载）返回 ok: false + 原因。
+
+  queueSnapshot: t.procedure
+    .input((_raw): Record<string, never> => {
+      return {};
+    })
+    .query(async (): Promise<QueueSnapshotResult> => {
+      const kb = await getWikiMountedKb();
+      const snapshot = wikiIngestQueue.snapshot(kb.kbId);
+      if (!snapshot) return { ok: false, reason: 'notAttached' };
+      return { ok: true, snapshot };
+    }),
+
+  // ─── kb.queueEnqueue（issue 03） ───────────────────────────
+  //
+  // 来源转换任务入队（持久队列）。逐来源独立结果：未知来源
+  // sourceNotFound，持久化失败 persistFailed——操作不确认成功。
+
+  queueEnqueue: t.procedure
+    .input((raw): { sourceIds: string[] } => {
+      const r = raw as Record<string, unknown>;
+      if (!Array.isArray(r.sourceIds) || r.sourceIds.length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'sourceIds is required and must be non-empty' });
+      }
+      for (const id of r.sourceIds) {
+        if (typeof id !== 'string' || id.trim().length === 0) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'each sourceId must be a non-empty string' });
+        }
+      }
+      return { sourceIds: r.sourceIds as string[] };
+    })
+    .mutation(async ({ input }): Promise<QueueEnqueueResult> => {
+      const kb = await getWikiMountedKb();
+      const results: QueueEnqueueResult['results'] = [];
+      for (const sourceId of input.sourceIds) {
+        try {
+          const task = await wikiIngestQueue.enqueueConvert(kb.kbId, sourceId);
+          results.push({ ok: true, task });
+        } catch (err) {
+          results.push(queueErrorResult(err));
+        }
+      }
+      return { results };
+    }),
+
+  // ─── kb.queuePause / kb.queueResume（issue 03） ────────────
+  //
+  // 队列级暂停/继续。暂停中止 converting（回 queued，消耗 attempt）、
+  // 等待 committing 完成；resume 清除 paused/restoredWaiting 并恢复调度。
+
+  queuePause: t.procedure
+    .input((_raw): Record<string, never> => {
+      return {};
+    })
+    .mutation(async (): Promise<QueueOpResult> => {
+      const kb = await getWikiMountedKb();
+      try {
+        await wikiIngestQueue.pause(kb.kbId);
+        return { ok: true };
+      } catch (err) {
+        return queueErrorResult(err);
+      }
+    }),
+
+  queueResume: t.procedure
+    .input((_raw): Record<string, never> => {
+      return {};
+    })
+    .mutation(async (): Promise<QueueOpResult> => {
+      const kb = await getWikiMountedKb();
+      try {
+        await wikiIngestQueue.resume(kb.kbId);
+        return { ok: true };
+      } catch (err) {
+        return queueErrorResult(err);
+      }
+    }),
+
+  // ─── kb.queueCancel / kb.queueRetry（issue 03） ────────────
+  //
+  // 任务级取消/重试。取消：converting 中止（attempt 失效使迟到结果不可
+  // 提交）、committing 拒绝；重试：failed/cancelled → queued 新 attempt。
+
+  queueCancel: t.procedure
+    .input((raw): { taskId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.taskId !== 'string' || r.taskId.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'taskId is required' });
+      }
+      return { taskId: r.taskId.trim() };
+    })
+    .mutation(async ({ input }): Promise<QueueOpResult> => {
+      const kb = await getWikiMountedKb();
+      try {
+        await wikiIngestQueue.cancelTask(kb.kbId, input.taskId);
+        return { ok: true };
+      } catch (err) {
+        return queueErrorResult(err);
+      }
+    }),
+
+  queueRetry: t.procedure
+    .input((raw): { taskId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.taskId !== 'string' || r.taskId.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'taskId is required' });
+      }
+      return { taskId: r.taskId.trim() };
+    })
+    .mutation(async ({ input }): Promise<QueueOpResult> => {
+      const kb = await getWikiMountedKb();
+      try {
+        await wikiIngestQueue.retryTask(kb.kbId, input.taskId);
+        return { ok: true };
+      } catch (err) {
+        return queueErrorResult(err);
+      }
+    }),
+
+  // ─── kb.queueMove / kb.queueClear（issue 03） ──────────────
+  //
+  // queued 子序列内上/下移（非 queued 是固定点，moved false）；
+  // 清除 done 任务（failed/cancelled 保留供查看与重试）。
+
+  queueMove: t.procedure
+    .input((raw): { taskId: string; direction: 'up' | 'down' } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.taskId !== 'string' || r.taskId.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'taskId is required' });
+      }
+      if (r.direction !== 'up' && r.direction !== 'down') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: "direction must be 'up' or 'down'" });
+      }
+      return { taskId: r.taskId.trim(), direction: r.direction };
+    })
+    .mutation(async ({ input }): Promise<{ moved: boolean }> => {
+      const kb = await getWikiMountedKb();
+      return { moved: await wikiIngestQueue.moveTask(kb.kbId, input.taskId, input.direction) };
+    }),
+
+  queueClear: t.procedure
+    .input((_raw): Record<string, never> => {
+      return {};
+    })
+    .mutation(async (): Promise<{ removed: number }> => {
+      const kb = await getWikiMountedKb();
+      return { removed: await wikiIngestQueue.clearFinished(kb.kbId) };
     }),
 });

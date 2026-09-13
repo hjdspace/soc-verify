@@ -327,6 +327,106 @@ export type WikiSourceErrorCode =
   | 'originalHashMismatch'
   | 'ioError';
 
+// ── 持久任务队列（LLM Wiki 新布局，spec §5）────────────────────
+
+/**
+ * 任务阶段。queued → converting →（后继编译票：vision → analyzing →
+ * generating → validating → awaiting_review → committing → published）。
+ * 本票转换任务实际经历 queued/converting/committing，终态 done/failed/cancelled。
+ */
+export type WikiIngestPhase =
+  | 'queued'
+  | 'converting'
+  | 'vision'
+  | 'analyzing'
+  | 'generating'
+  | 'validating'
+  | 'awaiting_review'
+  | 'committing'
+  | 'published'
+  | 'done'
+  | 'failed'
+  | 'cancelled';
+
+/** 任务类型（本票仅转换任务；编译任务由后继票扩展） */
+export type WikiTaskKind = 'convertSource';
+
+/** 任务失败记录（重试新 attempt 时保留上一次失败原因） */
+export type WikiTaskError = {
+  code: string;
+  message: string;
+  at: string;
+};
+
+/** 持久任务记录（.kb/queue.json 的 tasks 条目 + 快照/事件传输） */
+export type WikiIngestTask = {
+  /** 稳定任务 ID（跨重启不变） */
+  taskId: string;
+  /** 库身份绑定：任务只写回自己的库，不随 UI 焦点转移 */
+  kbId: string;
+  kind: WikiTaskKind;
+  sourceId: string;
+  /** 来源相对路径（显示用） */
+  sourcePath: string;
+  phase: WikiIngestPhase;
+  /** 当前（或即将执行的）attempt 身份；每次实际执行前更新 */
+  attemptId: string;
+  /** 已启动的执行序号（从 1 起；暂停中止/重试/恢复都会推进） */
+  attempt: number;
+  /** 最近一次失败原因（重试不清除，成功或新失败时更新） */
+  lastError: WikiTaskError | null;
+  enqueuedAt: string;
+  updatedAt: string;
+};
+
+/** 队列快照（kb.tasks 查询；重订阅先拉快照再按 seq 应用事件） */
+export type WikiQueueSnapshot = {
+  kbId: string;
+  /** 队列级暂停（持久） */
+  paused: boolean;
+  /** 库级事件序号（单调递增，持久） */
+  seq: number;
+  /** 有重启恢复的任务等待继续 */
+  restoredWaiting: boolean;
+  /** 最近一次持久化失败信息（非 null 时调度暂停，操作可能报错） */
+  lastPersistError: string | null;
+  /** 任务列表（队列顺序） */
+  tasks: WikiIngestTask[];
+};
+
+/** 任务/队列事件（kb:task 通道；携带库身份与 seq） */
+export type WikiTaskEvent =
+  | {
+      type: 'task';
+      kbId: string;
+      seq: number;
+      taskId: string;
+      attemptId: string;
+      phase: WikiIngestPhase;
+      lastError?: WikiTaskError | null;
+    }
+  | {
+      type: 'queue';
+      kbId: string;
+      seq: number;
+      paused: boolean;
+      restoredWaiting: boolean;
+    };
+
+/** 队列操作结构化错误码 */
+export type WikiQueueErrorCode =
+  | 'notAttached'        // 队列未附着（未挂载或附着失败）
+  | 'kbIdMismatch'       // 请求的 kbId 与附着库不符
+  | 'sourceNotFound'     // 来源不存在
+  | 'taskNotFound'       // 任务不存在
+  | 'invalidPhase'       // 当前阶段不允许该操作
+  | 'committing'         // 任务正在提交，暂不允许取消
+  | 'persistFailed'      // 队列持久化失败（操作不确认成功）
+  | 'manifestCorrupted'  // 库 manifest 不可读
+  | 'queueCorrupted'     // 队列文件损坏（现场保留，不静默清空）
+  | 'queueKbIdMismatch'  // 队列文件属于别的库身份
+  | 'queueIoError';      // 队列文件 IO 失败
+
 // ── 知识库设置 ──────────────────────────────────────────────────
 
 /** KB AI 模型配置（字段为空 = 自动） */

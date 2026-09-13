@@ -3,6 +3,7 @@
 import type { SurfaceDeclaration, SurfaceEvent } from '@shared/surface-types';
 import type { NotificationSyncEvent } from '@shared/types/notification';
 import type { RegressionEvent } from '@shared/types/regression';
+import type { WikiTaskEvent } from '@shared/kb-types';
 
 export interface SurfaceBridgeAPI {
   sync: (declaration: SurfaceDeclaration) => Promise<void>;
@@ -184,6 +185,8 @@ export interface EventBridgeAPI {
       error?: string;
     }) => void,
   ) => () => void;
+  // 知识库导入队列事件（issue 03）：任务/队列状态推送（带 kbId 与单调 seq）
+  onKbTask: (callback: (data: WikiTaskEvent) => void) => () => void;
   // 全局错误事件（主进程 uncaughtException / unhandledRejection）
   onGlobalError: (
     callback: (data: {

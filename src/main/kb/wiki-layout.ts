@@ -131,6 +131,24 @@ export async function writeWikiManifest(kbPath: string, manifest: WikiKbManifest
   await writeManifestAt(layout.manifestPath, manifest);
 }
 
+// ── manifest 读改写串行化 ────────────────────────────────────────
+
+const manifestLocks = new Map<string, Promise<unknown>>();
+
+/**
+ * 串行化同一库的「读 manifest → 变更 → 写 manifest」临界区。
+ *
+ * 多 worker 并发转换/导入与队列任务并发时，manifest.json 是单点共享文件：
+ * 并发原子替换在 Windows 上会触发 rename EPERM，且以旧读为基的写回会
+ * 丢更新。临界区内每次都应以 `readWikiManifest` 的新鲜读为基。
+ */
+export async function withManifestLock<T>(kbPath: string, fn: () => Promise<T>): Promise<T> {
+  const prev = manifestLocks.get(kbPath) ?? Promise.resolve();
+  const run = prev.then(fn, fn);
+  manifestLocks.set(kbPath, run.catch(() => undefined));
+  return run;
+}
+
 // ── 初始化 ──────────────────────────────────────────────────────
 
 export const SCHEMA_MD_SKELETON = [

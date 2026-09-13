@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useCallback } from 'react';
-import { BookOpen, RefreshCw, List, Map, Eye } from 'lucide-react';
+import { BookOpen, RefreshCw, List, Map, Eye, ListTodo } from 'lucide-react';
 import { useKbStore } from '@renderer/stores/kb';
 import { cn } from '@renderer/lib/utils';
 import { KbHeader } from './KbHeader';
@@ -19,6 +19,7 @@ import { KbDocList } from './KbDocList';
 import { KbModal } from './KbModal';
 import { KbIndexTab } from './KbIndexTab';
 import { KbPreviewTab } from './KbPreviewTab';
+import { KbWikiTasks } from './KbWikiTasks';
 
 export function KbView() {
   const kbStatus = useKbStore((s) => s.kbStatus);
@@ -160,6 +161,20 @@ export function KbView() {
               <Eye className="h-3.5 w-3.5" />
               文档预览
             </button>
+            {kbStatus?.mounted?.format === 'wiki' && (
+              <button
+                onClick={() => setActiveTab('tasks')}
+                className={cn(
+                  'flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium transition-colors',
+                  activeTab === 'tasks'
+                    ? 'border-primary text-primary'
+                    : 'border-transparent text-muted-foreground hover:text-foreground',
+                )}
+              >
+                <ListTodo className="h-3.5 w-3.5" />
+                导入任务
+              </button>
+            )}
             <div className="flex-1" />
             <button
               onClick={handleRefresh}
@@ -174,6 +189,7 @@ export function KbView() {
           {activeTab === 'list' && <KbDocList />}
           {activeTab === 'index' && <KbIndexTab />}
           {activeTab === 'preview' && <KbPreviewTab />}
+          {activeTab === 'tasks' && kbStatus?.mounted?.format === 'wiki' && <KbWikiTasks />}
         </div>
       </div>
 

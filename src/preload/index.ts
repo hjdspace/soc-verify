@@ -458,6 +458,28 @@ process.once('loaded', async () => {
       return () => ipcRenderer.removeListener('kb:deepReindex', handler);
     },
 
+    // ── 知识库导入队列事件（issue 03）────────────────────────
+    // kb:task —— 主进程推送队列任务/队列状态事件（带 kbId 与单调 seq；
+    // 渲染端重订阅先拉 kb.queueSnapshot 快照再按 seq 应用事件）
+    onKbTask: (
+      callback: (data: {
+        type: 'task' | 'queue';
+        kbId: string;
+        seq: number;
+        taskId?: string;
+        attemptId?: string;
+        phase?: string;
+        lastError?: { code: string; message: string; at: string } | null;
+        paused?: boolean;
+        restoredWaiting?: boolean;
+      }) => void,
+    ) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: unknown) =>
+        callback(data as Parameters<typeof callback>[0]);
+      ipcRenderer.on('kb:task', handler);
+      return () => ipcRenderer.removeListener('kb:task', handler);
+    },
+
     // ── 全局错误事件（主进程 uncaughtException / unhandledRejection）──
     // global:error —— 主进程推送全局未捕获异常
     onGlobalError: (
