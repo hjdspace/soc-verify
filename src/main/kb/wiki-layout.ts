@@ -27,6 +27,7 @@ import { join } from 'node:path';
 import { mkdir, readdir, stat, writeFile, readFile } from 'node:fs/promises';
 import type { Dirent } from 'node:fs';
 import { writeFileAtomic } from './atomic-commit';
+import type { WikiSourceRecord } from '@shared/kb-types';
 
 // ── 布局快照 ────────────────────────────────────────────────────
 
@@ -79,7 +80,7 @@ export function wikiLayout(kbPath: string): WikiLayoutPaths {
 
 // ── Manifest ────────────────────────────────────────────────────
 
-/** 库身份清单（.kb/manifest.json）。来源修订/发布状态等字段由后继票扩展。 */
+/** 库身份清单（.kb/manifest.json）。来源修订/转换状态持久于此（spec §1）。 */
 export type WikiKbManifest = {
   manifestVersion: 1;
   format: 'wiki';
@@ -88,6 +89,8 @@ export type WikiKbManifest = {
   name: string;
   createdAt: string;
   updatedAt: string;
+  /** 来源修订与转换状态（sourceId → 记录）；issue 02 引入，旧 manifest 无此字段 */
+  sources?: Record<string, WikiSourceRecord>;
 };
 
 export type ManifestReadResult =

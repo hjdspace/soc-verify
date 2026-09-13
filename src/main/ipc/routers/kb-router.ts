@@ -16,6 +16,11 @@
  *     moveCategory / renameCategory / reclassify / deepReindex
  *                        旧分类读写入口——挂载 wiki 布局库时明确不可用
  *                        （notAvailableForWikiLayout），能力由后继票接入
+ *   - kb.importSources / sources / sourceParsed / sourceRevisions /
+ *     sourceOriginal / convertSource / importExtensions
+ *                        wiki 来源导入与修订保留（issue 02）：单文档/小批量
+ *                        导入、来源列表、机械全文预览（身份解析）、修订核对、
+ *                        原件路径解析、失败重试转换、能力清单
  *
  * 错误处理：register/unregister/mount/unmount 返回 Result 联合
  * （{ ok: true, ...data } | { ok: false, error: KbError }），
@@ -50,6 +55,19 @@ import { deepReindex, type DeepReindexEvent } from '../../kb/deep-reindexer';
 import { resolveKbLlmConfig } from '../../kb/llm-config';
 import { kbSettingsManager, ENGINE_IDS, type KbSettings } from '../../kb/kb-settings';
 import { listConvertEngines, type ConvertEngineInfo } from '../../kb/engines';
+import {
+  convertWikiSource,
+  importWikiSources,
+  listImportExtensions,
+  listSourceRevisions,
+  listWikiSources,
+  readWikiParsed,
+  resolveWikiOriginalPath,
+  WikiSourceError,
+  type SourceConvertOutcome,
+  type SourceImportInput,
+  type SourceImportOutcome,
+} from '../../kb/source-import';
 import type {
   KbRegistration,
   KbMount,
@@ -60,6 +78,11 @@ import type {
   KbRecoveryReport,
   KbFormat,
 } from '../../kb/types';
+import type {
+  WikiParsedView,
+  WikiSourceRevisionInfo,
+  WikiSourceSummary,
+} from '@shared/kb-types';
 
 // ── Result 联合类型（供 tRPC 输出推导） ─────────────────────────
 
@@ -112,6 +135,54 @@ async function getLegacyMountedKbPath(): Promise<string> {
     throw new TRPCError({ code: 'PRECONDITION_FAILED', message: WIKI_LAYOUT_UNAVAILABLE });
   }
   return mounted.path;
+}
+
+/**
+ * 获取当前挂载的知识库路径，并守卫 wiki 来源入口：
+ * 来源导入/预览/修订只对 wiki 布局挂载开放。
+ */
+async function getWikiMountedKbPath(): Promise<string> {
+  const mounted = await getMountedKb();
+  if (mounted.format !== 'wiki') {
+    throw new TRPCError({ code: 'PRECONDITION_FAILED', message: '当前挂载的不是 wiki 布局知识库' });
+  }
+  return mounted.path;
+}
+
+/** WikiSourceError → TRPCError（sourceNotFound 映射 NOT_FOUND，其余保持消息） */
+function mapWikiSourceError(err: unknown): never {
+  if (err instanceof WikiSourceError) {
+    throw new TRPCError({
+      code: err.code === 'sourceNotFound' ? 'NOT_FOUND' : 'INTERNAL_SERVER_ERROR',
+      message: err.message,
+    });
+  }
+  throw err;
+}
+
+/**
+ * wiki 来源身份输入校验（issue 02 procedures 共用）：
+ * sourceId 必填；optionalKeys 中给出的键须为非空字符串；均 trim。
+ */
+function parseSourceIdInput(
+  raw: unknown,
+  optionalKeys: readonly string[] = [],
+): { sourceId: string } & Record<string, string> {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  if (typeof r.sourceId !== 'string' || r.sourceId.trim().length === 0) {
+    throw new TRPCError({ code: 'BAD_REQUEST', message: 'sourceId is required' });
+  }
+  const out: Record<string, string> = { sourceId: r.sourceId.trim() };
+  for (const key of optionalKeys) {
+    const v = r[key];
+    if (v !== undefined) {
+      if (typeof v !== 'string' || v.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: `${key} must be a non-empty string when provided` });
+      }
+      out[key] = v.trim();
+    }
+  }
+  return out as { sourceId: string } & Record<string, string>;
 }
 
 /**
@@ -602,5 +673,120 @@ export const kbRouter = t.router({
         llm: input.llm,
       });
       return { settings };
+    }),
+
+  // ─── kb.importSources（issue 02） ──────────────────────────
+  //
+  // 单文档/小批量导入到挂载的 wiki 库。逐文件独立结果，
+  // 部分失败不影响其余（结构化错误码由渲染端分支处理）。
+
+  importSources: t.procedure
+    .input((raw): { items: SourceImportInput[] } => {
+      const r = raw as Record<string, unknown>;
+      if (!Array.isArray(r.items) || r.items.length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'items is required and must be non-empty' });
+      }
+      const items: SourceImportInput[] = r.items.map((it) => {
+        const o = (it ?? {}) as Record<string, unknown>;
+        if (typeof o.absolutePath !== 'string' || o.absolutePath.trim().length === 0) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'each item.absolutePath must be a non-empty string' });
+        }
+        if (o.relPath !== undefined && (typeof o.relPath !== 'string' || o.relPath.trim().length === 0)) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'item.relPath must be a non-empty string when provided' });
+        }
+        return {
+          absolutePath: o.absolutePath,
+          ...(typeof o.relPath === 'string' ? { relPath: o.relPath } : {}),
+        };
+      });
+      return { items };
+    })
+    .mutation(async ({ input }): Promise<{ results: SourceImportOutcome[] }> => {
+      const kbPath = await getWikiMountedKbPath();
+      return { results: await importWikiSources(kbPath, input.items) };
+    }),
+
+  // ─── kb.sources（issue 02） ────────────────────────────────
+  //
+  // wiki 库来源摘要列表（revisionShort / parsedStale 供 UI 核对）。
+
+  sources: t.procedure
+    .input((_raw): Record<string, never> => {
+      return {};
+    })
+    .query(async (): Promise<WikiSourceSummary[]> => {
+      const kbPath = await getWikiMountedKbPath();
+      return listWikiSources(kbPath);
+    }),
+
+  // ─── kb.sourceParsed（issue 02） ───────────────────────────
+  //
+  // 机械全文预览（身份解析而非任意路径）；revision/parsedHash
+  // 指向历史快照时返回 isHistorical = true。
+
+  sourceParsed: t.procedure
+    .input((raw): { sourceId: string; revision?: string; parsedHash?: string } => {
+      return parseSourceIdInput(raw, ['revision', 'parsedHash']);
+    })
+    .query(async ({ input }): Promise<WikiParsedView> => {
+      const kbPath = await getWikiMountedKbPath();
+      try {
+        return await readWikiParsed(kbPath, input);
+      } catch (err) {
+        mapWikiSourceError(err);
+      }
+    }),
+
+  // ─── kb.sourceRevisions（issue 02） ────────────────────────
+  //
+  // 来源修订清单（当前 + 历史），UI 核对修订用。
+
+  sourceRevisions: t.procedure
+    .input((raw): { sourceId: string } => parseSourceIdInput(raw))
+    .query(async ({ input }): Promise<WikiSourceRevisionInfo[]> => {
+      const kbPath = await getWikiMountedKbPath();
+      try {
+        return await listSourceRevisions(kbPath, input.sourceId);
+      } catch (err) {
+        mapWikiSourceError(err);
+      }
+    }),
+
+  // ─── kb.sourceOriginal（issue 02） ─────────────────────────
+  //
+  // 从身份解析原件绝对路径（当前或历史修订）；
+  // 未知来源/盘上缺失返回 null（不抛错）。
+
+  sourceOriginal: t.procedure
+    .input((raw): { sourceId: string; revision?: string } => {
+      return parseSourceIdInput(raw, ['revision']);
+    })
+    .query(async ({ input }): Promise<{ path: string | null }> => {
+      const kbPath = await getWikiMountedKbPath();
+      return { path: await resolveWikiOriginalPath(kbPath, input) };
+    }),
+
+  // ─── kb.convertSource（issue 02） ──────────────────────────
+  //
+  // 失败重试 / 引擎指纹变更后重转。Result 联合返回（不抛错）。
+
+  convertSource: t.procedure
+    .input((raw): { sourceId: string } => parseSourceIdInput(raw))
+    .mutation(async ({ input }): Promise<SourceConvertOutcome> => {
+      const kbPath = await getWikiMountedKbPath();
+      return convertWikiSource(kbPath, input.sourceId);
+    }),
+
+  // ─── kb.importExtensions（issue 02） ───────────────────────
+  //
+  // UI/工具能力清单：当前引擎可导入的扩展名（不宣称未支持格式）。
+
+  importExtensions: t.procedure
+    .input((_raw): Record<string, never> => {
+      return {};
+    })
+    .query(async (): Promise<{ extensions: string[] }> => {
+      const settings = await kbSettingsManager.load();
+      return { extensions: listImportExtensions(settings.convertEngine) };
     }),
 });

@@ -236,6 +236,97 @@ export type KbDocStatusEvent = {
   aiError?: string;
 };
 
+// ── Wiki 来源（LLM Wiki 新布局，spec §1）────────────────────────
+
+/** wiki 来源转换状态。failed 的错误码/信息持久于 manifest，重开可见 */
+export type WikiSourceStatus = 'ready' | 'converting' | 'failed';
+
+/** manifest 中的来源修订记录（.kb/manifest.json 的 sources 字段） */
+export type WikiSourceRecord = {
+  /** 规范化相对路径（NFC、`/` 分隔、显示拼写，相对 raw/sources/） */
+  sourcePath: string;
+  /** 规范化完整相对路径（含目录与扩展名）的 SHA256 */
+  sourceId: string;
+  /** 源扩展名（小写含点） */
+  ext: string;
+  /** 当前原件字节大小 */
+  size: number;
+  /** 当前修订 = 原件字节 SHA256；同路径同字节不新增修订 */
+  currentRevision: string;
+  /** 当前 raw/parsed/<sourcePath>.md 所属修订；null = 从未成功转换。
+   *  与 currentRevision 不同 = 失败/转换中，旧全文不得标成新版 */
+  parsedRevision: string | null;
+  /** 当前 parsed 全文 SHA256；null = 从未成功转换 */
+  parsedHash: string | null;
+  /** 转换引擎（'anydoc' | 'text'） */
+  engine: string | null;
+  /** 引擎/配置指纹；变更即触发重转（原件未变 ≠ 转换未变） */
+  engineFingerprint: string | null;
+  status: WikiSourceStatus;
+  /** 失败错误码：WikiSourceErrorCode 或引擎错误码（如 anydoc 'encrypted'） */
+  errorCode?: string;
+  errorMessage?: string;
+  /** 当前修订的资产数量 */
+  assetCount: number;
+  importedAt: string;
+  updatedAt: string;
+};
+
+/** 渲染端来源列表条目（kb.sources 返回） */
+export type WikiSourceSummary = {
+  sourceId: string;
+  sourcePath: string;
+  ext: string;
+  size: number;
+  revision: string;
+  revisionShort: string;
+  status: WikiSourceStatus;
+  errorCode?: string;
+  errorMessage?: string;
+  /** 当前 parsed 全文所属修订 */
+  parsedRevision: string | null;
+  parsedHash: string | null;
+  /** 当前修订尚无对应成功转换（失败/转换中/从未转换） */
+  parsedStale: boolean;
+  assetCount: number;
+  importedAt: string;
+  updatedAt: string;
+};
+
+/** 来源修订信息（kb.sourceRevisions 返回；UI 核对修订用） */
+export type WikiSourceRevisionInfo = {
+  revision: string;
+  /** true = 当前修订（原件在 raw/sources/） */
+  isCurrent: boolean;
+  /** revisions 区的旧原件文件名（保存原文件名） */
+  originalFile?: string;
+  size?: number;
+  /** 该修订可定位的 parsed 快照 hash（内容寻址，可能多个） */
+  parsedHashes: string[];
+};
+
+/** 来源 parsed 全文读取结果（kb.sourceParsed；身份解析而非任意路径） */
+export type WikiParsedView = {
+  sourceId: string;
+  sourcePath: string;
+  /** 该全文所属修订 */
+  revision: string;
+  parsedHash: string;
+  /** true = 来自 revisions/ 的历史快照 */
+  isHistorical: boolean;
+  content: string;
+};
+
+/** wiki 来源导入/转换错误码 */
+export type WikiSourceErrorCode =
+  | 'invalidPath'
+  | 'unsupportedFormat'
+  | 'caseConflict'
+  | 'sourceNotFound'
+  | 'manifestCorrupted'
+  | 'originalHashMismatch'
+  | 'ioError';
+
 // ── 知识库设置 ──────────────────────────────────────────────────
 
 /** KB AI 模型配置（字段为空 = 自动） */

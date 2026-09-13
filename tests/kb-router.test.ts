@@ -104,6 +104,7 @@ import { kbRouter } from '../src/main/ipc/routers/kb-router';
 import { kbSettingsManager } from '../src/main/kb/kb-settings';
 import { initWikiLayout, readWikiManifest } from '../src/main/kb/wiki-layout';
 import { prepareCommit } from '../src/main/kb/atomic-commit';
+import type { WikiSourceSummary, WikiSourceRevisionInfo } from '@shared/kb-types';
 import type {
   KbListEntry,
   KbStatus,
@@ -917,6 +918,138 @@ describe('kb-router', () => {
           llm: { providerId: 123 },
         } as unknown as { convertEngine: string; llm: { providerId?: string; model?: string } }),
       ).rejects.toThrow();
+    });
+  });
+
+  // ─── kb wiki 来源（issue 02） ───────────────────────────────
+  //
+  // router→主进程→列表/预览行为，全部用真文件 fixture 走通。
+
+  describe('kb wiki 来源（issue 02）', () => {
+    let kbDir: string;
+    let kbId: string;
+    let seq = 0;
+
+    beforeEach(async () => {
+      // 每个测试独立库目录（mkdirSync 不清空，必须用唯一名）
+      kbDir = makeEmptyDir(`wiki-src-kb-${++seq}`);
+      kbId = regId(await caller.register({ name: '来源库', path: kbDir }));
+      await caller.mount({ kbId });
+    });
+
+    it('未挂载时 sources / importSources 拒绝（未挂载提示）', async () => {
+      await caller.unmount({ kbId });
+      await expect(caller.sources({})).rejects.toThrow('未挂载');
+      await expect(
+        caller.importSources({ items: [{ absolutePath: join(tmpDir, 'x.md') }] }),
+      ).rejects.toThrow('未挂载');
+    });
+
+    it('importSources 单文档导入 → sources 列表 / sourceParsed 预览 / sourceOriginal 解析', async () => {
+      const src = join(tmpDir, 'wiki-src-notes.md');
+      writeFileSync(src, '# 路由导入笔记\n', 'utf-8');
+
+      const { results } = await caller.importSources({ items: [{ absolutePath: src }] });
+      expect(results).toHaveLength(1);
+      expect(results[0].ok).toBe(true);
+
+      const list: WikiSourceSummary[] = await caller.sources({});
+      expect(list).toHaveLength(1);
+      // relPath 缺省 = basename
+      expect(list[0].sourcePath).toBe('wiki-src-notes.md');
+      expect(list[0].status).toBe('ready');
+      expect(list[0].parsedStale).toBe(false);
+      expect(list[0].revisionShort).toHaveLength(8);
+
+      const sid = list[0].sourceId;
+      const view = await caller.sourceParsed({ sourceId: sid });
+      expect(view.isHistorical).toBe(false);
+      expect(view.content).toContain('路由导入笔记');
+      expect(view.parsedHash).toBe(list[0].parsedHash);
+
+      const original = await caller.sourceOriginal({ sourceId: sid });
+      expect(original.path).not.toBeNull();
+      expect(readFileSync(original.path!, 'utf-8')).toContain('路由导入笔记');
+    });
+
+    it('importSources 批量：逐文件独立结果，部分失败不影响其余', async () => {
+      const okFile = join(tmpDir, 'wiki-batch-a.md');
+      const badFile = join(tmpDir, 'wiki-batch-b.html');
+      writeFileSync(okFile, 'A', 'utf-8');
+      writeFileSync(badFile, '<html>', 'utf-8');
+
+      const { results } = await caller.importSources({
+        items: [
+          { absolutePath: okFile, relPath: 'docs/a.md' },
+          { absolutePath: badFile, relPath: 'b.html' },
+        ],
+      });
+      expect(results).toHaveLength(2);
+      expect(results[0].ok).toBe(true);
+      expect(results[1].ok).toBe(false);
+      if (!results[1].ok) expect(results[1].error.code).toBe('unsupportedFormat');
+
+      const list: WikiSourceSummary[] = await caller.sources({});
+      expect(list.map((s) => s.sourcePath)).toEqual(['docs/a.md']);
+      expect(existsSync(join(kbDir, 'raw', 'sources', 'docs', 'a.md'))).toBe(true);
+    });
+
+    it('来源更新：sourceRevisions 核对 + sourceParsed 历史修订（被引用旧修订保留）', async () => {
+      const v1 = join(tmpDir, 'wiki-rev-v1.md');
+      writeFileSync(v1, 'bytes-v1', 'utf-8');
+      const first = (await caller.importSources({ items: [{ absolutePath: v1 }] })).results[0]!;
+      if (!first.ok) throw new Error('expected import success');
+      const sid = first.source.sourceId;
+      const oldRev = first.source.currentRevision;
+
+      // 已发布页引用旧修订 → 更新时保留证据
+      mkdirSync(join(kbDir, 'wiki', 'concepts'), { recursive: true });
+      writeFileSync(
+        join(kbDir, 'wiki', 'concepts', 'p.md'),
+        ['---', 'sources:', `  - sourceId: "${sid}"`, `    sourceRevision: "${oldRev}"`, '---', '', '正文'].join('\n'),
+        'utf-8',
+      );
+
+      const v2 = join(tmpDir, 'wiki-rev-v2.md');
+      writeFileSync(v2, 'bytes-v2', 'utf-8');
+      await caller.importSources({ items: [{ absolutePath: v2, relPath: 'wiki-rev-v1.md' }] });
+
+      const revisions: WikiSourceRevisionInfo[] = await caller.sourceRevisions({ sourceId: sid });
+      expect(revisions).toHaveLength(2);
+      const hist = revisions.find((r) => !r.isCurrent)!;
+      expect(hist.originalFile).toBe('wiki-rev-v1.md');
+
+      const histView = await caller.sourceParsed({ sourceId: sid, revision: oldRev });
+      expect(histView.isHistorical).toBe(true);
+      expect(histView.content).toBe('bytes-v1');
+
+      const original = await caller.sourceOriginal({ sourceId: sid, revision: oldRev });
+      expect(original.path).not.toBeNull();
+      expect(readFileSync(original.path!, 'utf-8')).toBe('bytes-v1');
+    });
+
+    it('sourceParsed 未知来源抛 NOT_FOUND', async () => {
+      await expect(caller.sourceParsed({ sourceId: 'missing' })).rejects.toThrow();
+    });
+
+    it('convertSource 未知来源返回 sourceNotFound Result（不抛错）', async () => {
+      const r = await caller.convertSource({ sourceId: 'missing' });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error.code).toBe('sourceNotFound');
+    });
+
+    it('importExtensions 不宣称引擎未支持的格式', async () => {
+      const { extensions } = await caller.importExtensions({});
+      expect(extensions).toContain('.md');
+      expect(extensions).toContain('.pdf');
+      expect(extensions).toContain('.docx');
+      expect(extensions).not.toContain('.html');
+    });
+
+    it('importSources 缺 items / 空 items 抛 BAD_REQUEST', async () => {
+      await expect(caller.importSources({} as { items: Array<{ absolutePath: string }> })).rejects.toThrow();
+      await expect(caller.importSources({ items: [] })).rejects.toThrow();
+      await expect(caller.importSources({ items: [{ absolutePath: '' }] })).rejects.toThrow();
     });
   });
 });
