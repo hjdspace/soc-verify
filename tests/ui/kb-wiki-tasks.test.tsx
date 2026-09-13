@@ -311,4 +311,44 @@ describe('KbWikiTasks 导入任务面板（issue 03）', () => {
     await waitFor(() => expect(screen.getByText('已重试 1 次')).toBeTruthy());
     expect(screen.getByText('tokens 入 50 / 出 20')).toBeTruthy();
   });
+
+  it('分段进度可见（issue 10）：事件里的 done/total 渲染为「分段 n/m」', async () => {
+    render(<KbWikiTasks />);
+    await waitFor(() => expect(screen.getByText('排队中')).toBeTruthy());
+
+    kbTaskCallbacks[0]!({
+      type: 'task',
+      kbId: 'kb-1',
+      seq: 11,
+      taskId: 'task-1',
+      attemptId: 'att-1',
+      phase: 'analyzing',
+      lastError: null,
+      progress: { done: 3, total: 12 },
+    });
+    await waitFor(() => expect(screen.getByText('分段 3/12')).toBeTruthy());
+    expect(screen.getByText('分析中')).toBeTruthy();
+  });
+
+  it('blocked 任务（issue 10）：显示「已阻塞」、原因与可用的重试入口', async () => {
+    render(<KbWikiTasks />);
+    await waitFor(() => expect(screen.getByText('排队中')).toBeTruthy());
+
+    kbTaskCallbacks[0]!({
+      type: 'task',
+      kbId: 'kb-1',
+      seq: 11,
+      taskId: 'task-1',
+      attemptId: 'att-1',
+      phase: 'blocked',
+      lastError: { code: 'contextBudgetExceeded', message: '可用输入预算不足', at: '2026-01-01T00:00:02.000Z' },
+      progress: null,
+    });
+
+    await waitFor(() => expect(screen.getByText('已阻塞')).toBeTruthy());
+    expect(screen.getByText(/可用输入预算不足/)).toBeTruthy();
+    // blocked 可重试（补齐预算后继续）
+    const retryButtons = screen.getAllByTitle(/重试任务/);
+    expect(retryButtons.length).toBeGreaterThanOrEqual(1);
+  });
 });

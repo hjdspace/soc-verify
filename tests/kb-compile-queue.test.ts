@@ -293,3 +293,132 @@ describe('编译任务 — 重试与用量（issue 09）', () => {
     expect(raw).not.toContain('apiKey');
   });
 });
+
+// ── issue 10：长来源分段进度与 blocked 状态 ─────────────────────
+
+/** 长来源假模型：分段分析返回两个小节，生成返回 FILE 块（证据绑定传入的 parsedHash） */
+function longSourceLlm(opts: { contextTokens: number; parsedHash: string }): CompileLlm {
+  const ref = [
+    'sources:',
+    `  - sourceId: "${SOURCE_ID}"`,
+    `    sourceRevision: "${REVISION}"`,
+    `    parsedHash: "${opts.parsedHash}"`,
+  ].join('\n');
+  const page = (type: string, title: string, relPath: string, body: string): string => [
+    `---FILE: ${relPath}---`,
+    '---',
+    `type: ${type}`,
+    `title: "${title}"`,
+    'summary: s',
+    'keywords: []',
+    'tags: []',
+    ref,
+    'created: "2026-09-14T00:00:00Z"',
+    'updated: "2026-09-14T00:00:00Z"',
+    '---',
+    '',
+    body,
+    '---END FILE---',
+  ].join('\n');
+  return {
+    model: 'fake-long-queue',
+    contextTokens: opts.contextTokens,
+    invoke: async (req: { system: string; user: string }) => {
+      if (req.system.includes('分块分析')) {
+        return { text: '## 分块分析\n本段结论。\n\n## 全局摘要\n累计。', finishReason: 'stop', usage: { outputTokens: 1 } };
+      }
+      if (req.system.includes('只输出 FILE 块')) {
+        return {
+          text: [
+            page('source', 'N', `wiki/sources/${SOURCE_ID}.md`, '# N\n\n正文。'),
+            page('concept', 'Foo', 'wiki/concepts/foo.md', '# Foo\n\n握手。'),
+          ].join('\n\n'),
+          finishReason: 'stop',
+          usage: { outputTokens: 1 },
+        };
+      }
+      return { text: '## 关键实体\n- AXI', finishReason: 'stop', usage: { outputTokens: 1 } };
+    },
+  };
+}
+
+/** 长来源（约 1 万 CJK token）：contextTokens 12k 时必然分段 */
+const LONG_SOURCE = Array.from({ length: 150 }, (_, i) => [
+  `## 第 ${i + 1} 章`,
+  '',
+  `本章描述第 ${i + 1} 部分的协议机制、位段与时序约束，包含寄存器字段、单位与复位值等结构化信息。`,
+  `本节说明与第 ${i + 1} 节相关的验证要点、信号命名与边界条件，供验证工程师对照实现。`,
+  '',
+].join('\n')).join('\n');
+
+describe('编译任务 — 分段进度与 blocked（issue 10）', () => {
+  it('长来源分段推进：事件带分段进度，完成后清空', async () => {
+    writeFileSync(join(wikiLayout(kbPath).rawParsedDir, `${SOURCE_PATH}.md`), LONG_SOURCE, 'utf-8');
+    const hash = createHash('sha256').update(LONG_SOURCE, 'utf-8').digest('hex');
+    const read = JSON.parse(readFileSync(wikiLayout(kbPath).manifestPath, 'utf-8')) as WikiKbManifest;
+    read.sources![SOURCE_ID]!.parsedHash = hash;
+    read.sources![SOURCE_ID]!.size = LONG_SOURCE.length;
+    await writeWikiManifest(kbPath, read);
+    writeFileSync(wikiLayout(kbPath).schemaMdPath, SCHEMA_MD_SKELETON, 'utf-8');
+
+    const events: Array<{ phase: string; progress?: { done: number; total: number } | null }> = [];
+    const q = new WikiIngestQueueManager({
+      notify: (e) => {
+        if (e.type === 'task') events.push({ phase: e.phase, progress: e.progress });
+      },
+      compileLlmFactory: async () => longSourceLlm({ contextTokens: 12_000, parsedHash: hash }),
+    });
+    await q.attach(kbPath, KB_ID);
+    const task = await q.enqueueCompile(KB_ID, SOURCE_ID);
+    await waitForPhase(q, task.taskId, 'done', 15_000);
+
+    // 分段进度对面板可见：analyzing 阶段出现递增的 done/total
+    const progressEvents = events.filter(
+      (e) => e.progress && e.progress.total > 1,
+    ) as Array<{ phase: string; progress: { done: number; total: number } }>;
+    expect(progressEvents.length).toBeGreaterThan(1);
+    expect(progressEvents[0]!.progress.total).toBeGreaterThan(1);
+    expect(progressEvents.at(-1)!.progress.done).toBe(progressEvents.at(-1)!.progress.total);
+
+    // 终态清空进度
+    const t = q.snapshot(KB_ID)?.tasks.find((x) => x.taskId === task.taskId);
+    expect(t?.phase).toBe('done');
+    expect(t?.progress).toBeNull();
+  }, 20_000);
+
+  it('预算不足 → blocked（不是 failed），可重试且不再被去重挡住', async () => {
+    const q = new WikiIngestQueueManager({
+      notify: () => undefined,
+      compileLlmFactory: async () => longSourceLlm({ contextTokens: 1_000, parsedHash: PARSED_HASH }),
+    });
+    await q.attach(kbPath, KB_ID);
+    const task = await q.enqueueCompile(KB_ID, SOURCE_ID);
+    await waitForPhase(q, task.taskId, 'blocked');
+
+    const t = q.snapshot(KB_ID)?.tasks.find((x) => x.taskId === task.taskId);
+    expect(t?.lastError?.code).toBe('contextBudgetExceeded');
+    expect(t?.lastError?.message).toMatch(/预算|最小原子证据/);
+    expect(t?.progress).toBeNull();
+
+    // 持久化并可解释（内存状态先于落盘，用轮询等待持久化完成）
+    await vi.waitFor(() => {
+      const raw = readFileSync(join(kbPath, '.kb', 'queue.json'), 'utf-8');
+      if (!raw.includes('blocked')) throw new Error('queue.json 尚未写入 blocked');
+      expect(raw).not.toContain('sk-');
+    });
+
+    // 暂停调度后再做入队/重试断言（避免重试立即被再跑一次造成竞态）
+    await q.pause(KB_ID);
+
+    // blocked 是停机状态：新入队不被去重挡住（用户补齐预算后重新编译）
+    const again = await q.enqueueCompile(KB_ID, SOURCE_ID);
+    expect(again.taskId).not.toBe(task.taskId);
+    await q.cancelTask(KB_ID, again.taskId);
+
+    // blocked 可重试（补齐预算后继续；已完成分段保留在 checkpoint）
+    await q.retryTask(KB_ID, task.taskId);
+    const retried = q.snapshot(KB_ID)?.tasks.find((x) => x.taskId === task.taskId);
+    expect(retried?.phase).toBe('queued');
+    await q.cancelTask(KB_ID, task.taskId);
+  });
+});

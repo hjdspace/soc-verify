@@ -18,7 +18,6 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import {
   compileWikiSource,
-  SHORT_SOURCE_MAX_CHARS,
   type CompileLlm,
   type LlmCallResultLike,
 } from '../src/main/kb/compile';
@@ -335,15 +334,16 @@ describe('compileWikiSource — 状态明确的失败', () => {
     expect(llm.requests).toHaveLength(0);
   });
 
-  it('来源超预算 → contextBudgetExceeded，不调用模型（长文档分段待后继票）', async () => {
-    const long = 'x'.repeat(SHORT_SOURCE_MAX_CHARS + 1);
-    writeFileSync(join(wikiLayout(kbPath).rawParsedDir, `${SOURCE_PATH}.md`), long, 'utf-8');
+  it('预算不足以放最小原子证据 → contextBudgetExceeded，不调用模型（issue 10：不裁掉参数表）', async () => {
     const llm = fakeLlm(standardScript());
+    (llm as { contextTokens?: number }).contextTokens = 1_000;
     const res = await compile(llm);
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.code).toBe('contextBudgetExceeded');
     expect(llm.requests).toHaveLength(0);
+    // 诊断带预算分解（可操作：规则/已有知识/输出预留/可用输入）
+    expect(res.diagnostics.budget?.availableInputTokens).toBe(0);
   });
 
   it('模型调用失败 → llmFailed 且消息可读', async () => {

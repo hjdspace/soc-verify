@@ -1,5 +1,5 @@
 /**
- * KB 短来源编译管线（issue 08/09，spec §4、§5）— 文字来源 → 两阶段模型调用
+ * KB 来源编译管线（issue 08/09/10，spec §4、§5）— 来源 → 分析 → 两阶段模型调用
  * →（可选一次有界修复）→ 既有 staging。
  *
  * 职责边界（Smart zone M）：
@@ -26,12 +26,27 @@
  *  - 中止（外部 signal）优先于一切：不再修复、不写 staging、不写缓存，
  *    保留已完成阶段诊断。
  *
+ * 长来源分段（issue 10，spec §4）：
+ *  - 预算按「规则（system/schema/purpose/输出格式）+ 已有知识（index）+ 输出预留
+ *    + 来源输入」统一计算，中文按 CJK 逐字符估算（不用英文的 4:1 比例）；
+ *  - 超预算 → 按章节/原子证据分段（表格与围栏代码是原子证据，过大按行窗口
+ *    分批并重复表头/保留原行号），逐段分析并**每段保存 checkpoint**；
+ *  - 覆盖清单（行/章节/表格行/代码行覆盖数）随 changeSet.warnings 持久化，
+ *    证明所有段落都处理过，末尾约束不会静默丢失；
+ *  - checkpoint 键含来源修订/parsed 指纹、视觉指纹（本期 null）、schema/purpose、
+ *    模型/提示版本与分块形状；**只恢复完全匹配的已完成段**，不匹配即重算；
+ *  - 编译成功清除 checkpoint（它不是成功缓存，见 issue 17）；
+ *  - 取消/失败保留已完成段（重试同任务只重做未完成段）；
+ *  - 预算不足以放最小原子证据 → `contextBudgetExceeded`（队列显示为 blocked），
+ *    绝不截掉参数表后继续。
+ *
  * 模型调用边界：本模块不解析配置 —— 调用方（队列/测试）显式传入
  * CompileLlm（无凭证传 null），凭证不进入任务文件或渲染端。
  */
 
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import {
   parseFileProposal,
   filterTruncatedFileRepairOutput,
@@ -48,7 +63,32 @@ import { stageProposal } from './staging';
 import { writeFileAtomic } from './atomic-commit';
 import { callLlm, LlmCallError, type LlmUsage } from './llm-call';
 import { resolveKbLlmConfig } from './llm-config';
-import { buildAnalysisPrompt, buildGenerationPrompt, buildRepairPrompt } from './compile-prompts';
+import {
+  buildAnalysisPrompt,
+  buildGenerationPrompt,
+  buildRepairPrompt,
+  buildChunkAnalysisPrompt,
+  parseChunkAnalysisOutput,
+  CHUNK_ANALYSIS_PROMPT_VERSION,
+  CHUNK_ANALYSIS_MAX_TOKENS,
+} from './compile-prompts';
+import {
+  computeCompileBudget,
+  estimateTokens,
+  formatBudgetSummary,
+  truncateToTokens,
+  DEFAULT_COMPILE_CONTEXT_TOKENS,
+  GENERATION_OUTPUT_RESERVE_TOKENS,
+  type CompileBudget,
+} from './token-budget';
+import { planLongSource, formatCoverageManifest, type SourceCoverage, type LongSourcePlan } from './long-source';
+import {
+  longSourceCheckpointKey,
+  loadLongSourceCheckpoint,
+  saveLongSourceCheckpoint,
+  clearLongSourceCheckpoint,
+  LONG_SOURCE_CHECKPOINT_VERSION,
+} from './long-source-checkpoint';
 import type {
   WikiChangeSet,
   WikiPageType,
@@ -71,6 +111,8 @@ export type LlmCallResultLike =
 export type CompileLlm = {
   /** 配置快照描述（仅供诊断，不写入任务文件） */
   readonly model: string;
+  /** 模型上下文窗口（token）；缺省用 DEFAULT_COMPILE_CONTEXT_TOKENS */
+  readonly contextTokens?: number;
   invoke: (req: { system: string; user: string; maxTokens: number }) => Promise<LlmCallResultLike>;
 };
 
@@ -116,9 +158,28 @@ export type CompileErrorCode =
 export type CompilePhase = 'analyzing' | 'generating' | 'repairing' | 'validating';
 
 /**
- * 失败诊断（issue 09）：失败时保留已完成阶段、各阶段 usage、重试数、
- * 是否已用掉唯一一次修复，以及仍未补齐的既定路径。全部只含诊断信息，
- * 不含凭证。
+ * 长来源分段信息（issue 10）：段数、本次实际分析与复用的段数、覆盖清单。
+ * 覆盖清单同时写入 changeSet.warnings（人可核对「全部处理过」）。
+ */
+export type CompileChunking = CompileChunkProgress & {
+  targetTokens: number;
+  overlapTokens: number;
+  coverage: SourceCoverage;
+};
+
+/** 分段进度（诊断与任务面板共用同一形状） */
+export type CompileChunkProgress = {
+  total: number;
+  /** 本次运行实际分析（调用模型）的段数 */
+  completed: number;
+  /** 从第几段之后恢复（0 = 未复用 checkpoint） */
+  resumedFrom: number;
+};
+
+/**
+ * 失败诊断（issue 09/10）：失败时保留已完成阶段、各阶段 usage、重试数、
+ * 是否已用掉唯一一次修复、仍未补齐的既定路径，以及预算分解与分段进度。
+ * 全部只含诊断信息，不含凭证与来源正文。
  */
 export type CompileDiagnostics = {
   completedPhases: CompilePhase[];
@@ -130,6 +191,10 @@ export type CompileDiagnostics = {
   repairAttempted: boolean;
   /** 仍未补齐的既定路径（缺失的来源摘要页 / 未闭合块） */
   unresolvedPaths: string[];
+  /** 预算分解（规则/已有知识/输出预留/可用输入）；未计算时为 null */
+  budget: CompileBudget | null;
+  /** 分段进度（长来源；未分段时为 null） */
+  chunking: CompileChunkProgress | null;
 };
 
 export type CompileSuccess = {
@@ -141,6 +206,8 @@ export type CompileSuccess = {
   retryCount: number;
   /** 是否触发过一次有界修复调用 */
   repairAttempted: boolean;
+  /** 长来源分段信息（单次编译为 null） */
+  chunking: CompileChunking | null;
 };
 
 export type CompileFailure = {
@@ -168,10 +235,9 @@ export type CompileDeps = {
   now?: string;
   /** 可重试失败的退避基数（毫秒，默认 1000；测试用 0 避免空等） */
   retryBaseDelayMs?: number;
+  /** 分段进度回调（长来源：已完成段数/总段数；队列据此展示分段进度） */
+  onChunkProgress?: (progress: { done: number; total: number }) => void;
 };
-
-/** 短来源全文上限（字符）。超限进入明确的 contextBudgetExceeded（分段编译待 issue 10）。 */
-export const SHORT_SOURCE_MAX_CHARS = 40_000;
 
 /** 有界修复最多一次（spec §4：只允许一次有界修复调用） */
 export const MAX_REPAIR_ATTEMPTS = 1;
@@ -191,8 +257,27 @@ const LLM_RETRY_MAX_DELAY_MS = 30_000;
 const ANALYSIS_SYSTEM = '你是严谨的研究分析员。只输出最终结构化分析，不输出思考过程。';
 const GENERATION_SYSTEM = '你是 wiki 维护者。只输出 FILE 块，不输出思考过程或其他文字。';
 const REPAIR_SYSTEM = '你是 wiki 维护者。只补齐被请求的 FILE 块，每个块必须完整闭合，不输出其他内容。';
+const CHUNK_ANALYSIS_SYSTEM = '你是严谨的研究分析员。只分析给定的这一段，输出「分块分析」与「全局摘要」两个小节，不输出思考过程。';
+
+/**
+ * 指令骨架的保守 token 预留（输出格式说明、frontmatter 规则、路由表等）。
+ * 预算计算按「规则 + 已有知识 + 输出预留 + 来源输入」分解；此处把提示词骨架
+ * 作为固定规则占用，避免把「可用输入」算得比实际更大。
+ */
+const PROMPT_SCAFFOLD = [
+  GENERATION_SYSTEM,
+  '## 页面类型与目录路由 ## 必须生成的内容 ## Frontmatter 规则 ## 正文要求 ## 输出格式',
+  '---FILE: wiki/<类型目录>/<页面名>.md---',
+  '（完整文件内容，含 YAML frontmatter）',
+  '---END FILE---',
+  '## 分析 ## 关键实体 ## 关键概念 ## 主要论断与证据 ## 与既有知识的关系 ## 建议生成的页面',
+].join('\n');
 
 class CompileAborted extends Error {}
+
+function sha256(text: string): string {
+  return createHash('sha256').update(text, 'utf-8').digest('hex');
+}
 
 async function readFileOrNull(path: string): Promise<string> {
   try {
@@ -493,6 +578,214 @@ function mapStagingError(code: WikiStagingErrorCode): CompileErrorCode {
   return 'invalidTarget';
 }
 
+// ── 长来源分段分析（issue 10）────────────────────────────────────
+
+type ChunkAnalysisResult =
+  | {
+      ok: true;
+      /** 归并后的分析（逐段结论 + 最终全局摘要） */
+      analysis: string;
+      /** 覆盖清单文本（写入 changeSet.warnings，人可核对） */
+      coverageManifest: string;
+      /** 本次运行实际分析的段数 */
+      completed: number;
+      /** 从第几段之后恢复（0 = 未复用 checkpoint） */
+      resumedFrom: number;
+      /**
+       * 可见告警：某段结论/摘要超出上界被裁剪时列出（**不静默丢失**）。
+       * 来源原文从不被裁剪；被裁剪的是模型结论的超出部分。
+       */
+      warnings: string[];
+      usage: LlmUsage[];
+      retryCount: number;
+    }
+  | {
+      ok: false;
+      code: CompileErrorCode;
+      message: string;
+      completed: number;
+      resumedFrom: number;
+      usage: LlmUsage[];
+      retryCount: number;
+    };
+
+/**
+ * 分段分析长来源：逐段调用模型（带累计摘要与重叠上下文），每段完成后
+ * 原子写入 checkpoint；中断/失败时已完成段保留，重试只重做未完成段。
+ *
+ * 只恢复**完全匹配**的 checkpoint（来源修订 / parsed 指纹 / schema / purpose /
+ * 模型 / 提示版本 / 分块形状），不匹配即从第 1 段重算。
+ */
+async function analyzeInChunks(args: {
+  kbPath: string;
+  sourceId: string;
+  llm: CompileLlm;
+  signal: AbortSignal | undefined;
+  baseDelayMs: number;
+  modelFingerprint: string;
+  plan: Extract<LongSourcePlan, { mode: 'chunked' }>;
+  purpose: string;
+  schema: string;
+  index: string;
+  sourceName: string;
+  sourceRef: WikiSourceRef;
+  availableInputTokens: number;
+  /** 每次调用中累计摘要可占用的 token（由预算推导；超出即裁剪并告警） */
+  digestMaxTokens: number;
+  onChunkProgress?: (progress: { done: number; total: number }) => void;
+}): Promise<ChunkAnalysisResult> {
+  const { plan, sourceRef, kbPath, sourceId } = args;
+  const total = plan.chunks.length;
+  const usage: LlmUsage[] = [];
+  let retryCount = 0;
+
+  const { key, fingerprint } = longSourceCheckpointKey({
+    sourceId,
+    sourceRevision: sourceRef.sourceRevision,
+    parsedHash: sourceRef.parsedHash,
+    // 本期未接入视觉解读：视觉指纹占位为 null（字段先在键中占位，接入后不再改口径）
+    visionHash: null,
+    schemaHash: sha256(args.schema),
+    purposeHash: sha256(args.purpose),
+    modelFingerprint: args.modelFingerprint,
+    promptVersion: CHUNK_ANALYSIS_PROMPT_VERSION,
+    chunkTargetTokens: plan.targetTokens,
+    chunkOverlapTokens: plan.overlapTokens,
+    chunks: plan.chunks,
+  });
+
+  const resumed = await loadLongSourceCheckpoint(kbPath, sourceId, { key, fingerprint, chunkTotal: total });
+  const resumedFrom = resumed?.completedThrough ?? 0;
+  let completedThrough = resumedFrom;
+  let digest = resumed?.digest ?? '';
+  const analyses: string[] = resumed ? [...resumed.analyses] : [];
+  const warnings: string[] = [];
+  /** 结论被裁剪的段号（可见告警，不静默丢失） */
+  const trimmedChunks: number[] = [];
+
+  args.onChunkProgress?.({ done: completedThrough, total });
+
+  for (const chunk of plan.chunks) {
+    if (chunk.index <= completedThrough) continue;
+    if (args.signal?.aborted) {
+      return {
+        ok: false,
+        code: 'aborted',
+        message: `编译已被取消（第 ${completedThrough}/${total} 段已完成，checkpoint 已保留）`,
+        completed: completedThrough,
+        resumedFrom,
+        usage,
+        retryCount,
+      };
+    }
+
+    const r = await invokePhase(args.llm, {
+      system: CHUNK_ANALYSIS_SYSTEM,
+      user: buildChunkAnalysisPrompt({
+        purpose: args.purpose,
+        schema: args.schema,
+        index: args.index,
+        sourceName: args.sourceName,
+        chunk,
+        digest,
+        digestMaxTokens: args.digestMaxTokens,
+      }),
+      maxTokens: ANALYSIS_MAX_TOKENS,
+    }, args.signal, args.baseDelayMs);
+    retryCount += r.retryCount;
+    if (!r.ok) {
+      return {
+        ok: false,
+        code: r.code,
+        message: `第 ${chunk.index}/${total} 段分析失败: ${r.message}`
+          + `（已完成 ${completedThrough}/${total} 段，checkpoint 已保留，重试将从第 ${completedThrough + 1} 段继续）`,
+        completed: completedThrough,
+        resumedFrom,
+        usage,
+        retryCount,
+      };
+    }
+    if (r.usage) usage.push(r.usage);
+
+    const parsedOutput = parseChunkAnalysisOutput(r.text);
+    if (estimateTokens(parsedOutput.analysis) > CHUNK_ANALYSIS_MAX_TOKENS) trimmedChunks.push(chunk.index);
+    const section = truncateToTokens(parsedOutput.analysis, CHUNK_ANALYSIS_MAX_TOKENS);
+    const nextDigest = truncateToTokens(parsedOutput.digest, args.digestMaxTokens);
+    analyses.push([
+      `## 第 ${chunk.index}/${total} 段（源行 ${chunk.startLine}-${chunk.endLine}`
+        + `${chunk.headingPath ? `，章节「${chunk.headingPath}」` : ''}）`,
+      section,
+    ].join('\n'));
+    digest = nextDigest || [digest, section].filter(Boolean).join('\n\n');
+    completedThrough = chunk.index;
+
+    await saveLongSourceCheckpoint(kbPath, sourceId, {
+      version: LONG_SOURCE_CHECKPOINT_VERSION,
+      fingerprint,
+      key,
+      completedThrough,
+      digest,
+      analyses: [...analyses],
+      updatedAt: new Date().toISOString(),
+    });
+    args.onChunkProgress?.({ done: completedThrough, total });
+  }
+
+  const finalDigestRaw = digest;
+  const finalDigest = truncateToTokens(finalDigestRaw, args.digestMaxTokens);
+  if (finalDigest.length !== finalDigestRaw.length) {
+    warnings.push(
+      `跨段累计摘要超过每次调用的摘要上界 ${args.digestMaxTokens} tokens，已裁剪后进入后续提示词`
+      + `（可提高模型上下文以避免裁剪）。`,
+    );
+  }
+  if (trimmedChunks.length > 0) {
+    warnings.push(
+      `以下分段的结论超出单段结论上界 ${CHUNK_ANALYSIS_MAX_TOKENS} tokens 被裁剪（保留前段内容，未静默丢弃）：`
+      + `${trimmedChunks.join('、')} —— 详细段落建议提高模型上下文后重编，或直接查看来源原文。`,
+    );
+  }
+  const analysis = [
+    `# 长来源分段分析（共 ${total} 段；源行 ${1}-${plan.coverage.totalLines}）`,
+    '',
+    '## 最终全局摘要',
+    finalDigest || '（无摘要）',
+    '',
+    '## 逐段分析',
+    analyses.join('\n\n'),
+  ].join('\n');
+
+  // 归并分析 + 覆盖清单必须能随生成提示词一起送入（生成输入 = 规则 + 已有知识
+  // + 覆盖清单 + 归并分析，规则与已有知识已在可用输入中扣除）。放不下就明确
+  // blocked —— 不静默裁掉某段结论来凑预算。
+  const coverageManifest = formatCoverageManifest(plan);
+  const generationInputTokens = estimateTokens(analysis) + estimateTokens(coverageManifest);
+  if (generationInputTokens > args.availableInputTokens) {
+    return {
+      ok: false,
+      code: 'contextBudgetExceeded',
+      message: `分段分析结论与覆盖清单共 ${generationInputTokens} tokens，超过可用输入 ${args.availableInputTokens} tokens`
+        + `（共 ${total} 段）—— 无法在不丢失段落结论的情况下生成提案，`
+        + `请提高模型上下文或减少规则/既有页读入后重试；已完成段保留在 checkpoint。`,
+      completed: completedThrough,
+      resumedFrom,
+      usage,
+      retryCount,
+    };
+  }
+
+  return {
+    ok: true,
+    analysis,
+    coverageManifest,
+    completed: completedThrough - resumedFrom,
+    resumedFrom,
+    warnings,
+    usage,
+    retryCount,
+  };
+}
+
 // ── 公开接口 ────────────────────────────────────────────────────
 
 /**
@@ -517,6 +810,8 @@ export async function compileWikiSource(
   let retryCount = 0;
   let repairAttempted = false;
   let unresolvedPaths: string[] = [];
+  let budget: CompileBudget | null = null;
+  let chunkProgress: CompileChunkProgress | null = null;
 
   const failWith = (
     code: CompileErrorCode,
@@ -532,6 +827,8 @@ export async function compileWikiSource(
       retryCount: overrides.retryCount ?? retryCount,
       repairAttempted: overrides.repairAttempted ?? repairAttempted,
       unresolvedPaths: overrides.unresolvedPaths ?? unresolvedPaths,
+      budget,
+      chunking: chunkProgress,
     },
   });
 
@@ -570,19 +867,28 @@ export async function compileWikiSource(
       parsedHash: rec.parsedHash,
     };
 
-    // 预算：短来源全文直接进提示词；超限明确报错（长文档分段待 issue 10）
-    if (parsedView.content.length > SHORT_SOURCE_MAX_CHARS) {
-      return failWith(
-        'contextBudgetExceeded',
-        `来源全文 ${parsedView.content.length} 字符超过短来源编译上限 ${SHORT_SOURCE_MAX_CHARS}，分段编译待后续版本`,
-      );
-    }
-
     // 读集：purpose / schema / 当前知识库目录
     const purpose = await readFileOrNull(layout.purposeMdPath);
     const schema = await readFileOrNull(layout.schemaMdPath);
     const index = await readFileOrNull(join(kbPath, 'wiki', 'index.md'));
     const now = deps.now ?? new Date().toISOString();
+
+    // 统一预算分解（spec §4）：规则 + 已有知识 + 输出预留 + 来源输入。
+    // 中文按 CJK 逐字符估算，与英文不共用 chars/token 比例。
+    budget = computeCompileBudget({
+      contextTokens: llm.contextTokens ?? DEFAULT_COMPILE_CONTEXT_TOKENS,
+      rulesText: [PROMPT_SCAFFOLD, schema, purpose].filter(Boolean).join('\n'),
+      knowledgeText: index,
+      outputReserveTokens: GENERATION_OUTPUT_RESERVE_TOKENS,
+    });
+
+    // 单次 / 分段 / blocked：预算不足放最小原子证据就明确 blocked，不裁掉参数表
+    const plan = planLongSource(parsedView.content, {
+      availableInputTokens: budget.availableInputTokens,
+    });
+    if (plan.mode === 'blocked') {
+      return failWith('contextBudgetExceeded', `${plan.reason}（${formatBudgetSummary(budget)}）`, { retryCount });
+    }
 
     // schema 允许的页面类型与目录路由（schema 可解析则用其路由，否则固定八类）
     let pageTypes: readonly WikiPageType[] = WIKI_PAGE_TYPES;
@@ -606,18 +912,69 @@ export async function compileWikiSource(
       `    parsedHash: "${sourceRef.parsedHash}"`,
     ].join('\n');
 
-    // ── 阶段 1：简洁结构化分析 ──
+    // ── 阶段 1：结构化分析（预算内单次；超预算按章节分段 + checkpoint） ──
     throwIfAborted();
-    const analysis = await invokePhase(llm, {
-      system: ANALYSIS_SYSTEM,
-      user: buildAnalysisPrompt({ purpose, schema, index, sourceContent: parsedView.content }),
-      maxTokens: ANALYSIS_MAX_TOKENS,
-    }, signal, baseDelayMs);
-    retryCount += analysis.retryCount;
-    if (!analysis.ok) {
-      return failWith(analysis.code, analysis.message, { retryCount });
+    const preWarnings: string[] = [];
+    let analysisText: string;
+    let chunking: CompileChunking | null = null;
+    let coverageManifest: string | null = null;
+
+    if (plan.mode === 'single') {
+      const analysis = await invokePhase(llm, {
+        system: ANALYSIS_SYSTEM,
+        user: buildAnalysisPrompt({ purpose, schema, index, sourceContent: parsedView.content }),
+        maxTokens: ANALYSIS_MAX_TOKENS,
+      }, signal, baseDelayMs);
+      retryCount += analysis.retryCount;
+      if (!analysis.ok) {
+        return failWith(analysis.code, analysis.message, { retryCount });
+      }
+      if (analysis.usage) usage.push(analysis.usage);
+      analysisText = analysis.text;
+    } else {
+      const chunked = await analyzeInChunks({
+        kbPath,
+        sourceId: input.sourceId,
+        llm,
+        signal,
+        baseDelayMs,
+        modelFingerprint: llm.model,
+        plan,
+        purpose,
+        schema,
+        index,
+        sourceName: rec.sourcePath,
+        sourceRef,
+        availableInputTokens: budget.availableInputTokens,
+        digestMaxTokens: plan.digestTokens,
+        onChunkProgress: deps.onChunkProgress,
+      });
+      retryCount += chunked.retryCount;
+      usage.push(...chunked.usage);
+      chunkProgress = { total: plan.chunks.length, completed: chunked.completed, resumedFrom: chunked.resumedFrom };
+      if (!chunked.ok) {
+        return failWith(chunked.code, chunked.message, { retryCount });
+      }
+      analysisText = chunked.analysis;
+      // 覆盖清单进 changeSet.warnings：证明所有行/章节/原子证据都处理过
+      coverageManifest = chunked.coverageManifest;
+      preWarnings.push(chunked.coverageManifest);
+      // 结论被裁剪时可见告警（来源原文从不裁剪；这里是模型结论的超出部分）
+      preWarnings.push(...chunked.warnings);
+      if (chunked.resumedFrom > 0) {
+        preWarnings.push(
+          `本次从已有 checkpoint 的第 ${chunked.resumedFrom + 1} 段继续（前 ${chunked.resumedFrom} 段已完成的结论直接复用，未重复调用模型）。`,
+        );
+      }
+      chunking = {
+        total: plan.chunks.length,
+        completed: chunked.completed,
+        resumedFrom: chunked.resumedFrom,
+        targetTokens: plan.targetTokens,
+        overlapTokens: plan.overlapTokens,
+        coverage: plan.coverage,
+      };
     }
-    if (analysis.usage) usage.push(analysis.usage);
     completedPhases.push('analyzing');
 
     // ── 阶段 2：FILE 提案生成 ──
@@ -628,12 +985,15 @@ export async function compileWikiSource(
         purpose,
         schema,
         index,
-        analysis: analysis.text,
+        analysis: analysisText,
         sourceName: rec.sourcePath,
         sourceSummaryRelPath: summaryRelPath,
         sourceRefYaml,
         today: now,
         pageTypes,
+        ...(coverageManifest && chunking
+          ? { coverageManifest, chunkCount: chunking.total }
+          : {}),
       }),
       maxTokens: GENERATION_MAX_TOKENS,
     }, signal, baseDelayMs);
@@ -646,7 +1006,7 @@ export async function compileWikiSource(
 
     // ── 坏输出判定 ──
     let verdict = analyzeProposal(generation.text, summaryRelPath, sourceRef);
-    const extraWarnings: string[] = [...verdict.warnings];
+    const extraWarnings: string[] = [...preWarnings, ...verdict.warnings];
 
     // finish_reason=length 是**原因**信号：修复目标仍只能来自结构（缺失/截断的既定路径），
     // 不能凭 length 凭空指定要补哪些页。结构无缺口时记录可见说明，不触发修复。
@@ -678,7 +1038,7 @@ export async function compileWikiSource(
           purpose,
           schema,
           index,
-          analysis: analysis.text,
+          analysis: analysisText,
           sourceName: rec.sourcePath,
           sourceRefYaml,
           today: now,
@@ -769,7 +1129,11 @@ export async function compileWikiSource(
       );
     }
 
-    return { ok: true, changeSet, usage, retryCount, repairAttempted };
+    // 编译成功：丢弃分段 checkpoint（未发布模型中间产物，不是成功缓存 —— 缓存属 issue 17）。
+    // 失败/取消时保留，重试只重做未完成段。
+    if (chunking) await clearLongSourceCheckpoint(kbPath, input.sourceId);
+
+    return { ok: true, changeSet, usage, retryCount, repairAttempted, chunking };
   } catch (err) {
     if (err instanceof CompileAborted) {
       return failWith('aborted', '编译已被取消（不再修复、不写 staging）');

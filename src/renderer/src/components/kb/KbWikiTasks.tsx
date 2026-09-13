@@ -16,6 +16,7 @@ import { useKbStore } from '@renderer/stores/kb';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
 import type { WikiIngestPhase, WikiIngestTask, WikiSourceSummary, WikiTaskUsage } from '@shared/kb-types';
+import { isActivePhase, isRetryablePhase } from '@shared/kb-task-phases';
 
 const PHASE_LABELS: Record<WikiIngestPhase, string> = {
   queued: '排队中',
@@ -30,6 +31,7 @@ const PHASE_LABELS: Record<WikiIngestPhase, string> = {
   done: '完成',
   failed: '失败',
   cancelled: '已取消',
+  blocked: '已阻塞',
 };
 
 const PHASE_STYLES: Partial<Record<WikiIngestPhase, string>> = {
@@ -39,6 +41,7 @@ const PHASE_STYLES: Partial<Record<WikiIngestPhase, string>> = {
   done: 'bg-green-500/15 text-green-600 dark:text-green-400',
   failed: 'bg-red-500/15 text-red-600 dark:text-red-400',
   cancelled: 'bg-muted text-muted-foreground',
+  blocked: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
 };
 
 const CANCELLABLE: ReadonlySet<WikiIngestPhase> = new Set([
@@ -98,8 +101,13 @@ function TaskRow({ task, index, total }: { task: WikiIngestTask; index: number; 
           <PhaseChip phase={task.phase} />
           <span className="shrink-0 text-[10px] text-muted-foreground">第 {task.attempt} 次尝试</span>
         </div>
-        {(retryCount > 0 || usage) && (
+        {(retryCount > 0 || usage || task.progress) && (
           <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
+            {task.progress && task.progress.total > 0 && (
+              <span title="长来源分段编译进度（已完成段数 / 总段数）">
+                分段 {task.progress.done}/{task.progress.total}
+              </span>
+            )}
             {retryCount > 0 && (
               <span title="模型调用内部有界退避重试次数">已重试 {retryCount} 次</span>
             )}
@@ -142,10 +150,10 @@ function TaskRow({ task, index, total }: { task: WikiIngestTask; index: number; 
             <XCircle className="h-3.5 w-3.5" />
           </button>
         )}
-        {(task.phase === 'failed' || task.phase === 'cancelled') && (
+        {isRetryablePhase(task.phase) && (
           <button
             onClick={() => void retry(task.taskId)}
-            title="重试任务"
+            title={task.phase === 'blocked' ? '重试任务（补齐预算/配置后继续；已完成分段不会重做）' : '重试任务'}
             className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           >
             <RotateCcw className="h-3.5 w-3.5" />
@@ -260,7 +268,7 @@ export function KbWikiTasks() {
         <ListTodo className="h-3.5 w-3.5 text-muted-foreground" />
         <span className="text-xs font-medium">导入队列</span>
         <span className="text-[10px] text-muted-foreground">
-          {tasks.filter((t) => t.phase !== 'done' && t.phase !== 'failed' && t.phase !== 'cancelled').length} 个进行中 · 共 {tasks.length} 项
+          {tasks.filter((t) => isActivePhase(t.phase)).length} 个进行中 · 共 {tasks.length} 项
         </span>
         {paused && (
           <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px] text-secondary-foreground">已暂停</span>

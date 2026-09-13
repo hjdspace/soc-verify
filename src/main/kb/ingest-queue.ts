@@ -42,8 +42,10 @@ import type {
   WikiQueueSnapshot,
   WikiTaskError,
   WikiTaskEvent,
+  WikiTaskProgress,
   WikiTaskUsage,
 } from '@shared/kb-types';
+import { STOPPED_PHASES, isRetryablePhase } from '@shared/kb-task-phases';
 
 // ── 常量与工具 ──────────────────────────────────────────────────
 
@@ -62,9 +64,12 @@ const PHASES: readonly WikiIngestPhase[] = [
   'done',
   'failed',
   'cancelled',
+  'blocked',
 ];
 
-const TERMINAL_PHASES: ReadonlySet<WikiIngestPhase> = new Set<WikiIngestPhase>(['done', 'failed', 'cancelled']);
+// 停机阶段（STOPPED_PHASES）与可重试判定集中在 shared/kb-task-phases：
+// blocked（issue 10：预算/配置不足）停机但**可重试** —— 用户补齐预算后按原任务继续，
+// 已完成的分段分析保存在 checkpoint；不由恢复逻辑自动重跑。
 
 /** 可中止的计算阶段（转换 + 编译各阶段）：暂停/取消/卸载对这些阶段中止在途运行 */
 const RUNNABLE_PHASES: ReadonlySet<WikiIngestPhase> = new Set<WikiIngestPhase>([
@@ -84,6 +89,7 @@ function cloneTask(t: WikiIngestTask): WikiIngestTask {
     ...t,
     lastError: t.lastError ? { ...t.lastError } : null,
     usage: t.usage ? { ...t.usage } : null,
+    progress: t.progress ? { ...t.progress } : null,
   };
 }
 
@@ -168,9 +174,19 @@ function parseTask(u: unknown, kbId: string): WikiIngestTask | null {
       typeof u.retryCount === 'number' && Number.isInteger(u.retryCount) && u.retryCount >= 0
         ? u.retryCount
         : 0,
+    progress: parseTaskProgress(u.progress),
     enqueuedAt,
     updatedAt,
   };
+}
+
+/** 持久形态的分段进度：只接受非负整数，其余按「无进度」处理（向后兼容旧队列文件） */
+function parseTaskProgress(value: unknown): WikiTaskProgress | null {
+  if (!isRecord(value)) return null;
+  const { done, total } = value;
+  if (typeof done !== 'number' || !Number.isInteger(done) || done < 0) return null;
+  if (typeof total !== 'number' || !Number.isInteger(total) || total < 0) return null;
+  return { done: Math.min(done, total), total };
 }
 
 /** 持久形态的 usage：只接受有限数字字段，其余忽略（未知字段不伪造） */
@@ -323,9 +339,9 @@ export class WikiIngestQueueManager {
     const reverted: WikiIngestTask[] = [];
     const tasks: WikiIngestTask[] = [];
     for (const t of persisted?.tasks ?? []) {
-      if (t.phase === 'queued' || TERMINAL_PHASES.has(t.phase)) {
+      if (t.phase === 'queued' || STOPPED_PHASES.has(t.phase)) {
         tasks.push(t);
-        if (!TERMINAL_PHASES.has(t.phase)) restored += 1;
+        if (!STOPPED_PHASES.has(t.phase)) restored += 1;
       } else {
         const safe: WikiIngestTask = {
           ...t,
@@ -429,7 +445,7 @@ export class WikiIngestQueueManager {
       throw new WikiQueueError('sourceNotFound', `来源不存在: ${sourceId}`);
     }
     const existing = st.tasks.find(
-      (t) => t.kind === 'convertSource' && t.sourceId === sourceId && !TERMINAL_PHASES.has(t.phase),
+      (t) => t.kind === 'convertSource' && t.sourceId === sourceId && !STOPPED_PHASES.has(t.phase),
     );
     if (existing) return cloneTask(existing);
 
@@ -446,6 +462,7 @@ export class WikiIngestQueueManager {
       lastError: null,
       usage: null,
       retryCount: 0,
+      progress: null,
       enqueuedAt: now,
       updatedAt: now,
     };
@@ -478,7 +495,7 @@ export class WikiIngestQueueManager {
       throw new WikiQueueError('sourceNotFound', `来源不存在: ${sourceId}`);
     }
     const existing = st.tasks.find(
-      (t) => t.kind === 'compileSource' && t.sourceId === sourceId && !TERMINAL_PHASES.has(t.phase),
+      (t) => t.kind === 'compileSource' && t.sourceId === sourceId && !STOPPED_PHASES.has(t.phase),
     );
     if (existing) return cloneTask(existing);
 
@@ -495,6 +512,7 @@ export class WikiIngestQueueManager {
       lastError: null,
       usage: null,
       retryCount: 0,
+      progress: null,
       enqueuedAt: now,
       updatedAt: now,
     };
@@ -580,7 +598,7 @@ export class WikiIngestQueueManager {
     if (task.phase === 'committing') {
       throw new WikiQueueError('committing', `任务正在提交，暂不能取消: ${task.sourcePath}`);
     }
-    if (TERMINAL_PHASES.has(task.phase)) {
+    if (STOPPED_PHASES.has(task.phase)) {
       throw new WikiQueueError('invalidPhase', `任务已处于终态（${task.phase}），不能取消`);
     }
     if (RUNNABLE_PHASES.has(task.phase)) {
@@ -608,8 +626,10 @@ export class WikiIngestQueueManager {
     const st = this.requireAttached(kbId);
     const task = st.tasks.find((t) => t.taskId === taskId);
     if (!task) throw new WikiQueueError('taskNotFound', `任务不存在: ${taskId}`);
-    if (task.phase !== 'failed' && task.phase !== 'cancelled') {
-      throw new WikiQueueError('invalidPhase', `只有 failed/cancelled 任务可重试（当前 ${task.phase}）`);
+    // blocked（预算/配置不足，issue 10）同样可重试：用户补齐预算后继续，
+    // 已完成的分段分析保存在 checkpoint，只重做未完成段。
+    if (!isRetryablePhase(task.phase)) {
+      throw new WikiQueueError('invalidPhase', `只有 failed/cancelled/blocked 任务可重试（当前 ${task.phase}）`);
     }
     const prev = cloneTask(task);
     task.phase = 'queued';
@@ -851,7 +871,21 @@ export class WikiIngestQueueManager {
     const result = await compileWikiSource(
       kbPath,
       { kbId: st.kbId, taskId: task.taskId, sourceId: task.sourceId },
-      { llm, signal: controller.signal },
+      {
+        llm,
+        signal: controller.signal,
+        // 分段进度（长来源，issue 10）：phase 与进度分开保存，事件即时可见
+        onChunkProgress: (progress) => {
+          const t = st.tasks.find((x) => x.taskId === task.taskId);
+          if (!t || t.attemptId !== attemptId) return;
+          // 分段分析是长来源的主要耗时阶段：进度回调即证明仍在 analyzing
+          t.phase = 'analyzing';
+          t.progress = { ...progress };
+          t.updatedAt = new Date().toISOString();
+          this.pushTaskEvent(t);
+          void this.flush().catch(() => undefined);
+        },
+      },
     );
     if (result.ok) {
       setPhase('validating');
@@ -900,11 +934,15 @@ export class WikiIngestQueueManager {
       task.usage = summarizeUsage(usage);
       task.retryCount = taskRetryCount ?? 0;
     } else {
-      task.phase = 'failed';
+      // 预算/配置不足 → blocked（issue 10，spec §5）：等待用户提高预算或改配置后重试，
+      // 不是普通失败；不静默裁切来源、不冒充完整成功。
+      task.phase = outcome.error.code === 'contextBudgetExceeded' ? 'blocked' : 'failed';
       task.lastError = { code: outcome.error.code, message: outcome.error.message, at: now };
       task.usage = summarizeUsage(usage);
       task.retryCount = taskRetryCount ?? 0;
     }
+    // 结算后清空分段进度（终态不再显示中途进度）
+    task.progress = null;
     this.pushTaskEvent(task);
     await this.flush().catch(() => undefined);
     this.pump();
@@ -926,6 +964,7 @@ export class WikiIngestQueueManager {
       lastError: task.lastError ? { ...task.lastError } : null,
       usage: task.usage ? { ...task.usage } : null,
       retryCount: task.retryCount,
+      progress: task.progress ? { ...task.progress } : null,
     });
   }
 

@@ -117,6 +117,8 @@ export const useKbQueueStore = create<KbQueueState>((set, get) => ({
         // usage/retryCount 缺省表示本次事件未变化（保留上一次已知值）
         usage: e.usage ?? prev.usage ?? null,
         retryCount: e.retryCount ?? prev.retryCount ?? 0,
+        // progress 缺省表示本次事件未变化；显式 null 表示已清空（issue 10）
+        progress: e.progress === undefined ? (prev.progress ?? null) : e.progress,
       };
     } else {
       tasks.push({
@@ -131,6 +133,7 @@ export const useKbQueueStore = create<KbQueueState>((set, get) => ({
         lastError: e.lastError ?? null,
         usage: e.usage ?? null,
         retryCount: e.retryCount ?? 0,
+        progress: e.progress ?? null,
         enqueuedAt: new Date(0).toISOString(),
         updatedAt: new Date(0).toISOString(),
       });

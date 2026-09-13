@@ -51,6 +51,8 @@ export type WikiLayoutPaths = {
   readonly transactionsDir: string;
   readonly vectorsDir: string;
   readonly visionDir: string;
+  /** 长来源分段编译 checkpoint（未发布模型中间产物；spec §1、§4；issue 10） */
+  readonly compileCheckpointsDir: string;
 };
 
 export function wikiLayout(kbPath: string): WikiLayoutPaths {
@@ -75,6 +77,7 @@ export function wikiLayout(kbPath: string): WikiLayoutPaths {
     transactionsDir: join(kbDir, 'transactions'),
     vectorsDir: join(kbDir, 'vectors'),
     visionDir: join(kbDir, 'vision'),
+    compileCheckpointsDir: join(kbDir, 'compile-checkpoints'),
   };
 }
 

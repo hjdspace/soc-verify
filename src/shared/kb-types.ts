@@ -330,9 +330,10 @@ export type WikiSourceErrorCode =
 // ── 持久任务队列（LLM Wiki 新布局，spec §5）────────────────────
 
 /**
- * 任务阶段。queued → converting →（后继编译票：vision → analyzing →
- * generating → validating → awaiting_review → committing → published）。
- * 本票转换任务实际经历 queued/converting/committing，终态 done/failed/cancelled。
+ * 任务阶段。queued → converting →（vision →）analyzing → generating → validating
+ * → awaiting_review → committing → published。
+ * 终态 done/failed/cancelled；配置或预算不足为 blocked（issue 10：等待用户动作，
+ * 不自动重启、不静默裁切）。
  */
 export type WikiIngestPhase =
   | 'queued'
@@ -346,7 +347,17 @@ export type WikiIngestPhase =
   | 'published'
   | 'done'
   | 'failed'
-  | 'cancelled';
+  | 'cancelled'
+  | 'blocked';
+
+/**
+ * 任务进度（spec §5「phase 与进度分开保存」；issue 10 引入）。
+ * 长来源分段编译时表示「已完成段数 / 总段数」。
+ */
+export type WikiTaskProgress = {
+  done: number;
+  total: number;
+};
 
 /** 任务类型：convertSource=来源转换（issue 03）；compileSource=短来源编译（issue 08） */
 export type WikiTaskKind = 'convertSource' | 'compileSource';
@@ -391,6 +402,8 @@ export type WikiIngestTask = {
   usage: WikiTaskUsage | null;
   /** 模型调用内部有界退避重试次数（本次 attempt；issue 09） */
   retryCount: number;
+  /** 分段进度（issue 10；未分段任务为 null） */
+  progress: WikiTaskProgress | null;
   enqueuedAt: string;
   updatedAt: string;
 };
@@ -424,6 +437,8 @@ export type WikiTaskEvent =
       usage?: WikiTaskUsage | null;
       /** 本次 attempt 内部重试次数（issue 09；缺省表示未变化） */
       retryCount?: number;
+      /** 分段进度（issue 10；缺省表示未变化） */
+      progress?: WikiTaskProgress | null;
     }
   | {
       type: 'queue';
