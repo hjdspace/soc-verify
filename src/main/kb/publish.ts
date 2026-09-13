@@ -18,8 +18,15 @@
  * 任一基线变动即转 `stale`，并把该变更集的旧批准重置为 pending
  * （失效的批准不得覆盖新内容），不静默做 LLM merge。
  *
- * 本票只开放单页变更集（`multiPageUnsupported` 拒绝多页）；多页与逐 hunk
- * 发布由 issue 07 在同一 `buildPublishPlan` / 事务写集上扩展。
+ * issue 07 扩展（spec §6）：
+ *  - **多页变更集**：从用户选择重建每页最终候选（`rebuildWikiPage`），
+ *    所有未决页须处置（`pendingDecisions`）；同一 commit 更新全部页面、
+ *    聚合、历史与 manifest，部分接受标 `published_partial`（`partial`）。
+ *  - **跨页链接校验**：本次新增链接按「发布后目录视图」（已发布页 +
+ *    最终候选集）解析；目标被拒绝/不存在/歧义 → 阻止发布并定位 hunk。
+ *    预先存在的断链不阻断整库，只作 warning（finding 侧处置）。
+ *  - **差异指纹**：选择持久时记录 `wikiPageDiffFingerprint`；发布前重算
+ *    不一致 = 差异已重新生成，旧 hunk 决定失效转 stale。
  *
  * @see docs/prd/knowledge-base-llm-wiki-spec.md §6
  */
@@ -36,6 +43,8 @@ import { parseWikiPage } from './wiki-page';
 import { readTypeDirs, validateProposalTarget } from './proposal-blocks';
 import { validateManagedRelPath } from './path-guard';
 import { assertReadGateOpen, WikiReadGateError } from './read-gate';
+import { resolveCandidateSet, validateCandidateLinks } from './candidate-set';
+import type { CandidatePage } from './candidate-set';
 import {
   buildWikiIndex,
   buildWikiOverview,
@@ -53,7 +62,6 @@ import type {
   WikiPublishErrorCode,
   WikiPublishResult,
   WikiPublishedPage,
-  WikiStagedPage,
 } from '@shared/kb-types';
 
 // ── 输入 / 输出契约 ──────────────────────────────────────────────
@@ -74,6 +82,8 @@ export type PublishPlan = {
   changeSetId: string;
   revision: number;
   pages: WikiPublishedPage[];
+  /** 部分接受：存在被拒绝 hunk 的候选页（published_partial） */
+  partial: boolean;
   writes: AtomicWritePlan['writes'];
   /** 持久进事务清单的审计字段（读/写集 hash、基线 hash、目标 revision） */
   meta: Record<string, unknown>;
@@ -166,6 +176,14 @@ export async function withPublishLock<T>(kbPath: string, fn: () => Promise<T>): 
 
 // ── 规划 ────────────────────────────────────────────────────────
 
+/** 发布写集的最小单位：candidate-set 的最终候选 + 沙箱/路由/frontmatter 校验结果 */
+type PublishCandidate = CandidatePage & {
+  relPath: string;
+  pageId: string;
+  routeType: WikiPageType;
+  parse: Extract<ReturnType<typeof parseWikiPage>, { ok: true }>;
+};
+
 /**
  * 校验并构建发布写集（**不改动磁盘**，仅做 schema 沙箱所需的目录创建）。
  *
@@ -186,9 +204,6 @@ export async function buildPublishPlan(
   if (cs.pages.length === 0) {
     return fail('invalidTarget', '变更集没有任何页面候选');
   }
-  if (cs.pages.length > 1) {
-    return fail('multiPageUnsupported', '本票只开放单页变更集；多页发布会话由后续票接入（issue 07）');
-  }
 
   const reviewRes = await readReview(kbPath, input.changeSetId);
   if (!reviewRes.ok) return fail(mapStagingError(reviewRes.error.code), reviewRes.error.message);
@@ -197,58 +212,94 @@ export async function buildPublishPlan(
     return fail('alreadyPublished', `变更集已发布（commitId ${review.published.commitId}），不重复发布`);
   }
 
-  const page = cs.pages[0];
-  if (!isPageAccepted(review, page)) {
-    return fail('nothingAccepted', '变更集没有已接受的候选页：拒绝或未处置不会改动正式资产');
+  // ── 从用户选择重建最终候选（issue 07，candidate-set 纯函数）────
+  // 判定顺序：差异指纹不符 → stale；没有任何接受页 → nothingAccepted；
+  // 另有未决页 → pendingDecisions（所有未决项必须明确处置才能发布）。
+  const resolved = resolveCandidateSet(cs, review);
+  if (!resolved.ok) {
+    if (resolved.error.code === 'stale') {
+      return fail('stale', resolved.error.message, resolved.error.detail);
+    }
+    if (resolved.error.code === 'unsettled') {
+      return fail('pendingDecisions', resolved.error.message, resolved.error.detail);
+    }
+    return fail('nothingAccepted', resolved.error.message, resolved.error.detail);
   }
 
+  // ── 候选页逐个过沙箱与 frontmatter 校验 ────────────────────────
   // 沙箱再校验：schema 可能在 staging 之后变化（变动亦会由基线校验判 stale）
   const typeDirs = await readTypeDirs(kbPath);
   if (typeDirs === null) return fail('invalidTarget', 'schema.md 无法解析，拒绝发布（不回退无约束）');
-  const target = await validateProposalTarget(kbPath, page.relPath, typeDirs);
-  if (!target.ok) return fail('invalidTarget', `发布目标不可写: ${page.relPath} — ${target.reason}`);
-  const relPath = target.relPath;
-  const pageId = pageIdOf(relPath);
 
-  const routeType = routeTypeOf(relPath, typeDirs);
-  if (routeType === null) return fail('invalidTarget', `发布目标目录不在 schema 路由内: ${relPath}`);
+  const candidates: PublishCandidate[] = [];
+  for (const base of resolved.pages) {
+    const page = base.page;
+    const target = await validateProposalTarget(kbPath, page.relPath, typeDirs);
+    if (!target.ok) return fail('invalidTarget', `发布目标不可写: ${page.relPath} — ${target.reason}`);
+    const relPath = target.relPath;
+    const pageId = pageIdOf(relPath);
 
-  const parse = parseWikiPage(page.proposed);
-  if (!parse.ok) {
-    return fail('invalidTarget', `提案页 frontmatter 非法: ${relPath} — ${parse.issues.map((i) => i.message).join('；')}`);
+    const routeType = routeTypeOf(relPath, typeDirs);
+    if (routeType === null) return fail('invalidTarget', `发布目标目录不在 schema 路由内: ${relPath}`);
+
+    // frontmatter 契约校验基于**重建后的最终候选**（逐 hunk 取舍后的内容）
+    const parse = parseWikiPage(base.content);
+    if (!parse.ok) {
+      return fail('invalidTarget', `提案页 frontmatter 非法: ${relPath} — ${parse.issues.map((i) => i.message).join('；')}`);
+    }
+
+    candidates.push({ ...base, relPath, pageId, routeType, parse });
   }
 
   // ── 基线校验（读/写集、来源、规则）────────────────────────────
-  const staleReasons = await checkBaselines(kbPath, cs, page, relPath);
+  const staleReasons = await checkBaselines(kbPath, cs, candidates);
   if (staleReasons.length > 0) {
     return fail('stale', '发布前基线校验未通过：读/写集或来源/规则基线已变动，旧批准已失效。', staleReasons);
   }
 
-  // ── 聚合页（发布后视图）──────────────────────────────────────
+  // ── 发布后目录视图（已发布页 + 最终候选集）────────────────────
   const scan = await scanWikiCatalog(kbPath);
   if (!scan.ok) {
     return fail('invalidTarget', `wiki/ 或 schema 无法解析，无法生成聚合页: ${scan.schemaIssues.map((i) => i.message).join('；')}`);
   }
-  const catalog: WikiCatalog = {
+  const candidateIds = new Set(candidates.map((c) => c.pageId));
+  const postCatalog: WikiCatalog = {
     ...scan.catalog,
     pages: [
-      ...scan.catalog.pages.filter((p) => p.pageId !== pageId),
-      {
-        pageId,
-        relPath,
-        type: routeType,
-        kind: 'page',
-        parse,
-        routeMismatch: parse.frontmatter.type !== routeType,
-      } satisfies WikiCatalogPage,
+      ...scan.catalog.pages.filter((p) => !candidateIds.has(p.pageId)),
+      ...candidates.map((c) => ({
+        pageId: c.pageId,
+        relPath: c.relPath,
+        type: c.routeType,
+        kind: 'page' as const,
+        parse: c.parse,
+        routeMismatch: c.parse.frontmatter.type !== c.routeType,
+      } satisfies WikiCatalogPage)),
     ].sort((a, b) => a.pageId.localeCompare(b.pageId)),
   };
+
+  // ── 跨页链接校验（本次新增链接按最终候选集解析，issue 07）──────
+  const linkResult = validateCandidateLinks({
+    candidates,
+    published: scan.catalog.pages.map((p) => ({
+      pageId: p.pageId,
+      relPath: p.relPath,
+      title: p.parse.ok ? p.parse.frontmatter.title : null,
+    })),
+  });
+  if (!linkResult.ok) {
+    return fail(
+      'unresolvedLink',
+      '本次新增链接存在无法解析的目标（目标被拒绝、不存在或歧义），已阻止发布。',
+      linkResult.errors.map((e) => `${e.relPath} hunk ${e.hunkId ?? '?'}：${e.message}`),
+    );
+  }
 
   // ── 其余写集内容 ─────────────────────────────────────────────
   const layout = wikiLayout(kbPath);
   const now = input.now ?? new Date().toISOString();
   const commitId = input.commitId ?? randomUUID();
-  const warnings: string[] = [];
+  const warnings = [...linkResult.warnings];
 
   const manifestRes = await readWikiManifest(kbPath);
   if (!manifestRes.ok) {
@@ -256,36 +307,37 @@ export async function buildPublishPlan(
   }
   const revision = (manifestRes.manifest.publish?.revision ?? 0) + 1;
 
-  const operation = page.before === null ? 'create' as const : 'update' as const;
-  const afterHash = sha256Text(page.proposed);
-  const beforeHash = page.before === null ? null : page.baselineHash;
-
-  // log.md（同 commitId 幂等）
+  // log.md（同 commitId 幂等）；多页 subject 为各页 relPath 的稳定序列
   const logPath = join(layout.wikiDir, 'log.md');
   const logExisting = await readTextOrNull(logPath);
-  const logEntry = buildWikiLogEntry({ at: now, operation: 'publish', subject: relPath, commitId });
+  const logSubject = candidates.map((c) => c.relPath).join(', ');
+  const logEntry = buildWikiLogEntry({ at: now, operation: 'publish', subject: logSubject, commitId });
   if (logExisting !== null && logExisting.includes(commitId)) {
     warnings.push(`wiki/log.md 已存在 commitId ${commitId}（重放），跳过重复追加。`);
   }
   const logContent = appendLogEntryIdempotent(logExisting, logEntry, commitId);
 
-  // 页面历史（同 commitId 幂等）
-  const historyPath = historyFilePath(kbPath, pageId);
-  const historyExisting = await readTextOrNull(historyPath);
-  if (historyExisting !== null && existingHasCommitId(historyExisting, commitId)) {
-    warnings.push(`页面历史已存在 commitId ${commitId}（重放），跳过重复追加。`);
+  // 页面历史（每页一条，同 commitId 幂等）
+  const historyWrites: Array<{ relPath: string; content: string }> = [];
+  for (const c of candidates) {
+    const historyPath = historyFilePath(kbPath, c.pageId);
+    const historyExisting = await readTextOrNull(historyPath);
+    if (historyExisting !== null && existingHasCommitId(historyExisting, commitId)) {
+      warnings.push(`页面历史已存在 commitId ${commitId}（重放），跳过重复追加。`);
+    }
+    const historyContent = appendHistoryEntryIdempotent(historyExisting, {
+      commitId,
+      changeSetId: cs.changeSetId,
+      pageId: c.pageId,
+      relPath: c.relPath,
+      operation: c.operation,
+      beforeHash: c.beforeHash,
+      afterHash: c.afterHash,
+      sources: c.page.sources,
+      at: now,
+    } satisfies WikiPageHistoryEntry);
+    historyWrites.push({ relPath: relativeTo(kbPath, historyPath), content: historyContent });
   }
-  const historyContent = appendHistoryEntryIdempotent(historyExisting, {
-    commitId,
-    changeSetId: cs.changeSetId,
-    pageId,
-    relPath,
-    operation,
-    beforeHash,
-    afterHash,
-    sources: page.sources,
-    at: now,
-  } satisfies WikiPageHistoryEntry);
 
   const manifestContent = JSON.stringify({
     ...manifestRes.manifest,
@@ -293,19 +345,21 @@ export async function buildPublishPlan(
     publish: { revision, commitId, at: now },
   }, null, 2);
 
+  const partial = candidates.some((c) => c.partial);
   const reviewContent = JSON.stringify({
     ...review,
     stale: null,
-    published: { commitId, revision, at: now },
+    published: { commitId, revision, at: now, partial },
     updatedAt: now,
   } satisfies WikiChangeSetReview, null, 2);
 
   const writes: AtomicWritePlan['writes'] = [
-    { relPath, content: page.proposed },
-    { relPath: join('wiki', 'index.md').replace(/\\/g, '/'), content: buildWikiIndex(catalog) },
-    { relPath: 'wiki/overview.md', content: buildWikiOverview(catalog) },
+    // 页面前置：保证 rename 失败注入时「页已应用 → 回滚」路径真实可达
+    ...candidates.map((c) => ({ relPath: c.relPath, content: c.content })),
+    { relPath: join('wiki', 'index.md').replace(/\\/g, '/'), content: buildWikiIndex(postCatalog) },
+    { relPath: 'wiki/overview.md', content: buildWikiOverview(postCatalog) },
     { relPath: 'wiki/log.md', content: logContent },
-    { relPath: relativeTo(kbPath, historyPath), content: historyContent },
+    ...historyWrites,
     { relPath: relativeTo(kbPath, layout.manifestPath), content: manifestContent },
     { relPath: relativeTo(kbPath, join(layout.reviewsDir, `${cs.changeSetId}.json`)), content: reviewContent },
   ];
@@ -321,6 +375,13 @@ export async function buildPublishPlan(
   // 事务清单审计字段（spec §6：commitId、读/写集 hash、before/after、
   // 目标 revision、状态）。before/after 与状态由 atomic-commit 落盘，
   // 读/写集与基线 hash 在这里算好后随 meta 一起持久。
+  const publishedPages: WikiPublishedPage[] = candidates.map((c) => ({
+    pageId: c.pageId,
+    relPath: c.relPath,
+    operation: c.operation,
+    beforeHash: c.beforeHash,
+    afterHash: c.afterHash,
+  }));
   const meta: Record<string, unknown> = {
     changeSetId: cs.changeSetId,
     taskId: cs.taskId,
@@ -334,7 +395,7 @@ export async function buildPublishPlan(
       sources: cs.sources,
     })),
     writeSetHash: sha256Text(writes.map((w) => `${w.relPath}\n${w.content}`).join('\n')),
-    pages: [{ pageId, relPath, operation, beforeHash, afterHash }],
+    pages: publishedPages,
   };
 
   return {
@@ -343,7 +404,8 @@ export async function buildPublishPlan(
       commitId,
       changeSetId: cs.changeSetId,
       revision,
-      pages: [{ pageId, relPath, operation, beforeHash, afterHash }],
+      pages: publishedPages,
+      partial,
       writes,
       meta,
       warnings,
@@ -397,6 +459,7 @@ export async function publishChangeSet(
       commitId: plan.commitId,
       revision: plan.revision,
       pages: plan.pages,
+      partial: plan.partial,
       warnings: plan.warnings,
     };
   }));
@@ -445,12 +508,17 @@ export async function completePublish(kbPath: string, commitId: string): Promise
  *
  * 覆盖 spec §6：「校验写集基线与实际参与推断的读集。若其他编译、回滚、
  * 来源更新、规则修改或外部编辑改变基线，进入 stale」。
+ *
+ * issue 07 扩展：
+ *  - 写集基线对**每个候选页**逐一校验（外部修改第二页同样转 stale）；
+ *  - 读集基线按最终候选集验证：候选集内的页由写集基线保证其现势性，
+ *    不再与磁盘重复比对（同一次提交内该页将以最终候选内容发布）。
+ *  - 差异指纹（hunksHash）校验在 `resolveCandidateSet` 内完成。
  */
 async function checkBaselines(
   kbPath: string,
   cs: WikiChangeSet,
-  page: WikiStagedPage,
-  relPath: string,
+  candidates: PublishCandidate[],
 ): Promise<string[]> {
   const layout = wikiLayout(kbPath);
   const reasons: string[] = [];
@@ -463,16 +531,18 @@ async function checkBaselines(
     reasons.push('规则基线变动：purpose.md 与生成提案时不一致。');
   }
 
-  // 写集基线（外部编辑 / 目标被创建 / 目标被删除）
-  const current = await readTextOrNull(join(kbPath, relPath));
-  if (page.before === null) {
-    if (current !== null) {
-      reasons.push(`写集基线变动：新页目标 ${relPath} 已存在（提案基线为「不存在」）。`);
+  // 写集基线（外部编辑 / 目标被创建 / 目标被删除）—— 逐候选页
+  for (const c of candidates) {
+    const current = await readTextOrNull(join(kbPath, c.relPath));
+    if (c.page.before === null) {
+      if (current !== null) {
+        reasons.push(`写集基线变动：新页目标 ${c.relPath} 已存在（提案基线为「不存在」）。`);
+      }
+    } else if (current === null) {
+      reasons.push(`写集基线变动：${c.relPath} 已不存在（提案基线为已发布页）。`);
+    } else if (sha256Text(current) !== c.page.baselineHash) {
+      reasons.push(`写集基线变动：${c.relPath} 内容与提案基线不一致（可能被外部编辑）。`);
     }
-  } else if (current === null) {
-    reasons.push(`写集基线变动：${relPath} 已不存在（提案基线为已发布页）。`);
-  } else if (sha256Text(current) !== page.baselineHash) {
-    reasons.push(`写集基线变动：${relPath} 内容与提案基线不一致（可能被外部编辑）。`);
   }
 
   // 来源基线：提案固定的 sourceRevision 必须是当前修订
@@ -491,8 +561,11 @@ async function checkBaselines(
     }
   }
 
-  // 读集基线：本变更集参考过的已发布页必须与读取时一致
+  // 读集基线：本变更集参考过的已发布页必须与读取时一致。
+  // 候选集内的页由上面的写集基线保证（同一次提交会以最终候选发布）。
+  const candidateIds = new Set(candidates.map((c) => c.pageId));
   for (const rb of cs.readBaseline) {
+    if (candidateIds.has(rb.pageId)) continue;
     const currentContent = await readTextOrNull(join(kbPath, 'wiki', `${rb.pageId}.md`));
     if (currentContent === null) {
       reasons.push(`读集基线变动：已发布页 ${rb.pageId} 已不存在。`);
@@ -522,13 +595,6 @@ async function invalidateApproval(
 }
 
 // ── 内部工具 ────────────────────────────────────────────────────
-
-function isPageAccepted(review: WikiChangeSetReview, page: WikiStagedPage): boolean {
-  const pr = review.pages.find((p) => p.relPath === page.relPath);
-  if (!pr) return false;
-  if (pr.pageDecision === 'accepted') return true;
-  return Object.values(pr.hunkStates).some((s) => s === 'accepted');
-}
 
 function pageIdOf(relPath: string): string {
   return relPath.slice('wiki/'.length, -3);

@@ -290,7 +290,8 @@ function PageDiff({ relPath }: { relPath: string | null }) {
           <div className="px-4 py-6 text-center text-xs text-muted-foreground">提案内容与已发布页一致，无差异</div>
         ) : (
           <>
-            {/* 整页操作条：提案按页处置（接受才落地） */}
+            {/* 整页操作条：整页处置 = 处置全部真实 hunk
+                （新页 [0]；已有页 frontmatter 合并块 + 正文逐 hunk，issue 07） */}
             <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-primary/20 bg-primary/5 px-4 py-1.5">
               <span className="text-[11px] font-medium text-foreground">整页处置</span>
               <span className="text-[10px] text-muted-foreground">
@@ -298,7 +299,7 @@ function PageDiff({ relPath }: { relPath: string | null }) {
               </span>
               <div className="flex-1" />
               <button
-                onClick={() => void decideHunk(0, 'rejected')}
+                onClick={() => void decideHunk(diff.hunks.map((h) => h.id), 'rejected')}
                 disabled={deciding || publishing}
                 data-testid="kb-page-reject"
                 className="flex items-center gap-1 rounded border border-border px-2 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
@@ -307,7 +308,7 @@ function PageDiff({ relPath }: { relPath: string | null }) {
                 拒绝
               </button>
               <button
-                onClick={() => void decideHunk(0, 'accepted')}
+                onClick={() => void decideHunk(diff.hunks.map((h) => h.id), 'accepted')}
                 disabled={deciding || publishing}
                 data-testid="kb-page-accept"
                 className="flex items-center gap-1 rounded border border-status-pass/30 bg-status-pass/10 px-2 py-0.5 text-[10px] text-status-pass-foreground transition-colors hover:bg-status-pass/20 disabled:opacity-40"
@@ -335,7 +336,7 @@ function PageDiff({ relPath }: { relPath: string | null }) {
               ))}
             </div>
 
-            {/* 逐块操作条（本票提案每页一个块；保留通用形状供后续多块提案） */}
+            {/* 逐块操作条：frontmatter 合并块 + 正文逐 hunk（issue 07） */}
             {diff.hunks.map((hunk) => (
               <div
                 key={hunk.id}
@@ -345,9 +346,27 @@ function PageDiff({ relPath }: { relPath: string | null }) {
                 <span className="font-mono text-[10px] text-muted-foreground">
                   +{hunk.addCount} −{hunk.delCount}
                 </span>
-                <span className="text-[10px] text-muted-foreground">{hunk.toolName}</span>
+                <span className="shrink-0 rounded bg-secondary px-1 py-0.5 text-[10px] text-muted-foreground">
+                  {hunk.kind === 'frontmatter' ? 'frontmatter 整体' : hunk.kind === 'whole-page' ? '整页' : '正文'}
+                </span>
                 <div className="flex-1" />
                 <HunkStateBadge state={hunkStates[hunk.id] ?? 'pending'} />
+                <button
+                  onClick={() => void decideHunk([hunk.id], 'rejected')}
+                  disabled={deciding || publishing}
+                  data-testid={`kb-hunk-reject-${hunk.id}`}
+                  className="rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
+                >
+                  拒绝
+                </button>
+                <button
+                  onClick={() => void decideHunk([hunk.id], 'accepted')}
+                  disabled={deciding || publishing}
+                  data-testid={`kb-hunk-accept-${hunk.id}`}
+                  className="rounded border border-status-pass/30 bg-status-pass/10 px-1.5 py-0.5 text-[10px] text-status-pass-foreground transition-colors hover:bg-status-pass/20 disabled:opacity-40"
+                >
+                  接受
+                </button>
               </div>
             ))}
           </>

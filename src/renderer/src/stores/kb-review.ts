@@ -1,5 +1,5 @@
 /**
- * KB Review Store — 知识提案审阅入口的前端状态（issue 05 后半）。
+ * KB Review Store — 知识提案审阅入口的前端状态（issue 05 后半，07 扩展）。
  *
  * 数据链路：tRPC kb.stagedChangeSets / kb.stagedChangeSet / kb.decideStaged。
  *
@@ -11,14 +11,18 @@
  * `hunkStates`（hunkId → pending/accepted/rejected），按钮回调经 adapter
  * 发往 kb.decideStaged —— 展示组件不掌握发布语义。
  *
- * 正式 Wiki/索引在本票内不改变：决策只写 `.kb/reviews/<changeSetId>.json`。
+ * issue 07：diff 合成统一走 shared `buildWikiPageDiff`（新页 = 整页 hunk 0，
+ * 已有页 = frontmatter 合并块 + 正文逐 hunk，id 从 1 起），与发布侧
+ * `rebuildWikiPage` 对同一 hunk id 有一致理解。
+ *
+ * 正式 Wiki/索引在发布（issue 06）前不改变：决策只写 `.kb/reviews/<changeSetId>.json`。
  *
  * @see docs/prd/knowledge-base-llm-wiki-spec.md §6
  */
 
 import { create } from 'zustand';
 import { trpc } from '@renderer/lib/trpc';
-import { lcsDiff } from '@shared/diff-lcs';
+import { buildWikiPageDiff, WIKI_PAGE_HUNK_ID } from '@shared/wiki-hunks';
 import { createKbStagedAdapter } from './review-adapter';
 import { useToastStore } from './toast';
 import type {
@@ -28,83 +32,21 @@ import type {
   WikiHunkDecision,
   WikiStagedPage,
 } from '@shared/kb-types';
-import type { DiffHunkInfo, DiffLine, FileDiffResult } from '@shared/types';
+import type { WikiReviewDiff } from '@shared/wiki-hunks';
 
 // ── diff 合成 ──────────────────────────────────────────────────
 
-/** 提案合成 diff 的固定 hunk id：新页只有整页一个块 */
-export const WHOLE_PAGE_HUNK_ID = 0;
+/** 整页/元数据伪 hunk id（新页整页处置、审阅面板整页动作）——shared 单一源 */
+export const WHOLE_PAGE_HUNK_ID = WIKI_PAGE_HUNK_ID;
 
 /**
- * 由 before/proposed 合成审阅展示用的 FileDiffResult。
+ * 由 before/proposed 合成审阅展示用 diff（issue 07 起委托 shared 单一实现）。
  *
- * 用行级 LCS 求最小编辑脚本，产出与代码审阅同构的 `lines` / `hunks`，
- * 因此展示层（内联装饰、hunk 操作条）可以原样复用，无需伪造 tool call。
- *
- * 行数与新文件完全相同时返回 null（无差异可审阅）。
+ * 新页 = 整页一个 hunk（id 0）；已有页 = frontmatter 合并块 + 正文逐 hunk
+ * （id 从 1 起，与发布侧重建语义一致）。内容一致（含纯换行差异）返回 null。
  */
-export function buildStagedDiff(page: WikiStagedPage): FileDiffResult | null {
-  const beforeLines = page.before === null ? [] : splitLines(page.before);
-  const afterLines = splitLines(page.proposed);
-  if (beforeLines.length === afterLines.length && beforeLines.every((l, i) => l === afterLines[i])) {
-    return null;
-  }
-
-  const ops = lcsDiff(beforeLines, afterLines, MAX_DP_LINES);
-  const lines: DiffLine[] = [];
-  let addCount = 0;
-  let delCount = 0;
-  let startLineIndex = 0;
-  let sawChange = false;
-
-  for (const op of ops) {
-    if (op.type === 'ctx') {
-      lines.push({ type: 'ctx', content: op.content, oldLine: op.oldLine, newLine: op.newLine });
-      sawChange = false;
-      continue;
-    }
-    if (!sawChange) {
-      startLineIndex = lines.length;
-      sawChange = true;
-    }
-    if (op.type === 'del') {
-      lines.push({ type: 'del', content: op.content, oldLine: op.oldLine, hunkId: WHOLE_PAGE_HUNK_ID });
-      delCount += 1;
-    } else {
-      lines.push({ type: 'add', content: op.content, newLine: op.newLine, hunkId: WHOLE_PAGE_HUNK_ID });
-      addCount += 1;
-    }
-  }
-
-  const hunks: DiffHunkInfo[] = addCount + delCount === 0
-    ? []
-    : [{
-        id: WHOLE_PAGE_HUNK_ID,
-        toolCallId: `kb-staged:${page.relPath}`,
-        toolName: 'wiki-proposal',
-        overwritten: false,
-        startLineIndex,
-        endLineIndex: lines.length,
-        addCount,
-        delCount,
-      }];
-
-  return {
-    filePath: page.relPath,
-    isNewFile: page.before === null,
-    lines,
-    hunks,
-    totalAdd: addCount,
-    totalDel: delCount,
-  };
-}
-
-/** 单页提案通常几百行；超过则退化为整体替换，避免 DP 卡住 UI */
-const MAX_DP_LINES = 2000;
-
-function splitLines(text: string): string[] {
-  // 统一按 LF 切分；CRLF 的 \r 保留在行尾（与磁盘内容逐字对应，不改写提案）
-  return text.length === 0 ? [] : text.replace(/\r\n/g, '\n').split('\n');
+export function buildStagedDiff(page: WikiStagedPage): WikiReviewDiff | null {
+  return buildWikiPageDiff(page);
 }
 
 // ── Store ──────────────────────────────────────────────────────
@@ -132,10 +74,11 @@ type KbReviewStoreState = {
   openChangeSet: (changeSetId: string) => Promise<void>;
   selectPage: (relPath: string) => void;
   /**
-   * 处置某个 hunk：走 kb-staged adapter（不写 wiki/、不回滚磁盘）。
+   * 处置若干 hunk：走 kb-staged adapter（不写 wiki/、不回滚磁盘）。
    * 成功后本地乐观更新，再以主进程返回的 review 覆盖。
+   * 整页处置 = 传入全部真实 hunk id（新页 [0]；已有页 1..n，issue 07）。
    */
-  decideHunk: (hunkId: number, decision: 'accepted' | 'rejected') => Promise<boolean>;
+  decideHunk: (hunkIds: number[], decision: 'accepted' | 'rejected') => Promise<boolean>;
   /**
    * 发布当前变更集（issue 06）：经 `kb.publishStaged` 走一次原子提交
    * 写入正式页/聚合/日志/历史。成功返回已发布页的 pageId（供只读打开）；
@@ -207,9 +150,9 @@ export const useKbReviewStore = create<KbReviewStoreState>((set, get) => ({
 
   selectPage: (relPath) => set({ activePageRelPath: relPath }),
 
-  decideHunk: async (hunkId, decision) => {
+  decideHunk: async (hunkIds, decision) => {
     const { activeChangeSet, activePageRelPath, deciding } = get();
-    if (!activeChangeSet || !activePageRelPath || deciding) return false;
+    if (!activeChangeSet || !activePageRelPath || deciding || hunkIds.length === 0) return false;
 
     set({ deciding: true });
     const adapter = createKbStagedAdapter({
@@ -219,8 +162,8 @@ export const useKbReviewStore = create<KbReviewStoreState>((set, get) => ({
     // adapter 的 reject 接收 DiffRejection 补丁数组；kb-staged 只取 hunkId，
     // 提案从未落盘，补丁的上游定位信息（toolCallId 等）不参与语义。
     const result = decision === 'accepted'
-      ? await adapter.accept([hunkId])
-      : await adapter.reject([{ hunkId, toolCallId: '', toolName: 'wiki-proposal', deleteFile: false }]);
+      ? await adapter.accept(hunkIds)
+      : await adapter.reject(hunkIds.map((hunkId) => ({ hunkId, toolCallId: '', toolName: 'wiki-proposal', deleteFile: false })));
 
     if (!result.ok) {
       set({ deciding: false });
@@ -267,9 +210,13 @@ export const useKbReviewStore = create<KbReviewStoreState>((set, get) => ({
       }
 
       const pageId = res.pages[0]?.pageId ?? null;
+      const pageLabel = res.pages.length > 1 ? `${pageId} 等 ${res.pages.length} 页` : pageId;
+      const partialLabel = res.partial ? '（部分接受）' : '';
       useToastStore.getState().success(
         '已发布',
-        pageId !== null ? `${pageId} · 提交 ${res.commitId.slice(0, 8)}` : `提交 ${res.commitId.slice(0, 8)}`,
+        pageId !== null
+          ? `${pageLabel}${partialLabel} · 提交 ${res.commitId.slice(0, 8)}`
+          : `提交 ${res.commitId.slice(0, 8)}`,
       );
       await get().loadChangeSets();
       // 已发布：关闭变更集视图（同一变更集不会重复发布）

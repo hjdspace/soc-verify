@@ -157,7 +157,7 @@ vi.mock('@renderer/stores/toast', () => ({
 
 // ─── Import after mocks ─────────────────────────────────────
 
-import { useKbReviewStore, buildStagedDiff, selectHunkStates, WHOLE_PAGE_HUNK_ID } from '@renderer/stores/kb-review';
+import { useKbReviewStore, buildStagedDiff, selectHunkStates } from '@renderer/stores/kb-review';
 import type { WikiChangeSetReview } from '@shared/kb-types';
 
 const reviewWithAccepted: WikiChangeSetReview = {
@@ -178,13 +178,15 @@ beforeEach(() => {
 });
 
 describe('buildStagedDiff（由 before/proposed 合成展示用 diff）', () => {
-  it('已有页：产出 add/del 行与一个 hunk，不需要工具调用', () => {
+  it('已有页：产出 add/del 行与正文 hunk（id 从 1 起），不需要工具调用', () => {
     const diff = buildStagedDiff(mockChangeSet.pages[0]);
     expect(diff).not.toBeNull();
     expect(diff!.lines.some((l) => l.type === 'del' && l.content === '旧正文。')).toBe(true);
     expect(diff!.lines.some((l) => l.type === 'add' && l.content === '新正文。')).toBe(true);
     expect(diff!.hunks).toHaveLength(1);
-    expect(diff!.hunks[0].id).toBe(WHOLE_PAGE_HUNK_ID);
+    // issue 07：已有页的真实改动块从 1 起编号（0 保留给整页伪 hunk）
+    expect(diff!.hunks[0].id).toBe(1);
+    expect(diff!.hunks[0].kind).toBe('body');
     expect(diff!.isNewFile).toBe(false);
     // 行号映射正确（add 行必须带 newLine，展示层靠它定位）
     expect(diff!.lines.filter((l) => l.type === 'add').every((l) => l.newLine !== undefined)).toBe(true);
@@ -252,7 +254,7 @@ describe('决策动作（kb-staged adapter，不触碰 project 撤销 API）', (
   it('accept 经 kb.decideStaged 记录 accepted，且不调用 project.applyDiffRejections', async () => {
     decideStagedMock.mockResolvedValue({ ok: true, review: mockReview });
     await useKbReviewStore.getState().openChangeSet('cs-1');
-    const ok = await useKbReviewStore.getState().decideHunk(0, 'accepted');
+    const ok = await useKbReviewStore.getState().decideHunk([0], 'accepted');
     expect(ok).toBe(true);
     expect(decideStagedMock).toHaveBeenCalledWith({
       changeSetId: 'cs-1',
@@ -266,7 +268,7 @@ describe('决策动作（kb-staged adapter，不触碰 project 撤销 API）', (
   it('reject 经 kb.decideStaged 记录 rejected（提案未落盘，无回滚语义）', async () => {
     decideStagedMock.mockResolvedValue({ ok: true, review: mockReview });
     await useKbReviewStore.getState().openChangeSet('cs-1');
-    await useKbReviewStore.getState().decideHunk(0, 'rejected');
+    await useKbReviewStore.getState().decideHunk([0], 'rejected');
     expect(decideStagedMock).toHaveBeenCalledWith(expect.objectContaining({
       decision: 'rejected',
       hunkIds: [0],
@@ -277,7 +279,7 @@ describe('决策动作（kb-staged adapter，不触碰 project 撤销 API）', (
   it('决策失败（未知页）时返回 false，不假装成功', async () => {
     decideStagedMock.mockResolvedValue({ ok: false, error: 'unknownPage: 变更集中不存在页', code: 'unknownPage' });
     await useKbReviewStore.getState().openChangeSet('cs-1');
-    const ok = await useKbReviewStore.getState().decideHunk(0, 'accepted');
+    const ok = await useKbReviewStore.getState().decideHunk([0], 'accepted');
     expect(ok).toBe(false);
     expect(useKbReviewStore.getState().deciding).toBe(false);
   });
@@ -286,12 +288,12 @@ describe('决策动作（kb-staged adapter，不触碰 project 撤销 API）', (
     decideStagedMock.mockResolvedValue({ ok: true, review: mockReview });
     stagedChangeSetMock.mockResolvedValue({ changeSet: mockChangeSet, review: mockReview });
     await useKbReviewStore.getState().openChangeSet('cs-1');
-    await useKbReviewStore.getState().decideHunk(0, 'accepted');
+    await useKbReviewStore.getState().decideHunk([0], 'accepted');
     expect(useKbReviewStore.getState().activeReview?.pages[0].hunkStates[0]).toBe('accepted');
   });
 
   it('未打开变更集或未选页时不发请求', async () => {
-    expect(await useKbReviewStore.getState().decideHunk(0, 'accepted')).toBe(false);
+    expect(await useKbReviewStore.getState().decideHunk([0], 'accepted')).toBe(false);
     expect(decideStagedMock).not.toHaveBeenCalled();
   });
 });

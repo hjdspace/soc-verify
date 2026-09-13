@@ -270,7 +270,7 @@ describe('KbReviewTab 动作（展示层不掌握发布语义）', () => {
       review: {
         ...mockEmptyReview,
         pages: [
-          { pageId: 'concepts/axi', relPath: 'wiki/concepts/axi.md', hunkStates: { 0: 'accepted' as const }, pageDecision: 'pending' as const },
+          { pageId: 'concepts/axi', relPath: 'wiki/concepts/axi.md', hunkStates: { 1: 'accepted' as const }, pageDecision: 'pending' as const },
           mockEmptyReview.pages[1],
         ],
       },
@@ -280,7 +280,7 @@ describe('KbReviewTab 动作（展示层不掌握发布语义）', () => {
       review: {
         ...mockEmptyReview,
         pages: [
-          { pageId: 'concepts/axi', relPath: 'wiki/concepts/axi.md', hunkStates: { 0: 'accepted' as const }, pageDecision: 'pending' as const },
+          { pageId: 'concepts/axi', relPath: 'wiki/concepts/axi.md', hunkStates: { 1: 'accepted' as const }, pageDecision: 'pending' as const },
           mockEmptyReview.pages[1],
         ],
       },

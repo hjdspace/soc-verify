@@ -710,6 +710,12 @@ export type WikiChangeSetPageReview = {
   hunkStates: Record<number, WikiHunkDecision>;
   /** 整页选择（新页整体接受/拒绝） */
   pageDecision: WikiHunkDecision;
+  /**
+   * 记录选择时的差异指纹（`wikiPageDiffFingerprint`，只由 before/proposed 决定）。
+   * 发布前重算不一致 → 差异已重新生成，旧 hunk 决定失效转 stale（issue 07）。
+   * 旧 reviews 文件缺省（undefined）时跳过该检查，向后兼容。
+   */
+  hunksHash?: string | null;
 };
 
 /** 变更集的审阅状态（持久于 reviews/） */
@@ -741,6 +747,8 @@ export type WikiPublishedRef = {
   /** 发布 revision（manifest.publish.revision，单调递增） */
   revision: number;
   at: string;
+  /** 部分接受（存在被拒绝的 hunk）：发布状态为 published_partial（issue 07） */
+  partial?: boolean;
 };
 
 /** 渲染端变更集摘要（staging 列表） */
@@ -832,8 +840,9 @@ export type WikiPublishErrorCode =
   | 'kbIdMismatch'         // 变更集不属于本库
   | 'stagingCorrupted'     // staging 文件损坏（现场保留）
   | 'nothingAccepted'      // 没有任何被接受的候选页（拒绝/未处置 → 正式页面不变）
+  | 'pendingDecisions'     // 存在未处置的页/hunk（所有未决项须明确处置才能发布，issue 07）
+  | 'unresolvedLink'       // 本次新增链接的目标不存在/被拒绝/歧义（issue 07 跨页校验）
   | 'alreadyPublished'     // 该变更集已发布过（不静默重复发布）
-  | 'multiPageUnsupported' // 本票只开放单页变更集（多页见 issue 07）
   | 'readGateBlocked'      // 存在未恢复事务或并发发布，读取/写入暂停
   | 'manifestCorrupted'    // .kb/manifest.json 不可读/结构非法
   | 'stale'                // 读/写集或来源/规则基线变动（旧批准已失效）
@@ -855,7 +864,9 @@ export type WikiPublishResult =
       /** 单调递增的发布 revision（写入 manifest.publish.revision） */
       revision: number;
       pages: WikiPublishedPage[];
-      /** 非阻断提示（如日志/历史重复项已跳过） */
+      /** 部分接受：至少一个候选页存在被拒绝的 hunk（published_partial，issue 07） */
+      partial: boolean;
+      /** 非阻断提示（如日志/历史重复项已跳过、既有断链保留） */
       warnings: string[];
     }
   | { ok: false; error: WikiPublishError };

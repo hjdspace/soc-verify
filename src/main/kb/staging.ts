@@ -25,6 +25,7 @@ import { parseFileProposal, readTypeDirs, validateProposalTarget } from './propo
 import { parseWikiPage } from './wiki-page';
 import { writeFileAtomic } from './atomic-commit';
 import { wikiLayout } from './wiki-layout';
+import { wikiPageDiffFingerprint } from '@shared/wiki-hunks';
 import type {
   WikiChangeSet,
   WikiChangeSetOrigin,
@@ -354,6 +355,9 @@ export async function recordDecision(
   for (const hunkId of input.hunkIds) {
     pageReview.hunkStates[hunkId] = input.decision;
   }
+  // 差异指纹随选择持久（issue 07）：发布前重算不一致 = 差异已重新生成，
+  // 旧 hunk 决定失效（发布侧转 stale 并重置批准）。
+  pageReview.hunksHash = wikiPageDiffFingerprint(page);
 
   const updated: WikiChangeSetReview = {
     ...review,

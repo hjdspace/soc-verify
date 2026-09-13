@@ -23,6 +23,7 @@ import {
   historyFilePath,
 } from '../src/main/kb/publish';
 import { stageProposal, recordDecision, readReview, readChangeSet } from '../src/main/kb/staging';
+import { wikiRealHunkIds } from '../src/shared/wiki-hunks';
 import { initWikiLayout, SCHEMA_MD_SKELETON, wikiLayout, readWikiManifest, writeWikiManifest } from '../src/main/kb/wiki-layout';
 import { recoverTransactions } from '../src/main/kb/atomic-commit';
 import { readGateStatus } from '../src/main/kb/read-gate';
@@ -122,10 +123,13 @@ async function stageAndAccept(
   });
   if (!staged.ok) throw new Error(`stage: ${staged.error.code} ${staged.error.message}`);
   const changeSetId = staged.value.changeSet.changeSetId;
+  const page = staged.value.changeSet.pages.find((p) => p.relPath === relPath);
+  if (!page) throw new Error('staged page missing');
+  // 整页接受 = 处置全部真实 hunk（新页为 hunk 0；已有页为 1..n，issue 07）
   const rec = await recordDecision(kbPath, {
     changeSetId,
     pageRelPath: relPath,
-    hunkIds: [0],
+    hunkIds: wikiRealHunkIds(page),
     decision: 'accepted',
   });
   if (!rec.ok) throw new Error(`decide: ${rec.error.code}`);
@@ -270,7 +274,7 @@ describe('publishChangeSet — 拒绝保持原样', () => {
     expect(readdirSync(wikiLayout(kbPath).transactionsDir)).toHaveLength(0);
   });
 
-  it('未处置（pending）同样不发布', async () => {
+  it('未处置（pending）不发布：nothingAccepted（与既有口径一致）', async () => {
     const staged = await stageProposal(kbPath, {
       kbId: 'kb-1', taskId: 't', origin: 'compile', sourceRefs: [SRC_REF],
       proposalText: fileBlock('wiki/concepts/axi.md', pageBody('AXI', 'A。')),
@@ -308,7 +312,9 @@ describe('publishChangeSet — 基线变动转 stale 并失效旧批准', () => 
     expect(review.ok).toBe(true);
     if (review.ok) {
       expect(review.value.stale).toBeTruthy();
-      expect(review.value.pages[0].hunkStates[0]).toBe('pending');
+      const states = Object.values(review.value.pages[0].hunkStates);
+      expect(states.length).toBeGreaterThan(0);
+      expect(states.every((s) => s === 'pending')).toBe(true);
       expect(review.value.settled).toBe(false);
     }
   });
@@ -394,7 +400,7 @@ describe('publishChangeSet — 边界', () => {
     if (!res.ok) expect(res.error.code).toBe('kbIdMismatch');
   });
 
-  it('多页变更集 → multiPageUnsupported（本票只开放单页）', async () => {
+  it('多页变更集存在未决页 → pendingDecisions（issue 07：多页须全部处置）', async () => {
     const staged = await stageProposal(kbPath, {
       kbId: 'kb-1', taskId: 't', origin: 'compile', sourceRefs: [SRC_REF],
       proposalText: [
@@ -408,7 +414,10 @@ describe('publishChangeSet — 边界', () => {
 
     const res = await publishChangeSet(kbPath, { kbId: 'kb-1', changeSetId: csId });
     expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.error.code).toBe('multiPageUnsupported');
+    if (!res.ok) {
+      expect(res.error.code).toBe('pendingDecisions');
+      expect(res.error.detail?.join(' ')).toContain('wiki/concepts/b.md');
+    }
   });
 
   it('写入目标越出受管范围（被篡改的 staging）→ invalidTarget，不落盘', async () => {
