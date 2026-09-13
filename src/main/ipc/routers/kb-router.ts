@@ -80,6 +80,12 @@ import {
 } from '../../kb/wiki-rules';
 import { parseWikiSchema } from '../../kb/wiki-schema';
 import { WIKI_PAGE_TEMPLATES } from '../../kb/wiki-page';
+import {
+  listChangeSets,
+  readChangeSet,
+  readReview,
+  recordDecision,
+} from '../../kb/staging';
 import type {
   KbRegistration,
   KbMount,
@@ -1136,5 +1142,89 @@ export const kbRouter = t.router({
     })
     .query(async () => {
       return { templates: Object.values(WIKI_PAGE_TEMPLATES) };
+    }),
+
+  // ─── kb.stagedChangeSets（issue 05） ───────────────────────
+  //
+  // 知识审阅入口：列出本库待审阅的变更集摘要（kbId 归属过滤，
+  // 不跨库泄漏）。staging 由编译管线（issue 08）经 stageProposal
+  // 生产边界写入；本 router 只读 + 记录选择，不提供任意写库入口。
+
+  stagedChangeSets: t.procedure
+    .input((_raw): Record<string, never> => {
+      return {};
+    })
+    .query(async () => {
+      const kb = await getWikiMountedKb();
+      return listChangeSets(kb.path, kb.kbId);
+    }),
+
+  // ─── kb.stagedChangeSet（issue 05） ────────────────────────
+  //
+  // 读取单个变更集（before/proposed、baseline、来源引用、findings）
+  // 与当前审阅选择，供审阅面板渲染 before/after。
+
+  stagedChangeSet: t.procedure
+    .input((raw): { changeSetId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.changeSetId !== 'string' || r.changeSetId.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'changeSetId is required' });
+      }
+      return { changeSetId: r.changeSetId.trim() };
+    })
+    .query(async ({ input }) => {
+      const kb = await getWikiMountedKb();
+      const cs = await readChangeSet(kb.path, input.changeSetId);
+      if (!cs.ok) {
+        throw new TRPCError({
+          code: cs.error.code === 'changeSetNotFound' ? 'NOT_FOUND' : 'INTERNAL_SERVER_ERROR',
+          message: cs.error.message,
+        });
+      }
+      if (cs.value.kbId !== kb.kbId) {
+        throw new TRPCError({ code: 'PRECONDITION_FAILED', message: '变更集不属于当前挂载库' });
+      }
+      const review = await readReview(kb.path, input.changeSetId);
+      return {
+        changeSet: cs.value,
+        review: review.ok ? review.value : null,
+      };
+    }),
+
+  // ─── kb.decideStaged（issue 05） ───────────────────────────
+  //
+  // 记录用户对某页若干 hunk 的选择（accepted/rejected）并持久。
+  // 不写 wiki/、不回滚磁盘；发布（issue 06）消费这些选择。
+  // 未知变更集/未知页返回结构化结果（不抛错，渲染端按 code 分支）。
+
+  decideStaged: t.procedure
+    .input((raw): { changeSetId: string; pageRelPath: string; hunkIds: number[]; decision: 'accepted' | 'rejected' } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.changeSetId !== 'string' || r.changeSetId.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'changeSetId is required' });
+      }
+      if (typeof r.pageRelPath !== 'string' || r.pageRelPath.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'pageRelPath is required' });
+      }
+      if (!Array.isArray(r.hunkIds) || r.hunkIds.some((id) => typeof id !== 'number')) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'hunkIds must be a number array' });
+      }
+      if (r.decision !== 'accepted' && r.decision !== 'rejected') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: "decision must be 'accepted' or 'rejected'" });
+      }
+      return {
+        changeSetId: r.changeSetId.trim(),
+        pageRelPath: r.pageRelPath.trim(),
+        hunkIds: r.hunkIds as number[],
+        decision: r.decision,
+      };
+    })
+    .mutation(async ({ input }) => {
+      const kb = await getWikiMountedKb();
+      const res = await recordDecision(kb.path, input);
+      if (!res.ok) {
+        return { ok: false as const, error: `${res.error.code}: ${res.error.message}`, code: res.error.code };
+      }
+      return { ok: true as const, review: res.value };
     }),
 });

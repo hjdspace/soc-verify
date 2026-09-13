@@ -40,6 +40,7 @@ import {
   loadReviewedFiles,
   persistReviewedFiles,
 } from './diff-review-ops';
+import { createCodeAppliedAdapter } from './review-adapter';
 
 // ─── Re-exports ────────────────────────────────────────────
 // 消费者从 diff-review.ts 导入这些符号，无需改 import 路径。
@@ -397,13 +398,12 @@ async function applyHunkRejections(filePath: string, hunkIds: number[]): Promise
   const projectId = useProjectStore.getState().currentProjectId;
   if (!projectId || rejections.length === 0) return false;
 
+  // 动作层经 adapter 注入：展示/状态层不直接调用 project 撤销 API，
+  // 与知识审阅（kb-staged）共用同一动作契约（issue 05）。
+  const adapter = createCodeAppliedAdapter({ projectId, filePath: entry.filePath });
   try {
-    const result = await trpc.project.applyDiffRejections.mutate({
-      projectId,
-      filePath: entry.filePath,
-      rejections,
-    });
-    if (!result.ok || result.appliedCount === 0) {
+    const result = await adapter.reject(rejections);
+    if (!result.ok) {
       setRejectedStates(key, hunkIds, 'pending');
       return false;
     }

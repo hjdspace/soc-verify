@@ -638,3 +638,134 @@ export type WikiTemplateInfo = {
   defaultKeywords: string[];
   defaultTags: string[];
 };
+
+// ── 知识提案 staging 与审阅（spec §6，issue 05）────────────────
+
+/**
+ * staging 提案中的单个页面候选。
+ *
+ * - `before` 为 null = 新页（不存在于已发布 wiki/）；
+ * - `proposed` 为整个候选页内容（frontmatter + 正文）；
+ * - `baselineHash` 为生成提案时该页已发布内容的读取快照 hash，
+ *   发布前用它检测基线冲突（issue 06 消费）；新页为 null
+ *   （与 `before` 同源，不另设哨兵字符串以免与真实 hash 碰撞）。
+ */
+export type WikiStagedPage = {
+  /** 页 identity：库内相对路径（`wiki/concepts/axi.md`） */
+  relPath: string;
+  /** pageId：`<路由目录>/<文件名去 .md>` */
+  pageId: string;
+  type: WikiPageType;
+  /** 新页为 null */
+  before: string | null;
+  proposed: string;
+  /** before 快照 hash；新页（`before === null`）为 null */
+  baselineHash: string | null;
+  /** 本页引用的来源修订（SourceRef，证据边） */
+  sources: WikiSourceRef[];
+};
+
+/** 术语/范围：提案的种类（编译产出 vs 主动保存问答 vs 修复） */
+export type WikiChangeSetOrigin = 'compile' | 'saveQuery' | 'fix';
+
+/**
+ * 持久化的知识变更集（.kb/staging/<changeSetId>.json）。
+ *
+ * 保存 `changeSetId`、任务身份、read/write baseline、before/proposed
+ * 与来源引用；重开仍可审阅。正式 Wiki/索引在审阅与发布前不改变。
+ */
+export type WikiChangeSet = {
+  changeSetId: string;
+  /** 归属库身份 */
+  kbId: string;
+  /** 任务身份（queue taskId；saveQuery/fix 用合成 id） */
+  taskId: string;
+  /** 本变更集产生自哪种入口 */
+  origin: WikiChangeSetOrigin;
+  /** 编译时固定的来源修订（read baseline 的一部分） */
+  sources: WikiSourceRef[];
+  /** schema.md 文本 hash（编译基线） */
+  schemaHash: string;
+  /** purpose.md 文本 hash（编译基线） */
+  purposeHash: string;
+  /** 读依赖：本变更集参考过的已发布页 pageId（含其 revision hash） */
+  readBaseline: Array<{ pageId: string; hash: string | null }>;
+  pages: WikiStagedPage[];
+  /** 知识待办输出（结构化，由 issue 25 消费同一结构；本票只落契约字段） */
+  findings: WikiFinding[];
+  /** 模型运行时未闭合/被丢弃的块说明（可见，不静默丢失） */
+  warnings: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** 单个 hunk 的用户选择状态 */
+export type WikiHunkDecision = 'pending' | 'accepted' | 'rejected';
+
+/** 逐页的审阅选择（持久于 reviews/） */
+export type WikiChangeSetPageReview = {
+  pageId: string;
+  relPath: string;
+  /** hunkId → 选择；新页/frontmatter 整体接受（hunkId 0） */
+  hunkStates: Record<number, WikiHunkDecision>;
+  /** 整页选择（新页整体接受/拒绝） */
+  pageDecision: WikiHunkDecision;
+};
+
+/** 变更集的审阅状态（持久于 reviews/） */
+export type WikiChangeSetReview = {
+  changeSetId: string;
+  pages: WikiChangeSetPageReview[];
+  /** 是否所有页/块已明确处置 */
+  settled: boolean;
+  updatedAt: string;
+};
+
+/** 渲染端变更集摘要（staging 列表） */
+export type WikiChangeSetSummary = {
+  changeSetId: string;
+  kbId: string;
+  taskId: string;
+  origin: WikiChangeSetOrigin;
+  pageCount: number;
+  newPageCount: number;
+  findingCount: number;
+  settled: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/**
+ * 知识待办（finding）结构化字段（spec §9；issue 25 消费同一结构）。
+ *
+ * 本票只落契约字段与持久化，不接入 Lint 扫描本身。
+ */
+export type WikiFinding = {
+  findingId: string;
+  kbId: string;
+  kind: string;
+  pageIds: string[];
+  evidenceRefs: string[];
+  evidenceHashes: string[];
+  status: 'open' | 'ignored' | 'resolved';
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** staging 提案的读写错误码 */
+export type WikiStagingErrorCode =
+  | 'changeSetNotFound'
+  | 'stagingCorrupted'
+  | 'kbIdMismatch'
+  | 'unknownPage'
+  | 'invalidTarget'
+  | 'duplicateTarget'
+  | 'schemaUnavailable'
+  | 'ioError';
+
+export type WikiStagingError = { code: WikiStagingErrorCode; message: string };
+
+export type WikiStagingResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; error: WikiStagingError };
+

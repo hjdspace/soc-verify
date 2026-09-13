@@ -11,70 +11,19 @@
 
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { lcsDiff, type LcsDiffLine } from '@shared/diff-lcs';
 import type { DiffToolCall, DiffLine, DiffHunkInfo, FileDiffResult, ApplyRejectionsResult, DiffRejection } from '@shared/types';
 
 // ─── LCS Diff ──────────────────────────────────────────────
 
-type RawDiffLine = {
-  type: 'ctx' | 'add' | 'del';
-  content: string;
-  oldLine?: number;
-  newLine?: number;
-};
+type RawDiffLine = LcsDiffLine;
 
 function normalizeLineEndings(text: string): string {
   return text.replace(/\r\n?/g, '\n');
 }
 
 function computeLcsDiff(oldText: string, newText: string): RawDiffLine[] {
-  const oldLines = oldText.split('\n');
-  const newLines = newText.split('\n');
-  const m = oldLines.length;
-  const n = newLines.length;
-  const result: RawDiffLine[] = [];
-
-  // 性能保护：超大 diff 直接全删全增
-  if (m + n > 5000) {
-    oldLines.forEach((line, i) => result.push({ type: 'del', content: line, oldLine: i + 1 }));
-    newLines.forEach((line, i) => result.push({ type: 'add', content: line, newLine: i + 1 }));
-    return result;
-  }
-
-  // LCS DP table
-  const dp: number[][] = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
-  for (let i = m - 1; i >= 0; i--) {
-    for (let j = n - 1; j >= 0; j--) {
-      if (oldLines[i] === newLines[j]) {
-        dp[i][j] = dp[i + 1][j + 1] + 1;
-      } else {
-        dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
-      }
-    }
-  }
-
-  let i = 0, j = 0, oldLn = 1, newLn = 1;
-  while (i < m && j < n) {
-    if (oldLines[i] === newLines[j]) {
-      result.push({ type: 'ctx', content: oldLines[i], oldLine: oldLn, newLine: newLn });
-      i++; j++; oldLn++; newLn++;
-    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
-      result.push({ type: 'del', content: oldLines[i], oldLine: oldLn });
-      i++; oldLn++;
-    } else {
-      result.push({ type: 'add', content: newLines[j], newLine: newLn });
-      j++; newLn++;
-    }
-  }
-  while (i < m) {
-    result.push({ type: 'del', content: oldLines[i], oldLine: oldLn });
-    i++; oldLn++;
-  }
-  while (j < n) {
-    result.push({ type: 'add', content: newLines[j], newLine: newLn });
-    j++; newLn++;
-  }
-
-  return result;
+  return lcsDiff(normalizeLineEndings(oldText).split('\n'), normalizeLineEndings(newText).split('\n'));
 }
 
 // ─── Before Reconstruction ─────────────────────────────────

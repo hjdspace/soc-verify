@@ -29,7 +29,7 @@ import type {
 
 // ── 渲染端独有类型（不跨进程） ─────────────────────────────────
 
-export type KbTab = 'list' | 'index' | 'preview' | 'tasks' | 'wiki';
+export type KbTab = 'list' | 'index' | 'preview' | 'tasks' | 'wiki' | 'review';
 
 /** registerKb 结果（渲染端需要区分错误码以提供「注册为副本」入口） */
 export type KbRegisterOutcome = { ok: true } | { ok: false; errorCode?: string; message: string };
