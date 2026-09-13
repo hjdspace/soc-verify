@@ -802,6 +802,7 @@ export const kbRouter = t.router({
         return await readWikiParsed(kbPath, input);
       } catch (err) {
         mapWikiSourceError(err);
+        throw err; // 防御性兜底：保证所有代码路径都有返回/抛出，不依赖 never 注解
       }
     }),
 
@@ -817,6 +818,7 @@ export const kbRouter = t.router({
         return await listSourceRevisions(kbPath, input.sourceId);
       } catch (err) {
         mapWikiSourceError(err);
+        throw err; // 防御性兜底：保证所有代码路径都有返回/抛出，不依赖 never 注解
       }
     }),
 
