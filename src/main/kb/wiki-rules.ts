@@ -27,9 +27,8 @@ import type {
   WikiRulesView,
 } from '@shared/kb-types';
 
-// 历史命名对齐：模块内部沿用 SaveResult，即 shared 的 WikiRulesSaveOutcome
-type WikiRulesSaveResult = WikiRulesSaveOutcome;
-export type { WikiRulesSaveInput, WikiRulesSaveOutcome };
+// 类型契约单一源在 @shared/kb-types
+export type { WikiRulesSaveInput };
 
 // ── 读取（类型定义见 @shared/kb-types）─────────────────────────
 
@@ -62,7 +61,7 @@ async function readFileOrNull(path: string): Promise<string | null> {
  * 旧目录/新目录下是否已有页面（存在 = 需要专门迁移的重映射，本期拒绝）
  * → 全部通过后原子写盘。purpose 原文任意写。
  */
-export async function saveWikiRules(kbPath: string, input: WikiRulesSaveInput): Promise<WikiRulesSaveResult> {
+export async function saveWikiRules(kbPath: string, input: WikiRulesSaveInput): Promise<WikiRulesSaveOutcome> {
   const layout = wikiLayout(kbPath);
   let savedSchema = false;
   let savedPurpose = false;

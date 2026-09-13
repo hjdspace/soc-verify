@@ -11,8 +11,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { scanWikiCatalog, wikiCatalogLookup } from '../src/main/kb/wiki-catalog';
-import { initWikiLayout } from '../src/main/kb/wiki-layout';
+import { scanWikiCatalog, wikiCatalogLookup, readWikiPage } from '../src/main/kb/wiki-catalog';
+import { initWikiLayout, SCHEMA_MD_SKELETON } from '../src/main/kb/wiki-layout';
 
 let kbPath: string;
 
@@ -164,6 +164,28 @@ describe('scanWikiCatalog', () => {
     expect(lookup.byId.get('concepts/axi-outstanding')).toBeDefined();
     expect(lookup.byBasename.get('axi-outstanding')).toEqual(['concepts/axi-outstanding']);
     expect(lookup.byTitle.get('AXI 限制')).toEqual(['concepts/axi-outstanding']);
+  });
+
+  it('嵌套路由目录（schema 允许子目录）的页面可编目与读取', async () => {
+    await initWikiLayout(kbPath, { kbId: 'kb-9', name: 'KB' });
+    // 把 entity 目录改为嵌套子目录
+    writeFileSync(
+      join(kbPath, 'schema.md'),
+      SCHEMA_MD_SKELETON.replace('| entity | entities | 实体页：IP、模块、信号组 |', '| entity | entities/nested | 实体页 |'),
+      'utf-8',
+    );
+    writeWikiPage('entities/nested/foo.md', PAGE_FM('entity', '嵌套页'));
+
+    const res = await scanWikiCatalog(kbPath);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.catalog.pages.map((p) => p.pageId)).toContain('entities/nested/foo');
+    expect(res.catalog.orphans).toHaveLength(0);
+
+    // readWikiPage 同样可达
+    const page = await readWikiPage(kbPath, 'entities/nested/foo');
+    expect(page.ok).toBe(true);
+    if (page.ok) expect(page.page.content).toContain('# 嵌套页');
   });
 
   it('schema 损坏 → ok: false + schemaIssues（不回退无约束）', async () => {

@@ -83,7 +83,9 @@ function PageBrowser() {
     return Object.entries(catalog.typeDirs).map(([type, dir]) => ({
       type: type as WikiPageType,
       dir,
-      pages: catalog.pages.filter((p) => p.relPath.startsWith(`wiki/${dir}/`) || p.relPath.startsWith(`wiki/${dir}\\`)),
+      // schema 的 dir 与磁盘目录名大小写可能不一致（Windows 不敏感文件系统），
+      // 归一化分隔符与大小写后再过滤，避免页面从分组中丢失
+      pages: catalog.pages.filter((p) => p.relPath.replace(/\\/g, '/').toLowerCase().startsWith(`wiki/${dir.toLowerCase()}/`)),
     }));
   }, [catalog]);
 
@@ -317,7 +319,7 @@ function RulesEditor() {
         <p className="mt-2 text-[11px] text-muted-foreground" data-testid="wiki-schema-validating">校验中…</p>
       )}
       {validation.status === 'valid' && schemaChanged && (
-        <p className="mt-2 text-[11px] text-green-600" data-testid="wiki-schema-valid">✓ schema 通过受约束表校验</p>
+        <p className="mt-2 text-[11px] text-primary" data-testid="wiki-schema-valid">✓ schema 通过受约束表校验</p>
       )}
       {validation.status === 'invalid' && (
         <div className="mt-2 rounded border border-destructive/40 bg-destructive/5 p-2" data-testid="wiki-schema-issues">

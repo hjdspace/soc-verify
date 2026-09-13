@@ -17,6 +17,7 @@
  * @see docs/prd/knowledge-base-llm-wiki-spec.md §2
  */
 
+import { realpath } from 'node:fs/promises';
 import { kbRegistry } from './registry';
 import { isManagedWikiPath } from '@shared/kb-wiki-guard';
 
@@ -34,10 +35,28 @@ export class ManagedWikiReadOnlyError extends Error {
 /**
  * 校验 filePath 不落入挂载 wiki 库的受管只读范围；命中则抛
  * ManagedWikiReadOnlyError（未挂载或非 wiki 布局时放行）。
+ *
+ * 两层判定：
+ *  1. 词法前缀（isManagedWikiPath）；
+ *  2. realpath 围栏——文件已存在时解析真实路径，确认仍在挂载根的
+ *     wiki/（或 schema/purpose）之下，防 junction/symlink 从库外指入
+ *     受管范围被前缀匹配漏判。文件不存在（新建）时词法判定即可。
  */
 export async function assertNotManagedWikiFile(projectRootPath: string, filePath: string): Promise<void> {
   const kbPath = await kbRegistry.getMountedWikiPath(projectRootPath);
-  if (kbPath !== null && isManagedWikiPath(kbPath, filePath)) {
+  if (kbPath === null) return;
+
+  if (isManagedWikiPath(kbPath, filePath)) {
+    throw new ManagedWikiReadOnlyError(kbPath, filePath);
+  }
+
+  let realFile: string;
+  try {
+    realFile = await realpath(filePath);
+  } catch {
+    return; // 目标不存在/不可解析：新建文件无法经由已存在的 junction 指入
+  }
+  if (isManagedWikiPath(kbPath, realFile)) {
     throw new ManagedWikiReadOnlyError(kbPath, filePath);
   }
 }

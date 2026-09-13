@@ -78,9 +78,6 @@ export function parseWikiPage(content: string): WikiPageParseResult {
       issues.push({ code: 'missingField', message: `缺少必填字段「${field}」` });
     }
   }
-  if (issues.some((i) => i.code === 'missingField' || i.code === 'notAnObject')) {
-    // 缺字段时继续校验已存在字段，仍能给出完整反馈
-  }
 
   let type: WikiPageType | undefined;
   if (fm.type !== undefined) {

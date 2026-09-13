@@ -68,8 +68,6 @@ export async function scanWikiCatalog(kbPath: string): Promise<WikiCatalogResult
     return { ok: false, schemaIssues: parsed.issues };
   }
   const typeDirs = parsed.routing.typeDirs;
-  // typeDirs 是 type → dir；这里需要 dir → type
-  const dirToType = new Map(Object.entries(typeDirs).map(([type, dir]) => [dir.toLowerCase(), type as WikiPageType]));
 
   const pages: WikiCatalogPage[] = [];
   const aggregates: WikiCatalogAggregate[] = [];
@@ -91,6 +89,54 @@ export async function scanWikiCatalog(kbPath: string): Promise<WikiCatalogResult
     };
   }
 
+  // ── 1) 按路由目录编目（目录可嵌套，如 `entities/nested`）───────
+  // 递归收集 .md 文件，pageId = `<路由目录>/<相对路径去 .md>`；
+  // 每页读取前做 realpath 围栏（symlink/junction 指向库外的页面
+  // 按不可读处理，不服务内容）。
+  const routedDirs = Object.entries(typeDirs);
+  for (const [type, dir] of routedDirs) {
+    const dirType = type as WikiPageType;
+    await collectFilesRecursively(join(layout.wikiDir, dir), dir, async (relPath, abs) => {
+      if (!relPath.toLowerCase().endsWith('.md')) {
+        // 路由目录下的非 md 文件视为 orphan（本票不分类）
+        orphans.push({ relPath: `wiki/${relPath}`, kind: 'orphan' });
+        return;
+      }
+      const pageId = relPath.slice(0, -3);
+      const guard = await ensureRealPathWithinRoot(layout.kbPath, abs);
+      let parse: WikiPageParseResult;
+      if (!guard.ok) {
+        parse = {
+          ok: false,
+          issues: [{ code: 'badYaml', message: `页面真实路径逃逸出库根目录，拒绝读取: ${guard.reason}` }],
+        };
+      } else {
+        try {
+          const content = await readFile(abs, 'utf-8');
+          parse = parseWikiPage(content);
+        } catch (err) {
+          parse = {
+            ok: false,
+            issues: [{
+              code: 'badYaml',
+              message: `页面文件读取失败: ${(err as NodeJS.ErrnoException).code ?? String(err)}`,
+            }],
+          };
+        }
+      }
+      const declaredType = parse.ok ? parse.frontmatter.type : undefined;
+      pages.push({
+        pageId,
+        relPath: `wiki/${pageId}.md`,
+        type: dirType,
+        kind: 'page',
+        parse,
+        routeMismatch: declaredType !== undefined && declaredType !== dirType,
+      });
+    });
+  }
+
+  // ── 2) wiki 根条目：聚合页 / 路由外 orphan ─────────────────────
   for (const entry of rootEntries) {
     if (entry.isFile() && entry.name.toLowerCase().endsWith('.md')) {
       const base = entry.name.slice(0, -3);
@@ -107,51 +153,15 @@ export async function scanWikiCatalog(kbPath: string): Promise<WikiCatalogResult
     }
     if (!entry.isDirectory()) continue;
 
-    const dirType = dirToType.get(entry.name.toLowerCase());
-    if (dirType === undefined) {
+    // 已被某条路由目录覆盖（自身或作为其前缀段）→ 已在第 1 步编目
+    const isRoutePrefix = routedDirs.some(
+      ([, dir]) => dir.toLowerCase() === entry.name.toLowerCase()
+        || dir.toLowerCase().startsWith(`${entry.name.toLowerCase()}/`),
+    );
+    if (!isRoutePrefix) {
       // 非路由目录：整个子树视为 orphan（后续票的建图/Lint 会复用）
       await collectFilesRecursively(join(layout.wikiDir, entry.name), entry.name, (relPath) => {
         orphans.push({ relPath: `wiki/${relPath}`, kind: 'orphan' });
-      });
-      continue;
-    }
-
-    // 路由目录：直接子文件按 pageId 编目（wiki/<dir>/<pageId>.md）
-    const children = await readdir(join(layout.wikiDir, entry.name), { withFileTypes: true });
-    for (const child of children) {
-      if (!child.isFile() || !child.name.toLowerCase().endsWith('.md')) {
-        // 路由目录下的子目录/非 md 文件同样视为 orphan（本票不分类）
-        orphans.push({
-          relPath: `wiki/${entry.name}/${child.name}`,
-          kind: 'orphan',
-        });
-        continue;
-      }
-      const base = child.name.slice(0, -3);
-      const pageId = `${entry.name}/${base}`;
-      const relPath = `wiki/${pageId}.md`;
-      const abs = join(layout.wikiDir, entry.name, child.name);
-      let parse: WikiPageParseResult;
-      try {
-        const content = await readFile(abs, 'utf-8');
-        parse = parseWikiPage(content);
-      } catch (err) {
-        parse = {
-          ok: false,
-          issues: [{
-            code: 'badYaml',
-            message: `页面文件读取失败: ${(err as NodeJS.ErrnoException).code ?? String(err)}`,
-          }],
-        };
-      }
-      const declaredType = parse.ok ? parse.frontmatter.type : undefined;
-      pages.push({
-        pageId,
-        relPath,
-        type: dirType,
-        kind: 'page',
-        parse,
-        routeMismatch: declaredType !== undefined && declaredType !== dirType,
       });
     }
   }
@@ -257,13 +267,13 @@ export async function readWikiPage(
 async function collectFilesRecursively(
   dir: string,
   relPrefix: string,
-  fn: (relPath: string) => void,
+  fn: (relPath: string, absPath: string) => Promise<void> | void,
 ): Promise<void> {
   let entries: Dirent[];
   try {
     entries = await readdir(dir, { withFileTypes: true });
   } catch {
-    return; // 不可读的 orphan 子树静默跳过——目录状态由健康检查另行报告
+    return; // 不可读的子树静默跳过——目录状态由健康检查另行报告
   }
   for (const entry of entries) {
     const rel = `${relPrefix}/${entry.name}`;
@@ -273,7 +283,7 @@ async function collectFilesRecursively(
       if (s.isDirectory()) {
         await collectFilesRecursively(abs, rel, fn);
       } else if (s.isFile()) {
-        fn(rel);
+        await fn(rel, abs);
       }
     } catch {
       // stat 失败的条目跳过
