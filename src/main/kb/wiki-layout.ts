@@ -91,6 +91,15 @@ export type WikiKbManifest = {
   updatedAt: string;
   /** 来源修订与转换状态（sourceId → 记录）；issue 02 引入，旧 manifest 无此字段 */
   sources?: Record<string, WikiSourceRecord>;
+  /**
+   * 发布进度（spec §1「发布 revision」；issue 06 引入）。
+   * revision 单调递增，与 commitId 一并写入同一次提交。
+   */
+  publish?: {
+    revision: number;
+    commitId: string;
+    at: string;
+  };
 };
 
 export type ManifestReadResult =

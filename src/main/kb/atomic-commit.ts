@@ -6,9 +6,12 @@
  *
  * 布局（库根内）：
  *   .kb/transactions/<txId>/
- *     manifest.json          { txId, state: prepared|committed, writes[] }
+ *     manifest.json          { txId, state: prepared|committed, writes[], meta? }
  *     before/before-<i>.bin  被替换目标的旧内容（新建目标无此文件）
  *     after/after-<i>.bin    新内容（rename 的数据源）
+ *
+ * `meta` 是调用方附加的审计字段（如发布的读/写集 hash、目标 revision），
+ * 原样持久、原样保留，供恢复与审计读取。
  *
  * 恢复语义（recoverTransactions，应用启动/重开库时调用）：
  *   - manifest 缺失      → 意向未持久化，任何 rename 都未发生 → 清理 tx 目录（完整旧版）
@@ -47,6 +50,11 @@ export type AtomicWritePlan = {
   txId: string;
   /** 相对库根的写入目标与新内容（UTF-8 文本） */
   writes: Array<{ relPath: string; content: string }>;
+  /**
+   * 额外的审计字段，原样持久进事务清单（spec §6：清单要记读/写集 hash、
+   * 目标 revision 等；发布方在规划时算好，恢复时无需重算）。
+   */
+  meta?: Record<string, unknown>;
 };
 
 export type PreparedCommit = {
@@ -69,6 +77,8 @@ type TxManifest = {
   txId: string;
   state: 'prepared' | 'committed';
   writes: TxWriteRecord[];
+  /** 调用方附加的审计字段（读/写集 hash、目标 revision 等），原样保留 */
+  meta?: Record<string, unknown>;
 };
 
 export type RecoveryReport = {
@@ -195,7 +205,12 @@ export async function prepareCommit(rootDir: string, plan: AtomicWritePlan): Pro
     }
 
     // 5. manifest（prepared）是「意向已持久化」的标记，原子写入
-    const manifest: TxManifest = { txId: plan.txId, state: 'prepared', writes: records };
+    const manifest: TxManifest = {
+      txId: plan.txId,
+      state: 'prepared',
+      writes: records,
+      ...(plan.meta !== undefined ? { meta: plan.meta } : {}),
+    };
     await writeFileAtomic(join(txDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
   } catch (err) {
     // 镜像阶段失败：目标尚未被触碰，清掉半成品事务目录即可

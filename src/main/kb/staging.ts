@@ -384,3 +384,44 @@ function isSettled(cs: WikiChangeSet, review: WikiChangeSetReview): boolean {
     return states.length > 0 && states.every((s) => s === 'accepted' || s === 'rejected');
   });
 }
+
+/**
+ * 失效某变更集的旧批准（issue 06 发布前基线变动时调用）。
+ *
+ * 把全部 hunk/整页决策重置为 pending 并记录 stale 原因与检测时间：
+ * 「变动转 stale 并失效旧批准」—— 失效后的批准不得再用于发布，
+ * 必须重新生成差异并重新批准（不在批准之后悄悄做 LLM merge）。
+ *
+ * 只写 `.kb/reviews/`，不触碰 `wiki/`。
+ */
+export async function invalidateReview(
+  kbPath: string,
+  changeSetId: string,
+  reasons: string[],
+  now?: string,
+): Promise<WikiStagingResult<WikiChangeSetReview>> {
+  const current = await readReview(kbPath, changeSetId);
+  if (!current.ok) return current;
+
+  const at = now ?? new Date().toISOString();
+  const invalidated: WikiChangeSetReview = {
+    ...current.value,
+    pages: current.value.pages.map((p) => ({
+      ...p,
+      hunkStates: Object.fromEntries(
+        Object.keys(p.hunkStates).map((k) => [Number(k), 'pending' as const]),
+      ),
+      pageDecision: 'pending' as const,
+    })),
+    settled: false,
+    stale: { detectedAt: at, reasons },
+    updatedAt: at,
+  };
+
+  try {
+    await writeFileAtomic(reviewFile(kbPath, changeSetId), JSON.stringify(invalidated, null, 2));
+  } catch (err) {
+    return fail('ioError', `写入 reviews 失败: ${String(err)}`);
+  }
+  return { ok: true, value: invalidated };
+}

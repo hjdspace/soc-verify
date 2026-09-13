@@ -1,10 +1,14 @@
 /**
- * KbReviewTab — 知识提案审阅面板（issue 05 后半）。
+ * KbReviewTab — 知识提案审阅与发布面板（issue 05/06）。
  *
  * 与代码审阅共用同一套「展示 / 动作」解耦：面板左侧列出待审阅变更集与
  * 其中的页面，右侧用 before/proposed 合成的 diff 渲染增删行与逐块操作条；
- * 接受/拒绝经 kb-staged adapter 落到 `kb.decideStaged`（记录用户选择），
- * **不写 wiki/**——发布由 issue 06 消费这些选择。
+ * 接受/拒绝经 kb-staged adapter 落到 `kb.decideStaged`（记录用户选择）。
+ *
+ * 发布（issue 06）：整页接受后点「发布」经 `kb.publishStaged` 走一次原子
+ * 提交（正式页 + 确定性 index/overview + log + 页面历史 + manifest），
+ * 成功后直接只读打开已发布页。基线变动转 stale 时主进程失效旧批准，
+ * 这里显示原因并刷新为 pending。
  *
  * diff 合成在 store（buildStagedDiff）完成，展示组件不伪造 tool call、
  * 也不自行调用 project 撤销 API（spec L04 / F16）。
@@ -13,9 +17,11 @@
  */
 
 import { useEffect, useMemo } from 'react';
-import { AlertTriangle, Check, ClipboardCheck, FilePlus2, FileText, X } from 'lucide-react';
+import { AlertTriangle, Check, ClipboardCheck, FilePlus2, FileText, Upload, X } from 'lucide-react';
 import { cn } from '@renderer/lib/utils';
 import { useKbReviewStore, buildStagedDiff, selectHunkStates } from '@renderer/stores/kb-review';
+import { useKbStore } from '@renderer/stores/kb';
+import { useKbWikiStore } from '@renderer/stores/kb-wiki';
 import type { WikiChangeSetOrigin, WikiStagedPage } from '@shared/kb-types';
 
 const ORIGIN_LABELS: Record<WikiChangeSetOrigin, string> = {
@@ -30,6 +36,7 @@ export function KbReviewTab() {
   const listError = useKbReviewStore((s) => s.listError);
   const activeChangeSet = useKbReviewStore((s) => s.activeChangeSet);
   const activePageRelPath = useKbReviewStore((s) => s.activePageRelPath);
+  const activeReview = useKbReviewStore((s) => s.activeReview);
   const loadChangeSets = useKbReviewStore((s) => s.loadChangeSets);
   const openChangeSet = useKbReviewStore((s) => s.openChangeSet);
   const selectPage = useKbReviewStore((s) => s.selectPage);
@@ -56,12 +63,28 @@ export function KbReviewTab() {
           </>
         )}
         <div className="flex-1" />
-        <span className="text-[10px] text-muted-foreground">接受后由发布流程写入（本页不改库）</span>
+        <span className="text-[10px] text-muted-foreground">接受后点「发布」写入正式知识页与索引</span>
       </div>
 
       {listError && (
         <div className="border-b border-destructive/30 bg-destructive/5 px-3 py-1.5 text-[11px] text-destructive">
           {listError}
+        </div>
+      )}
+
+      {/* 基线变动：旧批准已失效，必须重新生成差异并重新批准 */}
+      {activeReview?.stale && (
+        <div
+          className="border-b border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-[11px] text-amber-600 dark:text-amber-400"
+          data-testid="kb-review-stale"
+        >
+          <p className="flex items-center gap-1 font-medium">
+            <AlertTriangle className="h-3 w-3" />
+            基线已变动，旧批准已失效（需重新审阅后再发布）
+          </p>
+          <ul className="mt-0.5 list-disc pl-4">
+            {activeReview.stale.reasons.map((r, i) => <li key={i}>{r}</li>)}
+          </ul>
         </div>
       )}
 
@@ -189,10 +212,20 @@ function PageDiff({ relPath }: { relPath: string | null }) {
   const activeChangeSet = useKbReviewStore((s) => s.activeChangeSet);
   const activeReview = useKbReviewStore((s) => s.activeReview);
   const deciding = useKbReviewStore((s) => s.deciding);
+  const publishing = useKbReviewStore((s) => s.publishing);
   const decideHunk = useKbReviewStore((s) => s.decideHunk);
+  const publishActive = useKbReviewStore((s) => s.publishActive);
   // 订阅原始切片后在组件侧用 useMemo 组合：selectHunkStates 每次会创建新对象，
   // 直接传给 useSyncExternalStore 的 selector 会触发 getSnapshot 缓存告警与无限重渲染。
   const activePageRelPath = useKbReviewStore((s) => s.activePageRelPath);
+
+  /** 发布成功 → 只读打开已发布页（切到「知识页」tab 并装载该页） */
+  const onPublish = async (): Promise<void> => {
+    const res = await publishActive();
+    if (!res.ok) return;
+    await useKbWikiStore.getState().openPage(res.pageId);
+    useKbStore.getState().setActiveTab('wiki');
+  };
 
   const page: WikiStagedPage | null = useMemo(
     () => activeChangeSet?.pages.find((p) => p.relPath === relPath) ?? null,
@@ -266,7 +299,7 @@ function PageDiff({ relPath }: { relPath: string | null }) {
               <div className="flex-1" />
               <button
                 onClick={() => void decideHunk(0, 'rejected')}
-                disabled={deciding}
+                disabled={deciding || publishing}
                 data-testid="kb-page-reject"
                 className="flex items-center gap-1 rounded border border-border px-2 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
               >
@@ -275,12 +308,23 @@ function PageDiff({ relPath }: { relPath: string | null }) {
               </button>
               <button
                 onClick={() => void decideHunk(0, 'accepted')}
-                disabled={deciding}
+                disabled={deciding || publishing}
                 data-testid="kb-page-accept"
                 className="flex items-center gap-1 rounded border border-status-pass/30 bg-status-pass/10 px-2 py-0.5 text-[10px] text-status-pass-foreground transition-colors hover:bg-status-pass/20 disabled:opacity-40"
               >
                 <Check className="h-2.5 w-2.5" />
                 接受
+              </button>
+              {/* 发布：基线校验 + 一次原子提交（正式页/聚合/日志/历史） */}
+              <button
+                onClick={() => void onPublish()}
+                disabled={publishing || deciding}
+                data-testid="kb-page-publish"
+                title="发布本变更集：校验基线后一次提交写入正式页与索引"
+                className="flex items-center gap-1 rounded border border-primary/40 bg-primary/10 px-2 py-0.5 text-[10px] text-primary transition-colors hover:bg-primary/20 disabled:opacity-40"
+              >
+                <Upload className="h-2.5 w-2.5" />
+                {publishing ? '发布中…' : '发布'}
               </button>
             </div>
 

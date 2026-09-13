@@ -23,6 +23,7 @@ import {
   readChangeSet,
   recordDecision,
   readReview,
+  invalidateReview,
 } from '../src/main/kb/staging';
 import { initWikiLayout, SCHEMA_MD_SKELETON, PURPOSE_MD_SKELETON, wikiLayout } from '../src/main/kb/wiki-layout';
 import type { WikiSourceRef } from '@shared/kb-types';
@@ -339,5 +340,40 @@ describe('schema/purpose hash 基线', () => {
     const expectedPurpose = createHash('sha256').update(PURPOSE_MD_SKELETON).digest('hex');
     expect(res.value.changeSet.schemaHash).toBe(expectedSchema);
     expect(res.value.changeSet.purposeHash).toBe(expectedPurpose);
+  });
+});
+
+describe('invalidateReview — 失效旧批准（issue 06 基线变动）', () => {
+  it('决策重置为 pending、记录 stale 原因与时间，且不触碰 wiki/', async () => {
+    const staged = await stageProposal(kbPath, {
+      kbId: 'kb-1', taskId: 't', origin: 'compile', sourceRefs: [SRC_REF],
+      proposalText: fileBlock('wiki/concepts/a.md', pageBody('concept', 'A')),
+    });
+    if (!staged.ok) throw new Error('stage');
+    const csId = staged.value.changeSet.changeSetId;
+    await recordDecision(kbPath, { changeSetId: csId, pageRelPath: 'wiki/concepts/a.md', hunkIds: [0], decision: 'accepted' });
+
+    const res = await invalidateReview(kbPath, csId, ['写集基线变动：内容不一致'], '2026-09-13T10:00:00Z');
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.value.stale).toEqual({ detectedAt: '2026-09-13T10:00:00Z', reasons: ['写集基线变动：内容不一致'] });
+    expect(res.value.settled).toBe(false);
+    expect(res.value.pages[0].hunkStates[0]).toBe('pending');
+
+    // 重开仍是失效后的状态
+    const reread = await readReview(kbPath, csId);
+    expect(reread.ok).toBe(true);
+    if (reread.ok) {
+      expect(reread.value.stale?.reasons).toHaveLength(1);
+      expect(reread.value.pages[0].hunkStates[0]).toBe('pending');
+    }
+    // 正式 wiki/ 未被触碰
+    expect(existsSync(join(kbPath, 'wiki', 'concepts', 'a.md'))).toBe(false);
+  });
+
+  it('未知变更集 → changeSetNotFound', async () => {
+    const res = await invalidateReview(kbPath, 'nope', ['x']);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.code).toBe('changeSetNotFound');
   });
 });

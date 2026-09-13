@@ -55,10 +55,11 @@ const { mockSummary, mockChangeSet, mockEmptyReview } = vi.hoisted(() => {
 
 // ─── Mock tRPC ──────────────────────────────────────────────
 
-const { stagedChangeSetsMock, stagedChangeSetMock, decideStagedMock, projectApplyDiffRejectionsMock } = vi.hoisted(() => ({
+const { stagedChangeSetsMock, stagedChangeSetMock, decideStagedMock, publishStagedMock, projectApplyDiffRejectionsMock } = vi.hoisted(() => ({
   stagedChangeSetsMock: vi.fn(),
   stagedChangeSetMock: vi.fn(),
   decideStagedMock: vi.fn(),
+  publishStagedMock: vi.fn(),
   projectApplyDiffRejectionsMock: vi.fn(),
 }));
 
@@ -68,9 +69,24 @@ vi.mock('@renderer/lib/trpc', () => ({
       stagedChangeSets: { query: stagedChangeSetsMock },
       stagedChangeSet: { query: stagedChangeSetMock },
       decideStaged: { mutate: decideStagedMock },
+      publishStaged: { mutate: publishStagedMock },
     },
     project: { applyDiffRejections: { mutate: projectApplyDiffRejectionsMock } },
   },
+}));
+
+// 发布成功后切 tab 并只读打开已发布页：store 仅用 getState()，测试观察调用即可
+const { setActiveTabMock, openPageMock } = vi.hoisted(() => ({
+  setActiveTabMock: vi.fn(),
+  openPageMock: vi.fn(),
+}));
+
+vi.mock('@renderer/stores/kb', () => ({
+  useKbStore: { getState: () => ({ setActiveTab: setActiveTabMock }) },
+}));
+
+vi.mock('@renderer/stores/kb-wiki', () => ({
+  useKbWikiStore: { getState: () => ({ openPage: openPageMock }) },
 }));
 
 const { toastMocks } = vi.hoisted(() => ({
@@ -94,6 +110,8 @@ beforeEach(() => {
   stagedChangeSetsMock.mockResolvedValue({ ok: true, value: [mockSummary] });
   stagedChangeSetMock.mockResolvedValue({ changeSet: mockChangeSet, review: mockEmptyReview });
   decideStagedMock.mockResolvedValue({ ok: true, review: mockEmptyReview });
+  publishStagedMock.mockResolvedValue({ ok: false, error: { code: 'nothingAccepted', message: '没有已接受的候选页' } });
+  openPageMock.mockResolvedValue(undefined);
   useKbReviewStore.getState().reset();
 });
 
@@ -138,6 +156,52 @@ describe('KbReviewTab 列表与导航', () => {
       expect(screen.getByText('新建')).toBeInTheDocument();
       expect(screen.getByText('接受后作为新页发布')).toBeInTheDocument();
     });
+  });
+});
+
+describe('KbReviewTab 发布（issue 06：整页提案 → 发布 → 只读打开）', () => {
+  it('点「发布」经 kb.publishStaged 提交，成功后切到知识页并只读打开', async () => {
+    publishStagedMock.mockResolvedValue({
+      ok: true,
+      commitId: 'commit-abcdef12',
+      revision: 1,
+      pages: [{ pageId: 'concepts/axi', relPath: 'wiki/concepts/axi.md', operation: 'create', beforeHash: null, afterHash: 'h' }],
+      warnings: [],
+    });
+    render(<KbReviewTab />);
+    fireEvent.click(await screen.findByTestId('kb-changeset-open-cs-1'));
+    fireEvent.click(await screen.findByTestId('kb-page-publish'));
+
+    await waitFor(() => expect(publishStagedMock).toHaveBeenCalledWith({ changeSetId: 'cs-1' }));
+    await waitFor(() => expect(openPageMock).toHaveBeenCalledWith('concepts/axi'));
+    expect(setActiveTabMock).toHaveBeenCalledWith('wiki');
+  });
+
+  it('发布失败（stale）时显示旧批准已失效横幅与原因', async () => {
+    publishStagedMock.mockResolvedValue({
+      ok: false,
+      error: { code: 'stale', message: '发布前基线校验未通过', detail: ['写集基线变动：内容不一致'] },
+    });
+    stagedChangeSetMock.mockResolvedValue({
+      changeSet: mockChangeSet,
+      review: {
+        ...mockEmptyReview,
+        stale: { detectedAt: '2026-09-13T10:00:00Z', reasons: ['写集基线变动：wiki/concepts/axi.md 内容与提案基线不一致'] },
+      },
+    });
+    render(<KbReviewTab />);
+    fireEvent.click(await screen.findByTestId('kb-changeset-open-cs-1'));
+
+    // 打开时审阅状态已含 stale → 横幅可见
+    expect(await screen.findByTestId('kb-review-stale')).toBeInTheDocument();
+    expect(screen.getByText(/旧批准已失效/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('kb-page-publish'));
+    await waitFor(() => expect(toastMocks.error).toHaveBeenCalledWith(
+      '发布失败',
+      expect.stringContaining('写集基线变动'),
+    ));
+    expect(openPageMock).not.toHaveBeenCalled();
   });
 });
 

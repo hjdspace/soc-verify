@@ -719,6 +719,28 @@ export type WikiChangeSetReview = {
   /** 是否所有页/块已明确处置 */
   settled: boolean;
   updatedAt: string;
+  /**
+   * 发布前基线变动的检测结果（issue 06）。
+   * 非空即「旧批准已失效」：决策被重置为 pending，需重新生成差异后再批准。
+   */
+  stale?: WikiStaleReport | null;
+  /** 成功发布的记录；commitId 在日志/历史/事件中唯一 */
+  published?: WikiPublishedRef | null;
+};
+
+/** 基线变动报告（发布时检测到读/写集或来源/规则基线变化） */
+export type WikiStaleReport = {
+  detectedAt: string;
+  /** 逐条说明哪个基线变了（可见，不只给一个布尔） */
+  reasons: string[];
+};
+
+/** 已发布引用（写回 reviews/，避免同一变更集重复发布） */
+export type WikiPublishedRef = {
+  commitId: string;
+  /** 发布 revision（manifest.publish.revision，单调递增） */
+  revision: number;
+  at: string;
 };
 
 /** 渲染端变更集摘要（staging 列表） */
@@ -768,4 +790,83 @@ export type WikiStagingError = { code: WikiStagingErrorCode; message: string };
 export type WikiStagingResult<T> =
   | { ok: true; value: T }
   | { ok: false; error: WikiStagingError };
+
+// ── 发布、页面历史与读取门禁（spec §6，issue 06）────────────────
+
+/** 页面历史的操作类型（创建页记录 before 不存在，删除页保留完整旧内容） */
+export type WikiPageHistoryOperation = 'create' | 'update' | 'delete';
+
+/**
+ * 页面历史条目（`.kb/page-history/<pageId>.jsonl` 的一行）。
+ *
+ * 参考 R17：历史不能由当前版本复原 —— 旧内容 hash、commitId、来源修订
+ * 与操作类型都在此持久；创建页 `beforeHash` 为 null（before 不存在）。
+ */
+export type WikiPageHistoryEntry = {
+  commitId: string;
+  changeSetId: string;
+  pageId: string;
+  relPath: string;
+  operation: WikiPageHistoryOperation;
+  /** 旧内容 SHA256；创建页为 null */
+  beforeHash: string | null;
+  /** 新内容 SHA256 */
+  afterHash: string;
+  /** 本次发布的来源修订（证据边） */
+  sources: WikiSourceRef[];
+  at: string;
+};
+
+/** 单页发布结果摘要 */
+export type WikiPublishedPage = {
+  pageId: string;
+  relPath: string;
+  operation: WikiPageHistoryOperation;
+  beforeHash: string | null;
+  afterHash: string;
+};
+
+/** 发布错误码 */
+export type WikiPublishErrorCode =
+  | 'changeSetNotFound'    // 变更集不存在
+  | 'kbIdMismatch'         // 变更集不属于本库
+  | 'stagingCorrupted'     // staging 文件损坏（现场保留）
+  | 'nothingAccepted'      // 没有任何被接受的候选页（拒绝/未处置 → 正式页面不变）
+  | 'alreadyPublished'     // 该变更集已发布过（不静默重复发布）
+  | 'multiPageUnsupported' // 本票只开放单页变更集（多页见 issue 07）
+  | 'readGateBlocked'      // 存在未恢复事务或并发发布，读取/写入暂停
+  | 'manifestCorrupted'    // .kb/manifest.json 不可读/结构非法
+  | 'stale'                // 读/写集或来源/规则基线变动（旧批准已失效）
+  | 'invalidTarget'        // 写集目标非法（沙箱/聚合页/路由外）
+  | 'ioError';
+
+export type WikiPublishError = {
+  code: WikiPublishErrorCode;
+  message: string;
+  /** stale 时的逐条变动说明 */
+  detail?: string[];
+};
+
+/** 发布结果：成功携带 commitId（日志/历史/事件唯一身份）与发布的页 */
+export type WikiPublishResult =
+  | {
+      ok: true;
+      commitId: string;
+      /** 单调递增的发布 revision（写入 manifest.publish.revision） */
+      revision: number;
+      pages: WikiPublishedPage[];
+      /** 非阻断提示（如日志/历史重复项已跳过） */
+      warnings: string[];
+    }
+  | { ok: false; error: WikiPublishError };
+
+/** 事务读取门禁状态（重启后恢复前暂停读取，避免读到混合页集） */
+export type WikiReadGateStatus = {
+  /** true = 存在未恢复的 prepared 事务，同库读取/发布暂停 */
+  blocked: boolean;
+  /** 未恢复事务 ID 列表（prepared 状态） */
+  pending: string[];
+  /** manifest 损坏、无法自动恢复的事务（现场保留，恢复报告用） */
+  corrupt: string[];
+};
 

@@ -118,12 +118,13 @@ const { mockSummary, mockChangeSet, mockReview, mockEmptyReview } = vi.hoisted((
 // ─── Mock tRPC ──────────────────────────────────────────────
 
 const {
-  stagedChangeSetsMock, stagedChangeSetMock, decideStagedMock,
+  stagedChangeSetsMock, stagedChangeSetMock, decideStagedMock, publishStagedMock,
   projectApplyDiffRejectionsMock, getFileDiffMock,
 } = vi.hoisted(() => ({
   stagedChangeSetsMock: vi.fn(),
   stagedChangeSetMock: vi.fn(),
   decideStagedMock: vi.fn(),
+  publishStagedMock: vi.fn(),
   projectApplyDiffRejectionsMock: vi.fn(),
   getFileDiffMock: vi.fn(),
 }));
@@ -134,6 +135,7 @@ vi.mock('@renderer/lib/trpc', () => ({
       stagedChangeSets: { query: stagedChangeSetsMock },
       stagedChangeSet: { query: stagedChangeSetMock },
       decideStaged: { mutate: decideStagedMock },
+      publishStaged: { mutate: publishStagedMock },
     },
     project: {
       applyDiffRejections: { mutate: projectApplyDiffRejectionsMock },
@@ -142,10 +144,14 @@ vi.mock('@renderer/lib/trpc', () => ({
   },
 }));
 
+const { toastMocks } = vi.hoisted(() => ({
+  toastMocks: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
+}));
+
 vi.mock('@renderer/stores/toast', () => ({
   useToastStore: Object.assign(
-    vi.fn((selector: (s: Record<string, unknown>) => unknown) => selector({ success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() })),
-    { getState: () => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() }) },
+    vi.fn((selector: (s: Record<string, unknown>) => unknown) => selector(toastMocks)),
+    { getState: () => toastMocks },
   ),
 }));
 
@@ -299,5 +305,81 @@ describe('selectHunkStates 选择器', () => {
     expect(selectHunkStates(useKbReviewStore.getState())).toEqual({});
     useKbReviewStore.setState({ activeReview: null });
     expect(selectHunkStates(useKbReviewStore.getState())).toEqual({});
+  });
+});
+
+describe('publishActive（issue 06：整页提案 → 发布 → 只读打开）', () => {
+  it('发布成功：经 kb.publishStaged 提交，返回已发布页 pageId 并关闭变更集视图', async () => {
+    publishStagedMock.mockResolvedValue({
+      ok: true,
+      commitId: 'commit-abcdef12',
+      revision: 1,
+      pages: [{ pageId: 'concepts/axi', relPath: 'wiki/concepts/axi.md', operation: 'create', beforeHash: null, afterHash: 'h' }],
+      warnings: [],
+    });
+    await useKbReviewStore.getState().openChangeSet('cs-1');
+
+    const res = await useKbReviewStore.getState().publishActive();
+    expect(res).toEqual({ ok: true, pageId: 'concepts/axi' });
+    expect(publishStagedMock).toHaveBeenCalledWith({ changeSetId: 'cs-1' });
+    expect(toastMocks.success).toHaveBeenCalledWith('已发布', expect.stringContaining('concepts/axi'));
+    // 已发布 → 关闭视图，避免重复发布
+    expect(useKbReviewStore.getState().activeChangeSet).toBeNull();
+    expect(useKbReviewStore.getState().publishing).toBe(false);
+  });
+
+  it('stale：不假装成功，原因可见并刷新为失效后的审阅状态', async () => {
+    publishStagedMock.mockResolvedValue({
+      ok: false,
+      error: {
+        code: 'stale',
+        message: '发布前基线校验未通过：读/写集或来源/规则基线已变动，旧批准已失效。',
+        detail: ['写集基线变动：wiki/concepts/axi.md 内容与提案基线不一致（可能被外部编辑）。'],
+      },
+    });
+    stagedChangeSetMock.mockResolvedValue({
+      changeSet: mockChangeSet,
+      review: {
+        ...mockEmptyReview,
+        stale: { detectedAt: '2026-09-13T10:00:00Z', reasons: ['写集基线变动：内容不一致'] },
+      },
+    });
+    await useKbReviewStore.getState().openChangeSet('cs-1');
+
+    const res = await useKbReviewStore.getState().publishActive();
+    expect(res.ok).toBe(false);
+    expect(toastMocks.error).toHaveBeenCalledWith(
+      '发布失败',
+      expect.stringContaining('写集基线变动'),
+    );
+    // 主进程已失效旧批准 → store 拉取到 stale 状态（组件据此显示横幅）
+    expect(useKbReviewStore.getState().activeReview?.stale).toBeTruthy();
+    expect(useKbReviewStore.getState().publishing).toBe(false);
+  });
+
+  it('nothingAccepted：不写正式资产，错误透传', async () => {
+    publishStagedMock.mockResolvedValue({
+      ok: false,
+      error: { code: 'nothingAccepted', message: '变更集没有已接受的候选页' },
+    });
+    await useKbReviewStore.getState().openChangeSet('cs-1');
+    const res = await useKbReviewStore.getState().publishActive();
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain('已接受');
+  });
+
+  it('未打开变更集时不发请求', async () => {
+    const res = await useKbReviewStore.getState().publishActive();
+    expect(res.ok).toBe(false);
+    expect(publishStagedMock).not.toHaveBeenCalled();
+  });
+
+  it('请求抛错时回到非发布中状态并提示', async () => {
+    publishStagedMock.mockRejectedValueOnce(new Error('知识库未挂载'));
+    await useKbReviewStore.getState().openChangeSet('cs-1');
+    const res = await useKbReviewStore.getState().publishActive();
+    expect(res.ok).toBe(false);
+    expect(useKbReviewStore.getState().publishing).toBe(false);
+    expect(toastMocks.error).toHaveBeenCalled();
   });
 });

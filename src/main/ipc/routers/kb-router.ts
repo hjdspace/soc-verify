@@ -21,6 +21,11 @@
  *                        wiki 来源导入与修订保留（issue 02）：单文档/小批量
  *                        导入、来源列表、机械全文预览（身份解析）、修订核对、
  *                        原件路径解析、失败重试转换、能力清单
+ *   - kb.publishStaged    发布已接受的整页提案（issue 06）：基线校验 →
+ *                        失效旧批准（stale）或一次原子提交写入正式页/聚合/日志/历史
+ *
+ * 读取门禁：存在未恢复的发布事务时，wiki 读取/队列/发布 procedures 一律
+ * 以 PRECONDITION_FAILED 拒绝（spec §6，避免读到混合页集）。
  *
  * 错误处理：register/unregister/mount/unmount 返回 Result 联合
  * （{ ok: true, ...data } | { ok: false, error: KbError }），
@@ -86,6 +91,8 @@ import {
   readReview,
   recordDecision,
 } from '../../kb/staging';
+import { publishChangeSet } from '../../kb/publish';
+import { assertReadGateOpen, WikiReadGateError } from '../../kb/read-gate';
 import type {
   KbRegistration,
   KbMount,
@@ -98,6 +105,7 @@ import type {
 } from '../../kb/types';
 import type {
   WikiParsedView,
+  WikiPublishResult,
   WikiQueueErrorCode,
   WikiQueueSnapshot,
   WikiSourceRevisionInfo,
@@ -179,7 +187,24 @@ async function getWikiMountedKbPath(): Promise<string> {
   if (mounted.format !== 'wiki') {
     throw new TRPCError({ code: 'PRECONDITION_FAILED', message: '当前挂载的不是 wiki 布局知识库' });
   }
+  await assertWikiReadable(mounted.path);
   return mounted.path;
+}
+
+/**
+ * 读取门禁守卫（spec §6）：存在未恢复的发布事务时，同库的读取/检索
+ * 与发布一律暂停，避免读到「一半旧版一半新版」的混合页集。
+ * 挂载时 registry 已先跑 `recoverTransactions`，正常路径不会命中。
+ */
+async function assertWikiReadable(kbPath: string): Promise<void> {
+  try {
+    await assertReadGateOpen(kbPath);
+  } catch (err) {
+    if (err instanceof WikiReadGateError) {
+      throw new TRPCError({ code: 'PRECONDITION_FAILED', message: err.message });
+    }
+    throw err;
+  }
 }
 
 /** WikiSourceError → TRPCError（sourceNotFound 映射 NOT_FOUND，其余保持消息） */
@@ -230,6 +255,7 @@ async function getWikiMountedKb(): Promise<{ path: string; kbId: string }> {
   if (status.mounted.format !== 'wiki') {
     throw new TRPCError({ code: 'PRECONDITION_FAILED', message: '当前挂载的不是 wiki 布局知识库' });
   }
+  await assertWikiReadable(status.mounted.path);
   return { path: status.mounted.path, kbId: status.mounted.kbId };
 }
 
@@ -1226,5 +1252,26 @@ export const kbRouter = t.router({
         return { ok: false as const, error: `${res.error.code}: ${res.error.message}`, code: res.error.code };
       }
       return { ok: true as const, review: res.value };
+    }),
+
+  // ─── kb.publishStaged（issue 06） ──────────────────────────
+  //
+  // 发布一个已接受整页提案的变更集：校验读/写集与来源/规则基线
+  // （变动转 stale 并失效旧批准），随后以**一次原子提交**写入正式页、
+  // 确定性 index/overview、追加 log、页面历史、manifest 发布 revision
+  // 与审阅记录。失败/拒绝不产生任何正式改动。
+  // Result 联合返回（不抛错）：渲染端按 code 分支处理（stale / nothingAccepted / …）。
+
+  publishStaged: t.procedure
+    .input((raw): { changeSetId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.changeSetId !== 'string' || r.changeSetId.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'changeSetId is required' });
+      }
+      return { changeSetId: r.changeSetId.trim() };
+    })
+    .mutation(async ({ input }): Promise<WikiPublishResult> => {
+      const kb = await getWikiMountedKb();
+      return publishChangeSet(kb.path, { kbId: kb.kbId, changeSetId: input.changeSetId });
     }),
 });

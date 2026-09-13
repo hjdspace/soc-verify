@@ -125,6 +125,8 @@ type KbReviewStoreState = {
   activePageRelPath: string | null;
   /** 正在提交的决策（防重复点击） */
   deciding: boolean;
+  /** 正在发布（防重复点击） */
+  publishing: boolean;
 
   loadChangeSets: () => Promise<void>;
   openChangeSet: (changeSetId: string) => Promise<void>;
@@ -134,8 +136,18 @@ type KbReviewStoreState = {
    * 成功后本地乐观更新，再以主进程返回的 review 覆盖。
    */
   decideHunk: (hunkId: number, decision: 'accepted' | 'rejected') => Promise<boolean>;
+  /**
+   * 发布当前变更集（issue 06）：经 `kb.publishStaged` 走一次原子提交
+   * 写入正式页/聚合/日志/历史。成功返回已发布页的 pageId（供只读打开）；
+   * stale 时主进程已失效旧批准，这里重新拉取审阅状态并提示原因。
+   */
+  publishActive: () => Promise<KbPublishOutcome>;
   reset: () => void;
 };
+
+export type KbPublishOutcome =
+  | { ok: true; pageId: string }
+  | { ok: false; error: string };
 
 const INITIAL = {
   changeSets: [] as WikiChangeSetSummary[],
@@ -147,6 +159,7 @@ const INITIAL = {
   activeError: null as string | null,
   activePageRelPath: null as string | null,
   deciding: false,
+  publishing: false,
 };
 
 export const useKbReviewStore = create<KbReviewStoreState>((set, get) => ({
@@ -224,6 +237,50 @@ export const useKbReviewStore = create<KbReviewStoreState>((set, get) => ({
     }
     await get().loadChangeSets();
     return true;
+  },
+
+  publishActive: async () => {
+    const { activeChangeSet, publishing } = get();
+    if (!activeChangeSet) return { ok: false, error: '没有打开的变更集' };
+    if (publishing) return { ok: false, error: '正在发布，请稍候' };
+
+    set({ publishing: true });
+    try {
+      const res = await trpc.kb.publishStaged.mutate({ changeSetId: activeChangeSet.changeSetId });
+      if (!res.ok) {
+        const detail = res.error.detail !== undefined && res.error.detail.length > 0
+          ? `\n${res.error.detail.map((d) => `• ${d}`).join('\n')}`
+          : '';
+        useToastStore.getState().error('发布失败', `${res.error.message}${detail}`);
+        // stale：主进程已把旧批准重置为 pending，重新拉取以刷新视图
+        if (res.error.code === 'stale') {
+          try {
+            const refreshed = await trpc.kb.stagedChangeSet.query({ changeSetId: activeChangeSet.changeSetId });
+            set({ activeReview: refreshed.review });
+          } catch {
+            // 保持当前视图；下一次打开会重新拉取
+          }
+        }
+        set({ publishing: false });
+        await get().loadChangeSets();
+        return { ok: false, error: res.error.message };
+      }
+
+      const pageId = res.pages[0]?.pageId ?? null;
+      useToastStore.getState().success(
+        '已发布',
+        pageId !== null ? `${pageId} · 提交 ${res.commitId.slice(0, 8)}` : `提交 ${res.commitId.slice(0, 8)}`,
+      );
+      await get().loadChangeSets();
+      // 已发布：关闭变更集视图（同一变更集不会重复发布）
+      set({ activeChangeSet: null, activeReview: null, activePageRelPath: null, publishing: false });
+      return pageId !== null ? { ok: true, pageId } : { ok: false, error: '发布成功但未返回页面身份' };
+    } catch (err) {
+      set({ publishing: false });
+      const message = err instanceof Error ? err.message : String(err);
+      useToastStore.getState().error('发布失败', message);
+      return { ok: false, error: message };
+    }
   },
 
   reset: () => set({ ...INITIAL }),

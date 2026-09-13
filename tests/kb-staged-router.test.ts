@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { rmSync, mkdirSync, existsSync, readdirSync } from 'node:fs';
+import { rmSync, mkdirSync, existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const { tmpDir, projectDir, globalDataDir } = vi.hoisted(() => {
@@ -65,8 +65,9 @@ vi.mock('@firecrawl/anydoc', () => ({
 }));
 
 import { kbRouter } from '../src/main/ipc/routers/kb-router';
-import { initWikiLayout, wikiLayout } from '../src/main/kb/wiki-layout';
+import { initWikiLayout, wikiLayout, readWikiManifest, writeWikiManifest } from '../src/main/kb/wiki-layout';
 import { stageProposal } from '../src/main/kb/staging';
+import { readGateStatus } from '../src/main/kb/read-gate';
 
 const caller = kbRouter.createCaller({});
 
@@ -117,6 +118,36 @@ async function mountWikiKb(): Promise<void> {
 async function unmountIfAny(): Promise<void> {
   const st = await caller.status({});
   if (st.mounted) await caller.unmount({ kbId: st.mounted.kbId });
+}
+
+/** 在 manifest 中登记提案引用的来源修订（真实编译链路的等价前置） */
+async function registerSource(): Promise<void> {
+  const manifest = await readWikiManifest(kbPath);
+  if (!manifest.ok) throw new Error('manifest');
+  await writeWikiManifest(kbPath, {
+    ...manifest.manifest,
+    sources: {
+      [SRC_REF.sourceId]: {
+        sourcePath: 'axi.pdf', sourceId: SRC_REF.sourceId, ext: '.pdf', size: 1,
+        currentRevision: SRC_REF.sourceRevision, parsedRevision: SRC_REF.sourceRevision,
+        parsedHash: SRC_REF.parsedHash, engine: 'anydoc', engineFingerprint: 'fp',
+        status: 'ready', assetCount: 0,
+        importedAt: '2026-09-13T00:00:00Z', updatedAt: '2026-09-13T00:00:00Z',
+      },
+    },
+  });
+}
+
+/** 投递提案并接受整页（返回 changeSetId） */
+async function stageAndAccept(): Promise<string> {
+  const staged = await stageProposal(kbPath, {
+    kbId: 'wiki-kb-id', taskId: 'task-1', origin: 'compile', sourceRefs: [SRC_REF],
+    proposalText: fileBlock('wiki/concepts/axi.md', pageBody('concept', 'AXI')),
+  });
+  if (!staged.ok) throw new Error('stage');
+  const changeSetId = staged.value.changeSet.changeSetId;
+  await caller.decideStaged({ changeSetId, pageRelPath: 'wiki/concepts/axi.md', hunkIds: [0], decision: 'accepted' });
+  return changeSetId;
 }
 
 describe('kb.stagedChangeSets', () => {
@@ -230,5 +261,77 @@ describe('正式 wiki/ 在 staging 阶段保持不变', () => {
     // staging/reviews 有记录
     expect(readdirSync(wikiLayout(kbPath).stagingDir).filter((f) => f.endsWith('.json')).length).toBe(1);
     expect(readdirSync(wikiLayout(kbPath).reviewsDir).filter((f) => f.endsWith('.json')).length).toBe(1);
+  });
+});
+
+describe('kb.publishStaged（issue 06）', () => {
+  it('发布已接受整页提案：正式页 + 聚合 + 日志 + 历史同一次提交', async () => {
+    await mountWikiKb();
+    await registerSource();
+    const csId = await stageAndAccept();
+
+    const res = await caller.publishStaged({ changeSetId: csId });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.revision).toBe(1);
+    expect(res.pages[0].pageId).toBe('concepts/axi');
+    expect(res.pages[0].operation).toBe('create');
+
+    expect(existsSync(join(kbPath, 'wiki', 'concepts', 'axi.md'))).toBe(true);
+    expect(existsSync(join(kbPath, 'wiki', 'index.md'))).toBe(true);
+    expect(existsSync(join(kbPath, 'wiki', 'log.md'))).toBe(true);
+    expect(existsSync(join(wikiLayout(kbPath).pageHistoryDir, 'concepts__axi.jsonl'))).toBe(true);
+    expect((await readGateStatus(kbPath)).blocked).toBe(false);
+  });
+
+  it('拒绝的提案不会改动正式资产（nothingAccepted）', async () => {
+    await mountWikiKb();
+    await registerSource();
+    const staged = await stageProposal(kbPath, {
+      kbId: 'wiki-kb-id', taskId: 't', origin: 'compile', sourceRefs: [SRC_REF],
+      proposalText: fileBlock('wiki/concepts/axi.md', pageBody('concept', 'AXI')),
+    });
+    if (!staged.ok) throw new Error('stage');
+    const csId = staged.value.changeSet.changeSetId;
+    await caller.decideStaged({ changeSetId: csId, pageRelPath: 'wiki/concepts/axi.md', hunkIds: [0], decision: 'rejected' });
+
+    const res = await caller.publishStaged({ changeSetId: csId });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.code).toBe('nothingAccepted');
+    expect(existsSync(join(kbPath, 'wiki', 'concepts', 'axi.md'))).toBe(false);
+    expect(existsSync(join(kbPath, 'wiki', 'index.md'))).toBe(false);
+  });
+
+  it('未挂载拒绝', async () => {
+    await unmountIfAny();
+    await expect(caller.publishStaged({ changeSetId: 'x' })).rejects.toThrow('未挂载');
+  });
+
+  it('变更集不属于当前挂载库 → kbIdMismatch（不跨库发布）', async () => {
+    await mountWikiKb();
+    const staged = await stageProposal(kbPath, {
+      kbId: 'another-kb', taskId: 't', origin: 'compile', sourceRefs: [SRC_REF],
+      proposalText: fileBlock('wiki/concepts/axi.md', pageBody('concept', 'AXI')),
+    });
+    if (!staged.ok) throw new Error('stage');
+    const csId = staged.value.changeSet.changeSetId;
+    await caller.decideStaged({ changeSetId: csId, pageRelPath: 'wiki/concepts/axi.md', hunkIds: [0], decision: 'accepted' });
+
+    const res = await caller.publishStaged({ changeSetId: csId });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.code).toBe('kbIdMismatch');
+  });
+
+  it('存在未恢复事务时读取与发布都被门禁拒绝', async () => {
+    await mountWikiKb();
+    const txDir = join(wikiLayout(kbPath).transactionsDir, 'tx-stuck');
+    mkdirSync(txDir, { recursive: true });
+    writeFileSync(
+      join(txDir, 'manifest.json'),
+      JSON.stringify({ txId: 'tx-stuck', state: 'prepared', writes: [] }),
+    );
+
+    await expect(caller.wikiCatalog({})).rejects.toThrow('未恢复');
+    await expect(caller.publishStaged({ changeSetId: 'x' })).rejects.toThrow('未恢复');
   });
 });

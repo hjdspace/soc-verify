@@ -1,0 +1,561 @@
+/**
+ * KB Publish — 整页提案的安全发布与页面历史（spec §6，issue 06）。
+ *
+ * 一次发布 = 一次原子提交（`atomic-commit`）：**旧内容快照、事务清单与
+ * commitId 全部持久后才替换目标**，写集固定包含
+ *
+ *   wiki/<路由目录>/<pageId>.md   正式页（新建或覆盖）
+ *   wiki/index.md / overview.md   由已发布页面确定性重建的聚合页
+ *   wiki/log.md                   追加日志（同 commitId 幂等）
+ *   .kb/page-history/<pageId>.jsonl  页面历史（旧内容 hash / 来源修订 / 操作类型）
+ *   .kb/manifest.json             库身份 + 发布 revision
+ *   .kb/reviews/<changeSetId>.json 用户选择 + 发布记录
+ *
+ * 因此不存在「页面已换、索引未换」的中间态：崩溃恢复把事务收敛为
+ * **完整旧版或完整新版**，恢复期间由 `read-gate` 暂停同库读取。
+ *
+ * 发布前校验**实际读/写集与来源/规则基线**（见 `checkBaselines`）：
+ * 任一基线变动即转 `stale`，并把该变更集的旧批准重置为 pending
+ * （失效的批准不得覆盖新内容），不静默做 LLM merge。
+ *
+ * 本票只开放单页变更集（`multiPageUnsupported` 拒绝多页）；多页与逐 hunk
+ * 发布由 issue 07 在同一 `buildPublishPlan` / 事务写集上扩展。
+ *
+ * @see docs/prd/knowledge-base-llm-wiki-spec.md §6
+ */
+
+import { createHash, randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { prepareCommit, completeCommit, runAtomicCommit } from './atomic-commit';
+import type { AtomicWritePlan } from './atomic-commit';
+import { wikiLayout, readWikiManifest, withManifestLock } from './wiki-layout';
+import { readChangeSet, readReview, invalidateReview } from './staging';
+import { scanWikiCatalog } from './wiki-catalog';
+import { parseWikiPage } from './wiki-page';
+import { readTypeDirs, validateProposalTarget } from './proposal-blocks';
+import { validateManagedRelPath } from './path-guard';
+import { assertReadGateOpen, WikiReadGateError } from './read-gate';
+import {
+  buildWikiIndex,
+  buildWikiOverview,
+  buildWikiLogEntry,
+  appendLogEntryIdempotent,
+} from './wiki-aggregates';
+import type {
+  WikiCatalog,
+  WikiCatalogPage,
+  WikiChangeSet,
+  WikiChangeSetReview,
+  WikiPageHistoryEntry,
+  WikiPageType,
+  WikiPublishError,
+  WikiPublishErrorCode,
+  WikiPublishResult,
+  WikiPublishedPage,
+  WikiStagedPage,
+} from '@shared/kb-types';
+
+// ── 输入 / 输出契约 ──────────────────────────────────────────────
+
+export type PublishChangeSetInput = {
+  /** 当前挂载库身份；与变更集不符时拒绝（不跨库发布） */
+  kbId: string;
+  changeSetId: string;
+  /** 注入时钟（测试用）；生产由应用生成 */
+  now?: string;
+  /** 注入 commitId（测试用）；生产用 UUID，保证日志/历史/事件中唯一 */
+  commitId?: string;
+};
+
+/** 一次发布的完整写集（同一次提交的全部目标） */
+export type PublishPlan = {
+  commitId: string;
+  changeSetId: string;
+  revision: number;
+  pages: WikiPublishedPage[];
+  writes: AtomicWritePlan['writes'];
+  /** 持久进事务清单的审计字段（读/写集 hash、基线 hash、目标 revision） */
+  meta: Record<string, unknown>;
+  warnings: string[];
+};
+
+export type BuildPublishPlanResult =
+  | { ok: true; plan: PublishPlan }
+  | { ok: false; error: WikiPublishError };
+
+// ── 错误工具 ────────────────────────────────────────────────────
+
+function fail(code: WikiPublishErrorCode, message: string, detail?: string[]): { ok: false; error: WikiPublishError } {
+  return { ok: false, error: { code, message, ...(detail ? { detail } : {}) } };
+}
+
+function sha256Text(text: string): string {
+  return createHash('sha256').update(text, 'utf-8').digest('hex');
+}
+
+async function hashFileOrNull(filePath: string): Promise<string | null> {
+  try {
+    return sha256Text(await readFile(filePath, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+async function readTextOrNull(filePath: string): Promise<string | null> {
+  try {
+    return await readFile(filePath, 'utf-8');
+  } catch {
+    return null;
+  }
+}
+
+// ── 页面历史 ────────────────────────────────────────────────────
+
+/** 页面历史的落盘路径：`.kb/page-history/<pageId 展平>.jsonl` */
+export function historyFilePath(kbPath: string, pageId: string): string {
+  return join(wikiLayout(kbPath).pageHistoryDir, `${pageId.replace(/[/\\]/g, '__')}.jsonl`);
+}
+
+/**
+ * 幂等追加页面历史：已有同一 commitId 的行时原样返回。
+ *
+ * 崩溃恢复的 roll-forward 会重放同一 after 镜像；重放不得产生重复历史。
+ */
+export function appendHistoryEntryIdempotent(
+  existing: string | null,
+  entry: WikiPageHistoryEntry,
+): string {
+  if (existing !== null && existingHasCommitId(existing, entry.commitId)) return existing;
+  const line = JSON.stringify(entry);
+  const base = existing === null || existing.length === 0
+    ? ''
+    : existing.endsWith('\n') ? existing : `${existing}\n`;
+  return `${base}${line}\n`;
+}
+
+function existingHasCommitId(jsonl: string, commitId: string): boolean {
+  for (const line of jsonl.split('\n')) {
+    if (line.trim().length === 0) continue;
+    try {
+      const parsed = JSON.parse(line) as { commitId?: unknown };
+      if (parsed.commitId === commitId) return true;
+    } catch {
+      // 坏行不参与判定（不静默删除现场）
+    }
+  }
+  return false;
+}
+
+// ── 发布串行化 ──────────────────────────────────────────────────
+
+const publishLocks = new Map<string, Promise<unknown>>();
+
+/**
+ * 串行化同一库的发布：并发 prepare/rename 会互相看到半成品页集。
+ *
+ * `prev.then(fn, fn)` 的 onRejected 也用 `fn`：前一次发布失败不应让
+ * 后续发布被 unhandled rejection 卡住（锁链只关心「排到队尾」）。
+ */
+export async function withPublishLock<T>(kbPath: string, fn: () => Promise<T>): Promise<T> {
+  const prev = publishLocks.get(kbPath) ?? Promise.resolve();
+  const run = prev.then(fn, fn);
+  publishLocks.set(kbPath, run.catch(() => undefined));
+  return run;
+}
+
+// ── 规划 ────────────────────────────────────────────────────────
+
+/**
+ * 校验并构建发布写集（**不改动磁盘**，仅做 schema 沙箱所需的目录创建）。
+ *
+ * 失败即返回结构化错误；`stale` 的批准失效由 `publishChangeSet` 负责落盘
+ * ——本函数保持可重放，方便测试逐步注入故障。
+ */
+export async function buildPublishPlan(
+  kbPath: string,
+  input: PublishChangeSetInput,
+): Promise<BuildPublishPlanResult> {
+  const csRes = await readChangeSet(kbPath, input.changeSetId);
+  if (!csRes.ok) return fail(mapStagingError(csRes.error.code), csRes.error.message);
+  const cs = csRes.value;
+
+  if (cs.kbId !== input.kbId) {
+    return fail('kbIdMismatch', `变更集 ${cs.changeSetId} 不属于库 ${input.kbId}`);
+  }
+  if (cs.pages.length === 0) {
+    return fail('invalidTarget', '变更集没有任何页面候选');
+  }
+  if (cs.pages.length > 1) {
+    return fail('multiPageUnsupported', '本票只开放单页变更集；多页发布会话由后续票接入（issue 07）');
+  }
+
+  const reviewRes = await readReview(kbPath, input.changeSetId);
+  if (!reviewRes.ok) return fail(mapStagingError(reviewRes.error.code), reviewRes.error.message);
+  const review = reviewRes.value;
+  if (review.published) {
+    return fail('alreadyPublished', `变更集已发布（commitId ${review.published.commitId}），不重复发布`);
+  }
+
+  const page = cs.pages[0];
+  if (!isPageAccepted(review, page)) {
+    return fail('nothingAccepted', '变更集没有已接受的候选页：拒绝或未处置不会改动正式资产');
+  }
+
+  // 沙箱再校验：schema 可能在 staging 之后变化（变动亦会由基线校验判 stale）
+  const typeDirs = await readTypeDirs(kbPath);
+  if (typeDirs === null) return fail('invalidTarget', 'schema.md 无法解析，拒绝发布（不回退无约束）');
+  const target = await validateProposalTarget(kbPath, page.relPath, typeDirs);
+  if (!target.ok) return fail('invalidTarget', `发布目标不可写: ${page.relPath} — ${target.reason}`);
+  const relPath = target.relPath;
+  const pageId = pageIdOf(relPath);
+
+  const routeType = routeTypeOf(relPath, typeDirs);
+  if (routeType === null) return fail('invalidTarget', `发布目标目录不在 schema 路由内: ${relPath}`);
+
+  const parse = parseWikiPage(page.proposed);
+  if (!parse.ok) {
+    return fail('invalidTarget', `提案页 frontmatter 非法: ${relPath} — ${parse.issues.map((i) => i.message).join('；')}`);
+  }
+
+  // ── 基线校验（读/写集、来源、规则）────────────────────────────
+  const staleReasons = await checkBaselines(kbPath, cs, page, relPath);
+  if (staleReasons.length > 0) {
+    return fail('stale', '发布前基线校验未通过：读/写集或来源/规则基线已变动，旧批准已失效。', staleReasons);
+  }
+
+  // ── 聚合页（发布后视图）──────────────────────────────────────
+  const scan = await scanWikiCatalog(kbPath);
+  if (!scan.ok) {
+    return fail('invalidTarget', `wiki/ 或 schema 无法解析，无法生成聚合页: ${scan.schemaIssues.map((i) => i.message).join('；')}`);
+  }
+  const catalog: WikiCatalog = {
+    ...scan.catalog,
+    pages: [
+      ...scan.catalog.pages.filter((p) => p.pageId !== pageId),
+      {
+        pageId,
+        relPath,
+        type: routeType,
+        kind: 'page',
+        parse,
+        routeMismatch: parse.frontmatter.type !== routeType,
+      } satisfies WikiCatalogPage,
+    ].sort((a, b) => a.pageId.localeCompare(b.pageId)),
+  };
+
+  // ── 其余写集内容 ─────────────────────────────────────────────
+  const layout = wikiLayout(kbPath);
+  const now = input.now ?? new Date().toISOString();
+  const commitId = input.commitId ?? randomUUID();
+  const warnings: string[] = [];
+
+  const manifestRes = await readWikiManifest(kbPath);
+  if (!manifestRes.ok) {
+    return fail('manifestCorrupted', `库 manifest 不可读（${manifestRes.reason}），拒绝发布`);
+  }
+  const revision = (manifestRes.manifest.publish?.revision ?? 0) + 1;
+
+  const operation = page.before === null ? 'create' as const : 'update' as const;
+  const afterHash = sha256Text(page.proposed);
+  const beforeHash = page.before === null ? null : page.baselineHash;
+
+  // log.md（同 commitId 幂等）
+  const logPath = join(layout.wikiDir, 'log.md');
+  const logExisting = await readTextOrNull(logPath);
+  const logEntry = buildWikiLogEntry({ at: now, operation: 'publish', subject: relPath, commitId });
+  if (logExisting !== null && logExisting.includes(commitId)) {
+    warnings.push(`wiki/log.md 已存在 commitId ${commitId}（重放），跳过重复追加。`);
+  }
+  const logContent = appendLogEntryIdempotent(logExisting, logEntry, commitId);
+
+  // 页面历史（同 commitId 幂等）
+  const historyPath = historyFilePath(kbPath, pageId);
+  const historyExisting = await readTextOrNull(historyPath);
+  if (historyExisting !== null && existingHasCommitId(historyExisting, commitId)) {
+    warnings.push(`页面历史已存在 commitId ${commitId}（重放），跳过重复追加。`);
+  }
+  const historyContent = appendHistoryEntryIdempotent(historyExisting, {
+    commitId,
+    changeSetId: cs.changeSetId,
+    pageId,
+    relPath,
+    operation,
+    beforeHash,
+    afterHash,
+    sources: page.sources,
+    at: now,
+  } satisfies WikiPageHistoryEntry);
+
+  const manifestContent = JSON.stringify({
+    ...manifestRes.manifest,
+    updatedAt: now,
+    publish: { revision, commitId, at: now },
+  }, null, 2);
+
+  const reviewContent = JSON.stringify({
+    ...review,
+    stale: null,
+    published: { commitId, revision, at: now },
+    updatedAt: now,
+  } satisfies WikiChangeSetReview, null, 2);
+
+  const writes: AtomicWritePlan['writes'] = [
+    { relPath, content: page.proposed },
+    { relPath: join('wiki', 'index.md').replace(/\\/g, '/'), content: buildWikiIndex(catalog) },
+    { relPath: 'wiki/overview.md', content: buildWikiOverview(catalog) },
+    { relPath: 'wiki/log.md', content: logContent },
+    { relPath: relativeTo(kbPath, historyPath), content: historyContent },
+    { relPath: relativeTo(kbPath, layout.manifestPath), content: manifestContent },
+    { relPath: relativeTo(kbPath, join(layout.reviewsDir, `${cs.changeSetId}.json`)), content: reviewContent },
+  ];
+
+  // 权限边界：写集只能落在受管范围内（不得扩到项目外任意路径）
+  for (const w of writes) {
+    const lexical = validateManagedRelPath(w.relPath);
+    if (!lexical.ok) return fail('invalidTarget', `写集目标非法: ${w.relPath} — ${lexical.reason}`);
+    const allowed = w.relPath.startsWith('wiki/') || w.relPath.startsWith('.kb/');
+    if (!allowed) return fail('invalidTarget', `写集目标越出受管范围: ${w.relPath}`);
+  }
+
+  // 事务清单审计字段（spec §6：commitId、读/写集 hash、before/after、
+  // 目标 revision、状态）。before/after 与状态由 atomic-commit 落盘，
+  // 读/写集与基线 hash 在这里算好后随 meta 一起持久。
+  const meta: Record<string, unknown> = {
+    changeSetId: cs.changeSetId,
+    taskId: cs.taskId,
+    origin: cs.origin,
+    revision,
+    changeSetRevision: revision,
+    schemaHash: cs.schemaHash,
+    purposeHash: cs.purposeHash,
+    readSetHash: sha256Text(JSON.stringify({
+      readBaseline: cs.readBaseline,
+      sources: cs.sources,
+    })),
+    writeSetHash: sha256Text(writes.map((w) => `${w.relPath}\n${w.content}`).join('\n')),
+    pages: [{ pageId, relPath, operation, beforeHash, afterHash }],
+  };
+
+  return {
+    ok: true,
+    plan: {
+      commitId,
+      changeSetId: cs.changeSetId,
+      revision,
+      pages: [{ pageId, relPath, operation, beforeHash, afterHash }],
+      writes,
+      meta,
+      warnings,
+    },
+  };
+}
+
+// ── 发布 ────────────────────────────────────────────────────────
+
+/**
+ * 发布一个整页变更集。
+ *
+ * 顺序：读取门禁 → 规划/基线校验 → （stale 时失效旧批准）→
+ * 原子提交（旧快照与清单持久 → 逐文件 rename → committed 标记与清理）。
+ * 任一步失败返回结构化错误，不把部分结果报告为成功。
+ *
+ * 并发：`withPublishLock` 串行化同库发布（并发 prepare/rename 会互相看到
+ * 半成品页集）；`withManifestLock` 与来源导入/转换的 manifest 读改写串行，
+ * 避免用旧的 `sources` 视图覆盖并发写入的来源修订。
+ */
+export async function publishChangeSet(
+  kbPath: string,
+  input: PublishChangeSetInput,
+): Promise<WikiPublishResult> {
+  return withPublishLock(kbPath, () => withManifestLock(kbPath, async (): Promise<WikiPublishResult> => {
+    try {
+      await assertReadGateOpen(kbPath);
+    } catch (err) {
+      if (err instanceof WikiReadGateError) {
+        return fail('readGateBlocked', err.message);
+      }
+      throw err;
+    }
+
+    const built = await buildPublishPlan(kbPath, input);
+    if (!built.ok) {
+      if (built.error.code === 'stale') {
+        await invalidateApproval(kbPath, input.changeSetId, built.error.detail ?? [], input.now);
+      }
+      return { ok: false, error: built.error };
+    }
+
+    const plan = built.plan;
+    const committed = await runAtomicCommit(kbPath, { txId: plan.commitId, writes: plan.writes, meta: plan.meta });
+    if (!committed.ok) {
+      return fail('ioError', `发布提交失败（目标保持完整旧版）: ${committed.error.message}`);
+    }
+
+    return {
+      ok: true,
+      commitId: plan.commitId,
+      revision: plan.revision,
+      pages: plan.pages,
+      warnings: plan.warnings,
+    };
+  }));
+}
+
+/**
+ * 准备阶段 + 完成阶段分离的发布入口。
+ *
+ * 与 `publishChangeSet` 等价，但把事务的两个阶段暴露给调用方/测试：
+ * `prepareCommit` 之后目标仍未改变（只有旧快照与清单持久），
+ * 便于在崩溃点与 rename 失败点注入故障验证「完整旧版 / 完整新版」。
+ * 计划持久化/完成阶段由调用方负责（issue 07 的多页发布沿用同一写集）。
+ *
+ * **调用方约束**：本入口不取发布锁、不查读取门禁，也不在
+ * prepare→complete 之间重新校验基线 —— 单进程内两步应连续调用，
+ * 与并发发布/导入串行化由调用方（或 `publishChangeSet`）负责。
+ */
+export async function preparePublish(
+  kbPath: string,
+  input: PublishChangeSetInput,
+): Promise<{ ok: true; plan: PublishPlan } | { ok: false; error: WikiPublishError }> {
+  const built = await buildPublishPlan(kbPath, input);
+  if (!built.ok) return built;
+  const prepared = await prepareCommit(kbPath, {
+    txId: built.plan.commitId,
+    writes: built.plan.writes,
+    meta: built.plan.meta,
+  });
+  if (!prepared.ok) {
+    return fail('ioError', `发布准备失败（目标未改变）: ${prepared.error.message}`);
+  }
+  return { ok: true, plan: built.plan };
+}
+
+/** 完成 `preparePublish` 开启的事务；失败时进程内回滚保持完整旧版。 */
+export async function completePublish(kbPath: string, commitId: string): Promise<{ ok: true } | { ok: false; error: WikiPublishError }> {
+  const done = await completeCommit(kbPath, commitId);
+  if (!done.ok) return fail('ioError', `发布提交失败（目标保持完整旧版）: ${done.error.message}`);
+  return { ok: true };
+}
+
+// ── 基线校验 ────────────────────────────────────────────────────
+
+/**
+ * 校验实际读/写集与来源/规则基线。返回非空即 stale。
+ *
+ * 覆盖 spec §6：「校验写集基线与实际参与推断的读集。若其他编译、回滚、
+ * 来源更新、规则修改或外部编辑改变基线，进入 stale」。
+ */
+async function checkBaselines(
+  kbPath: string,
+  cs: WikiChangeSet,
+  page: WikiStagedPage,
+  relPath: string,
+): Promise<string[]> {
+  const layout = wikiLayout(kbPath);
+  const reasons: string[] = [];
+
+  // 规则基线（schema/purpose）
+  if (await hashFileOrNull(layout.schemaMdPath) !== cs.schemaHash) {
+    reasons.push('规则基线变动：schema.md 与生成提案时不一致。');
+  }
+  if (await hashFileOrNull(layout.purposeMdPath) !== cs.purposeHash) {
+    reasons.push('规则基线变动：purpose.md 与生成提案时不一致。');
+  }
+
+  // 写集基线（外部编辑 / 目标被创建 / 目标被删除）
+  const current = await readTextOrNull(join(kbPath, relPath));
+  if (page.before === null) {
+    if (current !== null) {
+      reasons.push(`写集基线变动：新页目标 ${relPath} 已存在（提案基线为「不存在」）。`);
+    }
+  } else if (current === null) {
+    reasons.push(`写集基线变动：${relPath} 已不存在（提案基线为已发布页）。`);
+  } else if (sha256Text(current) !== page.baselineHash) {
+    reasons.push(`写集基线变动：${relPath} 内容与提案基线不一致（可能被外部编辑）。`);
+  }
+
+  // 来源基线：提案固定的 sourceRevision 必须是当前修订
+  const manifest = await readWikiManifest(kbPath);
+  if (manifest.ok) {
+    for (const ref of cs.sources) {
+      const record = manifest.manifest.sources?.[ref.sourceId];
+      if (!record) {
+        reasons.push(`来源基线变动：来源 ${ref.sourceId.slice(0, 8)} 已不存在（撤回或未登记）。`);
+      } else if (record.currentRevision !== ref.sourceRevision) {
+        reasons.push(
+          `来源基线变动：来源 ${ref.sourceId.slice(0, 8)} 修订已更新`
+          + `（${ref.sourceRevision.slice(0, 8)} → ${record.currentRevision.slice(0, 8)}）。`,
+        );
+      }
+    }
+  }
+
+  // 读集基线：本变更集参考过的已发布页必须与读取时一致
+  for (const rb of cs.readBaseline) {
+    const currentContent = await readTextOrNull(join(kbPath, 'wiki', `${rb.pageId}.md`));
+    if (currentContent === null) {
+      reasons.push(`读集基线变动：已发布页 ${rb.pageId} 已不存在。`);
+    } else if (sha256Text(currentContent) !== rb.hash) {
+      reasons.push(`读集基线变动：已发布页 ${rb.pageId} 内容已变化。`);
+    }
+  }
+
+  return reasons;
+}
+
+/**
+ * 基线变动时失效旧批准：决策全部重置为 pending 并记录 stale 原因。
+ *
+ * `staging.invalidateReview` 是 `.kb/reviews/` 的唯一写入口（展示/发布两侧
+ * 都不直接改审阅状态）；「不在批准之后悄悄做 LLM merge」——失效后必须
+ * 重新生成差异并重新批准。失效标记写失败不改变「不发布」的结论：旧批准
+ * 每次发布都会重新校验基线，不会因此被误用。
+ */
+async function invalidateApproval(
+  kbPath: string,
+  changeSetId: string,
+  reasons: string[],
+  now?: string,
+): Promise<void> {
+  await invalidateReview(kbPath, changeSetId, reasons, now);
+}
+
+// ── 内部工具 ────────────────────────────────────────────────────
+
+function isPageAccepted(review: WikiChangeSetReview, page: WikiStagedPage): boolean {
+  const pr = review.pages.find((p) => p.relPath === page.relPath);
+  if (!pr) return false;
+  if (pr.pageDecision === 'accepted') return true;
+  return Object.values(pr.hunkStates).some((s) => s === 'accepted');
+}
+
+function pageIdOf(relPath: string): string {
+  return relPath.slice('wiki/'.length, -3);
+}
+
+function routeTypeOf(relPath: string, typeDirs: Record<WikiPageType, string>): WikiPageType | null {
+  const pageId = pageIdOf(relPath);
+  const dir = pageId.includes('/') ? pageId.slice(0, pageId.lastIndexOf('/')) : '';
+  const normalized = normalizeDir(dir);
+  for (const [type, d] of Object.entries(typeDirs) as Array<[WikiPageType, string]>) {
+    if (normalizeDir(d) === normalized) return type;
+  }
+  return null;
+}
+
+function normalizeDir(dir: string): string {
+  return dir.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').toLowerCase();
+}
+
+/** 库内相对路径（统一 `/`），用于写集目标 */
+function relativeTo(kbPath: string, absPath: string): string {
+  const rel = absPath.slice(kbPath.length).replace(/^[/\\]+/, '');
+  return rel.replace(/\\/g, '/');
+}
+
+function mapStagingError(code: string): WikiPublishErrorCode {
+  if (code === 'changeSetNotFound') return 'changeSetNotFound';
+  if (code === 'stagingCorrupted') return 'stagingCorrupted';
+  return 'ioError';
+}
