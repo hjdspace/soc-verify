@@ -46,14 +46,31 @@ class ROStub {
     for (const [el, cb] of roCallbacks) if (cb === this.cb) roCallbacks.delete(el);
   }
 }
-const fireResize = (el: Element | null): void => {
+/** Flush pending rAF microtasks so TagList's measure callback runs before assertions. */
+const flushRaf = async (): Promise<void> => {
+  await act(async () => { await Promise.resolve(); });
+};
+
+const fireResize = async (el: Element | null): Promise<void> => {
   act(() => {
     roCallbacks.get(el ?? document.body)?.([]);
   });
+  await flushRaf();
 };
 
 beforeEach(() => {
   vi.stubGlobal('ResizeObserver', ROStub);
+  // TagList 的 rAF 合并：`frame = rAF(cb)` → cb 内 `frame = null`。
+  // 同步 mock 下返回值会覆盖 cb 设置的 null（0 ≠ null），导致后续
+  // update() 被 `if (frame !== null) return` 拦截。用微任务延迟 cb
+  // 执行：先返回非 null ID，cb 在微任务中将 frame 重置为 null。
+  let rafId = 1;
+  vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback): number => {
+    const id = rafId++;
+    queueMicrotask(() => cb(0));
+    return id;
+  });
+  vi.stubGlobal('cancelAnimationFrame', (_handle: number): void => {});
   vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
     if (this.dataset.tagMeasure !== undefined) return layout.tagWidths[this.textContent ?? ''] ?? 0;
     if (this.dataset.moreMeasure !== undefined) return layout.moreWidth;
@@ -139,43 +156,46 @@ describe('TagList 组件', () => {
     expect(moreBadge()).toBeNull();
   });
 
-  it('窄容器折叠为 +N：只保留放得下的前缀，徽标计数正确', () => {
+  it('窄容器折叠为 +N：只保留放得下的前缀，徽标计数正确', async () => {
     for (const t of TAGS) layout.tagWidths[t.label] = 60;
     layout.containerWidth = 100;
     // idx0：60 + (4+34) = 98 ≤ 100 ✓；idx1：60+4+60 = 124 > 100 → 1 个 + 2
     render(<TagList items={TAGS} />);
+    await flushRaf();
     expect(visibleTags()).toEqual(['Alpha']);
     expect(moreBadge()).toBe('+2');
   });
 
-  it('title / aria-label 保留全部标签（隐藏项可达）', () => {
+  it('title / aria-label 保留全部标签（隐藏项可达）', async () => {
     for (const t of TAGS) layout.tagWidths[t.label] = 60;
     layout.containerWidth = 100;
     render(<TagList items={TAGS} />);
+    await flushRaf();
     const root = tagsRoot();
     expect(root).toHaveAttribute('title', 'Alpha、Beta、Gamma');
     expect(root).toHaveAttribute('aria-label', 'Alpha、Beta、Gamma');
   });
 
-  it('ResizeObserver 随容器变宽实时重算（列宽拖拽重算缝）', () => {
+  it('ResizeObserver 随容器变宽实时重算（列宽拖拽重算缝）', async () => {
     for (const t of TAGS) layout.tagWidths[t.label] = 60;
     layout.containerWidth = 100;
     const { container } = render(<TagList items={TAGS} />);
+    await flushRaf();
     expect(moreBadge()).toBe('+2');
 
     layout.containerWidth = 400;
-    fireResize(container.querySelector('.ap-tags'));
+    await fireResize(container.querySelector('.ap-tags'));
     expect(visibleTags()).toEqual(['Alpha', 'Beta', 'Gamma']);
     expect(moreBadge()).toBeNull();
 
     layout.containerWidth = 60;
-    fireResize(container.querySelector('.ap-tags'));
+    await fireResize(container.querySelector('.ap-tags'));
     // 60 + 34 = 94 > 60 → 一个都放不下
     expect(visibleTags()).toEqual([]);
     expect(moreBadge()).toBe('+3');
   });
 
-  it('items 引用变化即重算（宿主数据刷新折叠态跟随）', () => {
+  it('items 引用变化即重算（宿主数据刷新折叠态跟随）', async () => {
     for (const t of TAGS) layout.tagWidths[t.label] = 60;
     layout.containerWidth = 100;
     const next: ReadonlyArray<TagItem> = [
@@ -196,8 +216,10 @@ describe('TagList 组件', () => {
       );
     }
     render(<HostWithTag />);
+    await flushRaf();
     expect(moreBadge()).toBe('+2');
     fireEvent.click(screen.getByTestId('swap'));
+    await flushRaf();
     // Xs：60 + (4+34) = 98 ≤ 100 ✓；Ys：60+4+60+34 = 162 > 100 → 1 个 + 1
     expect(visibleTags()).toEqual(['Xs']);
     expect(moreBadge()).toBe('+1');
@@ -259,9 +281,10 @@ function ResizeHost() {
 }
 
 describe('组合：useColumnResize 拖拽 + TagList RO 重算', () => {
-  it('拖拽改列宽（minWidth 夹紧）→ TagList 经 ResizeObserver 重新折叠', () => {
+  it('拖拽改列宽（minWidth 夹紧）→ TagList 经 ResizeObserver 重新折叠', async () => {
     for (const t of TAGS) layout.tagWidths[t.label] = 60;
     render(<ResizeHost />);
+    await flushRaf();
 
     // 首帧测量锁定：colgroup 取 th 实测宽度
     expect(screen.getByTestId('col-a')).toHaveStyle({ width: '200px' });
@@ -275,7 +298,7 @@ describe('组合：useColumnResize 拖拽 + TagList RO 重算', () => {
     expect(screen.getByTestId('col-a')).toHaveStyle({ width: '140px' });
 
     layout.containerWidth = 140;
-    fireResize(tagsRoot());
+    await fireResize(tagsRoot());
     // Alpha：60 + (4+34) = 98 ≤ 140 ✓；Beta：60+4+60+(4+34) = 162 > 140 → 1 个 + 2
     expect(moreBadge()).toBe('+2');
 

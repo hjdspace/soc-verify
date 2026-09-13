@@ -51,7 +51,7 @@ const { MockAgentClient } = vi.hoisted(() => {
     started = false;
     stopped = false;
     destroyed = false;
-    engine = 'omp' as const;
+    engine = 'pi' as const;
     initResult = { engineSessionId: 'omp-session-test' };
     eventListeners: Array<(event: unknown) => void> = [];
     toolCallHandler: unknown = null;
@@ -198,7 +198,7 @@ describe('SessionManager — token monitor bypass', () => {
     expect(eventArg).toEqual(messageEndEvent);
     expect(ctxArg).toMatchObject({
       sessionId: id,
-      engine: 'omp',
+      engine: 'pi',
       projectId: 'proj-1',
       cwd: '/proj/test',
     });
