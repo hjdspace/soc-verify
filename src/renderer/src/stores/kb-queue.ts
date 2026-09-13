@@ -109,7 +109,15 @@ export const useKbQueueStore = create<KbQueueState>((set, get) => ({
     const tasks = [...base.tasks];
     if (idx >= 0) {
       const prev = tasks[idx]!;
-      tasks[idx] = { ...prev, phase: e.phase, attemptId: e.attemptId, lastError: e.lastError ?? null };
+      tasks[idx] = {
+        ...prev,
+        phase: e.phase,
+        attemptId: e.attemptId,
+        lastError: e.lastError ?? null,
+        // usage/retryCount 缺省表示本次事件未变化（保留上一次已知值）
+        usage: e.usage ?? prev.usage ?? null,
+        retryCount: e.retryCount ?? prev.retryCount ?? 0,
+      };
     } else {
       tasks.push({
         taskId: e.taskId,
@@ -121,6 +129,8 @@ export const useKbQueueStore = create<KbQueueState>((set, get) => ({
         attemptId: e.attemptId,
         attempt: 0,
         lastError: e.lastError ?? null,
+        usage: e.usage ?? null,
+        retryCount: e.retryCount ?? 0,
         enqueuedAt: new Date(0).toISOString(),
         updatedAt: new Date(0).toISOString(),
       });

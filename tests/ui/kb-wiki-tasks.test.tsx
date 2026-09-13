@@ -46,6 +46,8 @@ const { snapshot, sources } = vi.hoisted(() => {
         attemptId: 'att-2',
         attempt: 2,
         lastError: { code: 'encrypted', message: '文档已加密，无法读取', at: '2026-01-01T00:00:01.000Z' },
+        usage: { inputTokens: 1_200, outputTokens: 340 },
+        retryCount: 2,
         enqueuedAt: '2026-01-01T00:00:00.000Z',
         updatedAt: '2026-01-01T00:00:01.000Z',
       },
@@ -280,5 +282,33 @@ describe('KbWikiTasks 导入任务面板（issue 03）', () => {
     await waitFor(() =>
       expect(mocks.queueRetryMutate).toHaveBeenCalledWith({ taskId: 'task-2' }),
     );
+  });
+
+  it('任务行展示重试次数与 usage（issue 09），失败原因同时可见', async () => {
+    render(<KbWikiTasks />);
+    await waitFor(() => expect(screen.getByText('docs/beta.docx')).toBeTruthy());
+
+    expect(screen.getByText('已重试 2 次')).toBeTruthy();
+    expect(screen.getByText('tokens 入 1200 / 出 340')).toBeTruthy();
+    expect(screen.getByText(/文档已加密，无法读取/)).toBeTruthy();
+  });
+
+  it('kb:task 事件可刷新重试次数与 usage（issue 09）', async () => {
+    render(<KbWikiTasks />);
+    await waitFor(() => expect(screen.getByText('排队中')).toBeTruthy());
+
+    kbTaskCallbacks[0]!({
+      type: 'task',
+      kbId: 'kb-1',
+      seq: 11,
+      taskId: 'task-1',
+      attemptId: 'att-1',
+      phase: 'done',
+      lastError: null,
+      usage: { inputTokens: 50, outputTokens: 20 },
+      retryCount: 1,
+    });
+    await waitFor(() => expect(screen.getByText('已重试 1 次')).toBeTruthy());
+    expect(screen.getByText('tokens 入 50 / 出 20')).toBeTruthy();
   });
 });

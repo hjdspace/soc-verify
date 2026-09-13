@@ -15,7 +15,7 @@ import { useKbQueueStore } from '@renderer/stores/kb-queue';
 import { useKbStore } from '@renderer/stores/kb';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
-import type { WikiIngestPhase, WikiIngestTask, WikiSourceSummary } from '@shared/kb-types';
+import type { WikiIngestPhase, WikiIngestTask, WikiSourceSummary, WikiTaskUsage } from '@shared/kb-types';
 
 const PHASE_LABELS: Record<WikiIngestPhase, string> = {
   queued: '排队中',
@@ -66,12 +66,27 @@ function PhaseChip({ phase }: { phase: WikiIngestPhase }) {
   );
 }
 
+/**
+ * 任务用量文本（issue 09）：只展示 API 实际给出的字段，
+ * 全部缺失时返回空串（不显示伪造的 0 用量）。
+ */
+function usageText(usage: WikiTaskUsage | null | undefined): string {
+  if (!usage) return '';
+  const parts: string[] = [];
+  if (usage.inputTokens !== undefined) parts.push(`入 ${usage.inputTokens}`);
+  if (usage.outputTokens !== undefined) parts.push(`出 ${usage.outputTokens}`);
+  if (parts.length === 0 && usage.totalTokens !== undefined) parts.push(`共 ${usage.totalTokens}`);
+  return parts.length > 0 ? `tokens ${parts.join(' / ')}` : '';
+}
+
 function TaskRow({ task, index, total }: { task: WikiIngestTask; index: number; total: number }) {
   const cancel = useKbQueueStore((s) => s.cancel);
   const retry = useKbQueueStore((s) => s.retry);
   const move = useKbQueueStore((s) => s.move);
 
   const active = task.phase === 'queued' || task.phase === 'converting' || task.phase === 'committing';
+  const usage = usageText(task.usage);
+  const retryCount = task.retryCount ?? 0;
 
   return (
     <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2 text-xs last:border-b-0">
@@ -83,6 +98,14 @@ function TaskRow({ task, index, total }: { task: WikiIngestTask; index: number; 
           <PhaseChip phase={task.phase} />
           <span className="shrink-0 text-[10px] text-muted-foreground">第 {task.attempt} 次尝试</span>
         </div>
+        {(retryCount > 0 || usage) && (
+          <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
+            {retryCount > 0 && (
+              <span title="模型调用内部有界退避重试次数">已重试 {retryCount} 次</span>
+            )}
+            {usage && <span title="本次尝试 token 用量">{usage}</span>}
+          </div>
+        )}
         {task.lastError && (
           <div className="mt-0.5 truncate text-[10px] text-red-500" title={`${task.lastError.code}: ${task.lastError.message}`}>
             {task.lastError.message}

@@ -10,13 +10,15 @@
  *  - 结束状态（finish_reason / stop_reason / finishReason / status）
  *    缺失时为 null；
  *  - 失败以 LlmCallError 表达，retryable 指示是否值得自动重试
- *    （429/5xx/网络/超时/坏响应可重试，4xx 不可）；
+ *    （408/429/5xx/网络/超时/坏响应可重试；401/403/404 等 4xx 不可）；
+ *  - 429/503 给出的 Retry-After 以 retryAfterMs 供调用方遵循（有界）；
  *  - 外部 AbortSignal 可取消（含请求中途取消）；
  *  - 错误消息端点脱敏（gemini key 在查询串中，绝不进入消息/日志）。
  *
  * 分类（indexer.classifyOnce）与编译（compile.ts）共同消费此层。
+ * 本层不含重试循环 —— 重试策略（有界退避 + Retry-After）由调用方决定。
  *
- * @see docs/prd/knowledge-base-llm-wiki-spec.md §4
+ * @see docs/prd/knowledge-base-llm-wiki-spec.md §4、§5
  */
 
 import { buildDirectChatRequest, extractOpenAiFamilyContent } from '../agent/openai-compatible';
@@ -53,10 +55,87 @@ export type LlmCallRequest = {
 /** 调用失败。retryable=true 表示超时/网络/429/5xx/坏响应等可自动重试。 */
 export class LlmCallError extends Error {
   readonly retryable: boolean;
-  constructor(message: string, retryable: boolean) {
+  /** HTTP 状态码（网络/超时等未经过 HTTP 的错误为 undefined） */
+  readonly status?: number;
+  /**
+   * 服务端建议的重试等待毫秒数（来自 Retry-After，已做上限截断）。
+   * 仅在 retryable 为 true 且响应确实给出该头时存在 —— 不伪造默认值。
+   */
+  readonly retryAfterMs?: number;
+
+  constructor(message: string, retryable: boolean, opts: { status?: number; retryAfterMs?: number } = {}) {
     super(message);
     this.name = 'LlmCallError';
     this.retryable = retryable;
+    if (opts.status !== undefined) this.status = opts.status;
+    if (opts.retryAfterMs !== undefined) this.retryAfterMs = opts.retryAfterMs;
+  }
+}
+
+// ── 重试建议（Retry-After）─────────────────────────────────────
+
+/** Retry-After 上限：服务端给出夸张等待时不至于挂住队列（spec §5 有界退避） */
+export const MAX_RETRY_AFTER_MS = 60_000;
+
+/**
+ * 解析 Retry-After 头（秒数或 HTTP 日期）。
+ *
+ * 返回等待毫秒数（0 = 立即可重试）；缺失/非法返回 undefined
+ * —— 不伪造建议值，由调用方的默认退避兜底。
+ */
+export function parseRetryAfter(value: string | null, now: number = Date.now()): number | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return undefined;
+
+  if (/^\d+$/.test(trimmed)) {
+    const seconds = Number(trimmed);
+    if (!Number.isFinite(seconds)) return undefined;
+    return Math.min(seconds * 1_000, MAX_RETRY_AFTER_MS);
+  }
+
+  const at = Date.parse(trimmed);
+  if (Number.isNaN(at)) return undefined;
+  const delta = at - now;
+  if (delta <= 0) return 0;
+  return Math.min(delta, MAX_RETRY_AFTER_MS);
+}
+
+/**
+ * 是否值得自动重试该 HTTP 状态。
+ *
+ * 可重试：408 请求超时、429 限流、5xx 服务端错误。
+ * 不可重试：401/403（认证与权限）、404（坏模型/端点不存在）及其余 4xx
+ * —— 重试只会延迟配置问题的暴露（spec §5：401/403、坏模型阻止自动重试）。
+ */
+export function isRetryableStatus(status: number): boolean {
+  return status === 408 || status === 429 || status >= 500;
+}
+
+/**
+ * 不可重试（配置类）失败的修复入口提示；无对应提示时返回空串。
+ *
+ * 单一拥有者：错误消息构造（本模块）与编译层的失败提示都消费此函数，
+ * 避免两处文案漂移。提示只描述配置入口，不含任何凭证信息。
+ */
+export function configHintForStatus(status: number | undefined): string {
+  if (status === 401 || status === 403) {
+    return '（认证或权限失败，已停止自动重试；请在设置 → 凭证管理检查 API Key 与权限）';
+  }
+  if (status === 404) {
+    return '（模型或端点不存在，已停止自动重试；请在设置中确认模型名与 baseUrl）';
+  }
+  return '';
+}
+
+/** 从响应读取响应头值（测试替身可能没有 headers） */
+function readHeader(response: Response, name: string): string | null {
+  const headers = response.headers;
+  if (!headers || typeof headers.get !== 'function') return null;
+  try {
+    return headers.get(name);
+  } catch {
+    return null;
   }
 }
 
@@ -251,10 +330,18 @@ export async function callLlm(config: LlmConfig, req: LlmCallRequest): Promise<L
 
     if (!response.ok) {
       const details = await response.text().catch(() => '');
-      const retryable = response.status === 429 || response.status >= 500;
+      const retryable = isRetryableStatus(response.status);
+      // Retry-After 只在可重试失败上采信（429/503 才有意义）
+      const retryAfterMs = retryable
+        ? parseRetryAfter(readHeader(response, 'retry-after'))
+        : undefined;
       throw new LlmCallError(
-        `LLM API 返回 ${response.status}: ${details.slice(0, 200)}（模型 ${config.model} @ ${safeEndpoint(plan.url)}）`,
+        `LLM API 返回 ${response.status}: ${details.slice(0, 200)}（模型 ${config.model} @ ${safeEndpoint(plan.url)}）`
+        + configHintForStatus(response.status),
         retryable,
+        retryAfterMs === undefined
+          ? { status: response.status }
+          : { status: response.status, retryAfterMs },
       );
     }
 

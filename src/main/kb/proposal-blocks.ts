@@ -39,6 +39,31 @@ export type ParseFileProposalResult =
     }
   | { ok: false; error: { code: 'duplicateTarget'; path: string; message: string } };
 
+// ── 路径归一 ────────────────────────────────────────────────────
+
+/**
+ * 提案路径归一：去首尾空白、`\` → `/`、去 `./` 前缀、统一小写。
+ *
+ * 用于「同一目标」判定（重复块、既定修复目标、来源摘要页比对）。
+ * Windows/macOS 文件系统不区分大小写，`Wiki/Concepts/A.md` 与
+ * `wiki/concepts/a.md` 落盘是同一个文件 —— 若不归一，重复块会绕过
+ * 检测并用最后一个静默覆盖。
+ *
+ * 归一只用于比较；落盘路径仍以词法校验后的 `normalized` 为准。
+ */
+export function normalizeProposalPath(path: string): string {
+  let s = path.trim().replace(/\\/g, '/');
+  while (s.startsWith('./')) s = s.slice(2);
+  return s.toLowerCase();
+}
+
+/** 已解析的块还原为提案文本（CRLF 归一，便于二次校验/落盘） */
+export function serializeProposalFiles(files: readonly ParsedProposalFile[]): string {
+  return files
+    .map((f) => `---FILE: ${f.path}---\n${f.content.replace(/\r\n/g, '\n')}\n---END FILE---`)
+    .join('\n\n');
+}
+
 // ── 有限状态解析 ────────────────────────────────────────────────
 
 /** opener：整行 `---FILE: <path>---`（大小写不敏感，容许内部空白） */
@@ -130,7 +155,7 @@ export function parseFileProposal(text: string): ParseFileProposalResult {
       continue;
     }
 
-    if (seen.has(path)) {
+    if (seen.has(normalizeProposalPath(path))) {
       return {
         ok: false,
         error: {
@@ -140,11 +165,82 @@ export function parseFileProposal(text: string): ParseFileProposalResult {
         },
       };
     }
-    seen.add(path);
+    seen.add(normalizeProposalPath(path));
     files.push({ path, content: contentLines.join('\n') });
   }
 
   return { ok: true, files, warnings, truncated };
+}
+
+// ── 有界修复输出过滤（issue 09）────────────────────────────────
+
+export type RepairOutputFilter = {
+  /** 被接受的块（只可能是既定目标路径） */
+  files: ParsedProposalFile[];
+  /** 被丢弃的未请求路径 */
+  dropped: string[];
+  /** 修复输出内重复出现的既定目标路径 */
+  duplicates: string[];
+  /** 修复输出中仍未闭合的既定目标路径（修复未成功） */
+  truncated: string[];
+  warnings: string[];
+};
+
+/**
+ * 过滤「截断修复」调用返回的提案文本。
+ *
+ * spec §4：「修复目标限制为缺失/截断的路径」。修复调用可能顺手重生成
+ * 其他页面或重复块 —— 本函数只接受 `allowedPaths` 内的块，其余可见地
+ * 丢弃（绝不因为顺带给出就扩大写入范围）。
+ *
+ * 修复输出自身重复目标 → 整批拒绝（与 parseFileProposal 同语义：
+ * 不用最后一个静默覆盖，不产出半成品）。
+ */
+export function filterTruncatedFileRepairOutput(
+  text: string,
+  allowedPaths: readonly string[],
+): RepairOutputFilter {
+  const allowed = new Set(allowedPaths.map(normalizeProposalPath));
+  const parsed = parseFileProposal(text);
+
+  if (!parsed.ok) {
+    return {
+      files: [],
+      dropped: [],
+      duplicates: [parsed.error.path],
+      truncated: [],
+      warnings: [`修复输出解析失败: ${parsed.error.message}`],
+    };
+  }
+
+  const seen = new Set<string>();
+  const files: ParsedProposalFile[] = [];
+  const dropped: string[] = [];
+  const duplicates: string[] = [];
+
+  for (const file of parsed.files) {
+    const key = normalizeProposalPath(file.path);
+    if (!allowed.has(key)) {
+      dropped.push(file.path);
+      continue;
+    }
+    if (seen.has(key)) {
+      duplicates.push(file.path);
+      continue;
+    }
+    seen.add(key);
+    files.push(file);
+  }
+
+  const truncated = parsed.truncated.filter((p) => allowed.has(normalizeProposalPath(p)));
+  const warnings = [...parsed.warnings];
+  if (dropped.length > 0) {
+    warnings.push(`修复输出含未请求的 FILE 块（已丢弃，不扩大写入范围）: ${dropped.join('、')}`);
+  }
+  if (duplicates.length > 0) {
+    warnings.push(`修复输出含重复 FILE 块（已丢弃）: ${duplicates.join('、')}`);
+  }
+  return { files, dropped, duplicates, truncated, warnings };
 }
 
 // ── 路径沙箱 ────────────────────────────────────────────────────
@@ -157,20 +253,23 @@ const FORBIDDEN_PREFIXES = ['raw/', '.kb/'];
 
 export type ProposalTargetCheck = { ok: true; relPath: string } | { ok: false; reason: string };
 
+export type TargetRouteCheck =
+  | { ok: true; normalized: string }
+  | { ok: false; reason: string };
+
 /**
- * 校验单个 FILE 目标是否落在可写沙箱内。
+ * 目标的纯词法/路由校验（不触碰磁盘）。
  *
- * 规则（spec §4）：
- *  1. 词法：path-guard 拒绝绝对/穿越/ADS/保留名；
- *  2. 必须是 `wiki/<路由目录>/...md`，且目录属于当前 schema 路由；
- *  3. schema.md / purpose.md / 聚合页 / raw/ / .kb/ 一律拒绝；
- *  4. 真实父目录 realpath 围栏，防 junction/symlink 逃逸。
+ * 规则：词法（path-guard）→ 库根元数据 → 受管子树 → 必须 wiki/ 下
+ * Markdown → 非聚合页 → 目录在 schema 路由内。
+ *
+ * 供 `validateProposalTarget` 与编译有界修复的「修复目标是否合法」
+ * 共用一个判定（避免两处规则漂移）。
  */
-export async function validateProposalTarget(
-  kbPath: string,
+export function checkTargetRoute(
   relPath: string,
   typeDirs: Record<WikiPageType, string>,
-): Promise<ProposalTargetCheck> {
+): TargetRouteCheck {
   const lexical = validateManagedRelPath(relPath);
   if (!lexical.ok) return { ok: false, reason: lexical.reason };
   const normalized = lexical.normalized;
@@ -214,6 +313,25 @@ export async function validateProposalTarget(
   if (!allowed) {
     return { ok: false, reason: `FILE 目标目录不在 schema 路由内: ${normalized}` };
   }
+
+  return { ok: true, normalized };
+}
+
+/**
+ * 校验单个 FILE 目标是否落在可写沙箱内。
+ *
+ * 规则（spec §4）：
+ *  1. 纯词法/路由校验（checkTargetRoute）；
+ *  2. 真实父目录 realpath 围栏，防 junction/symlink 逃逸。
+ */
+export async function validateProposalTarget(
+  kbPath: string,
+  relPath: string,
+  typeDirs: Record<WikiPageType, string>,
+): Promise<ProposalTargetCheck> {
+  const check = checkTargetRoute(relPath, typeDirs);
+  if (!check.ok) return { ok: false, reason: check.reason };
+  const normalized = check.normalized;
 
   // 真实父目录围栏。
   //

@@ -7,7 +7,15 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { callLlm, LlmCallError, type LlmCallResult } from '../src/main/kb/llm-call';
+import {
+  callLlm,
+  LlmCallError,
+  parseRetryAfter,
+  configHintForStatus,
+  isRetryableStatus,
+  MAX_RETRY_AFTER_MS,
+  type LlmCallResult,
+} from '../src/main/kb/llm-call';
 import type { LlmConfig } from '../src/main/kb/llm-config';
 
 const config: LlmConfig = {
@@ -216,5 +224,99 @@ describe('callLlm — 失败与取消', () => {
     const err = await pending.catch((e: unknown) => e);
     expect(err).toBeInstanceOf(LlmCallError);
     expect((err as LlmCallError).retryable).toBe(true);
+  });
+});
+
+// ── issue 09：重试建议与不可重试分类 ─────────────────────────────
+
+/** 构造带响应头的非 2xx 响应（headers 用小写 key） */
+function errorResponse(status: number, headers?: Record<string, string>): Response {
+  return {
+    ok: false,
+    status,
+    text: async () => 'boom',
+    headers: headers
+      ? { get: (k: string) => headers[k.toLowerCase()] ?? null }
+      : undefined,
+  } as unknown as Response;
+}
+
+describe('callLlm — 重试建议与不可重试分类（issue 09）', () => {
+  it('429 携带 Retry-After（秒）→ LlmCallError.retryAfterMs 给出建议等待', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(errorResponse(429, { 'retry-after': '2' }));
+    const err = await callLlm({ ...config, fetchFn: fetchMock as unknown as typeof fetch }, {
+      system: 's',
+      user: 'u',
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(LlmCallError);
+    expect((err as LlmCallError).retryable).toBe(true);
+    expect((err as LlmCallError).status).toBe(429);
+    expect((err as LlmCallError).retryAfterMs).toBe(2_000);
+  });
+
+  it('Retry-After 为 HTTP 日期 → 换算剩余毫秒；非法值忽略（不伪造）', async () => {
+    const future = new Date(Date.now() + 5_000).toUTCString();
+    const fetchMock = vi.fn().mockResolvedValue(errorResponse(503, { 'retry-after': future }));
+    const dated = await callLlm({ ...config, fetchFn: fetchMock as unknown as typeof fetch }, {
+      system: 's',
+      user: 'u',
+    }).catch((e: unknown) => e);
+    expect((dated as LlmCallError).retryAfterMs).toBeGreaterThan(3_000);
+    expect((dated as LlmCallError).retryAfterMs).toBeLessThanOrEqual(MAX_RETRY_AFTER_MS);
+
+    const badMock = vi.fn().mockResolvedValue(errorResponse(429, { 'retry-after': 'not-a-date' }));
+    const bad = await callLlm({ ...config, fetchFn: badMock as unknown as typeof fetch }, {
+      system: 's',
+      user: 'u',
+    }).catch((e: unknown) => e);
+    expect((bad as LlmCallError).retryAfterMs).toBeUndefined();
+  });
+
+  it('认证/坏模型（401/403/404）不可自动重试，状态码与配置入口可读', async () => {
+    for (const status of [401, 403, 404]) {
+      const fetchMock = vi.fn().mockResolvedValue(errorResponse(status, { 'retry-after': '1' }));
+      const err = await callLlm({ ...config, fetchFn: fetchMock as unknown as typeof fetch }, {
+        system: 's',
+        user: 'u',
+      }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(LlmCallError);
+      expect((err as LlmCallError).retryable).toBe(false);
+      expect((err as LlmCallError).status).toBe(status);
+      // 不可重试的响应不采信 Retry-After
+      expect((err as LlmCallError).retryAfterMs).toBeUndefined();
+      expect((err as LlmCallError).message).toContain(String(status));
+      // 配置入口提示由本层统一注入（单一拥有者，compile 层不重复拼接）
+      expect((err as LlmCallError).message).toContain(configHintForStatus(status));
+    }
+    expect(configHintForStatus(401)).toContain('凭证');
+    expect(configHintForStatus(404)).toContain('baseUrl');
+    expect(configHintForStatus(429)).toBe('');
+  });
+
+  it('可重试状态分类是单一拥有者：408/429/5xx 可重试，其余 4xx 不可', () => {
+    for (const status of [408, 429, 500, 503]) expect(isRetryableStatus(status)).toBe(true);
+    for (const status of [400, 401, 403, 404, 422]) expect(isRetryableStatus(status)).toBe(false);
+    expect(configHintForStatus(400)).toBe('');
+  });
+
+  it('错误消息不含凭证（gemini key 在查询串中也必须脱敏）', async () => {    const fetchMock = vi.fn().mockResolvedValue(errorResponse(429));
+    const err = await callLlm(
+      { ...config, providerId: 'google', apiKey: 'sk-super-secret', fetchFn: fetchMock as unknown as typeof fetch },
+      { system: 's', user: 'u' },
+    ).catch((e: unknown) => e);
+    expect((err as LlmCallError).message).not.toContain('sk-super-secret');
+  });
+});
+
+describe('parseRetryAfter — 有界解析', () => {
+  it('秒数与 HTTP 日期均支持，超大值截断到上限', () => {
+    expect(parseRetryAfter('3')).toBe(3_000);
+    expect(parseRetryAfter('99999')).toBe(MAX_RETRY_AFTER_MS);
+    expect(parseRetryAfter('abc')).toBeUndefined();
+    expect(parseRetryAfter('')).toBeUndefined();
+    expect(parseRetryAfter(null)).toBeUndefined();
+    // 过期日期视为立即可重试
+    const past = new Date(Date.now() - 10_000).toUTCString();
+    expect(parseRetryAfter(past)).toBe(0);
   });
 });

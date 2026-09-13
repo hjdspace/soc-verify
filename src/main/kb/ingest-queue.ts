@@ -34,6 +34,7 @@ import { convertWikiSource, WikiSourceAbortedError } from './source-import';
 import type { SourceConvertOutcome } from './source-import';
 import { compileWikiSource, createDefaultCompileLlmFactory } from './compile';
 import type { CompileLlm, CompileSuccess } from './compile';
+import type { LlmUsage } from './llm-call';
 import type {
   WikiIngestPhase,
   WikiIngestTask,
@@ -41,6 +42,7 @@ import type {
   WikiQueueSnapshot,
   WikiTaskError,
   WikiTaskEvent,
+  WikiTaskUsage,
 } from '@shared/kb-types';
 
 // ── 常量与工具 ──────────────────────────────────────────────────
@@ -78,7 +80,11 @@ function queueFilePath(kbPath: string): string {
 }
 
 function cloneTask(t: WikiIngestTask): WikiIngestTask {
-  return { ...t, lastError: t.lastError ? { ...t.lastError } : null };
+  return {
+    ...t,
+    lastError: t.lastError ? { ...t.lastError } : null,
+    usage: t.usage ? { ...t.usage } : null,
+  };
 }
 
 function isRecord(u: unknown): u is Record<string, unknown> {
@@ -146,6 +152,7 @@ function parseTask(u: unknown, kbId: string): WikiIngestTask | null {
     }
     error = { code: lastError.code, message: lastError.message, at: lastError.at };
   }
+  // issue 09 新增字段：旧队列文件缺失时用中性默认（不进任务文件不伪造用量）
   return {
     taskId,
     kbId,
@@ -156,9 +163,50 @@ function parseTask(u: unknown, kbId: string): WikiIngestTask | null {
     attemptId,
     attempt,
     lastError: error,
+    usage: parseTaskUsage(u.usage),
+    retryCount:
+      typeof u.retryCount === 'number' && Number.isInteger(u.retryCount) && u.retryCount >= 0
+        ? u.retryCount
+        : 0,
     enqueuedAt,
     updatedAt,
   };
+}
+
+/** 持久形态的 usage：只接受有限数字字段，其余忽略（未知字段不伪造） */
+function parseTaskUsage(value: unknown): WikiTaskUsage | null {
+  if (!isRecord(value)) return null;
+  const num = (v: unknown): number | undefined =>
+    typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+  const usage: WikiTaskUsage = {
+    inputTokens: num(value.inputTokens),
+    outputTokens: num(value.outputTokens),
+    totalTokens: num(value.totalTokens),
+  };
+  return usage.inputTokens === undefined && usage.outputTokens === undefined && usage.totalTokens === undefined
+    ? null
+    : usage;
+}
+
+/**
+ * 汇总一次 attempt 各阶段 usage（只累加 API 实际给出的字段）。
+ * 全部缺失 → null（不伪造 0 用量）。
+ */
+function summarizeUsage(usages: readonly LlmUsage[] | undefined): WikiTaskUsage | null {
+  if (!usages || usages.length === 0) return null;
+  const sum: WikiTaskUsage = {};
+  let any = false;
+  for (const u of usages) {
+    if (!u) continue;
+    for (const key of ['inputTokens', 'outputTokens', 'totalTokens'] as const) {
+      const v = u[key];
+      if (typeof v === 'number' && Number.isFinite(v)) {
+        sum[key] = (sum[key] ?? 0) + v;
+        any = true;
+      }
+    }
+  }
+  return any ? sum : null;
 }
 
 // ── 运行态 ──────────────────────────────────────────────────────
@@ -180,10 +228,16 @@ type InflightRun = {
   promise: Promise<void>;
 };
 
-/** 运行结算：转换结果或「已中止」（中止不改变任务状态，由 aborter 负责重排） */
 /** 运行结算：转换/编译结果或「已中止」（中止不改变任务状态，由 aborter 负责重排）。
- *  失败统一为 { ok:false, error:{code,message} } 形状（code 为 string，兼容编译错误码）。 */
-type RunFailure = { ok: false; error: { code: string; message: string } };
+ *  失败统一为 { ok:false, error:{code,message} } 形状（code 为 string，兼容编译错误码）；
+ *  编译失败的 usage/retryCount 从诊断携带（issue 09：面板展示重试与用量）。 */
+type RunFailure = {
+  ok: false;
+  error: { code: string; message: string };
+  /** 失败前已完成阶段的 usage（可获得的字段） */
+  usage?: LlmUsage[];
+  retryCount?: number;
+};
 type RunOutcome = SourceConvertOutcome | CompileSuccess | RunFailure | 'aborted';
 
 export type WikiQueueAttachResult =
@@ -390,6 +444,8 @@ export class WikiIngestQueueManager {
       attemptId: randomUUID(),
       attempt: 1,
       lastError: null,
+      usage: null,
+      retryCount: 0,
       enqueuedAt: now,
       updatedAt: now,
     };
@@ -437,6 +493,8 @@ export class WikiIngestQueueManager {
       attemptId: randomUUID(),
       attempt: 1,
       lastError: null,
+      usage: null,
+      retryCount: 0,
       enqueuedAt: now,
       updatedAt: now,
     };
@@ -799,8 +857,14 @@ export class WikiIngestQueueManager {
       setPhase('validating');
       return result;
     }
-    // 统一失败形状为 { ok:false, error }（与 SourceConvertOutcome 一致）
-    return { ok: false, error: { code: result.code, message: result.message } };
+    // 统一失败形状为 { ok:false, error }（与 SourceConvertOutcome 一致）；
+    // 诊断（已完成阶段 usage / 内部重试数）一并带出给任务面板（issue 09）
+    return {
+      ok: false,
+      error: { code: result.code, message: result.message },
+      usage: result.diagnostics.usage,
+      retryCount: result.diagnostics.retryCount,
+    };
   }
 
   private markCommitting(taskId: string, attemptId: string): void {
@@ -826,12 +890,20 @@ export class WikiIngestQueueManager {
 
     const now = new Date().toISOString();
     task.updatedAt = now;
+    // 编译结果携带 usage/retryCount；转换结果没有这两个字段（保持 null/0）
+    const usage = 'usage' in outcome ? outcome.usage : undefined;
+    const taskRetryCount = 'retryCount' in outcome ? outcome.retryCount : undefined;
     if (outcome.ok) {
       task.phase = 'done';
       task.lastError = null;
+      // 本次 attempt 的用量与内部重试数（issue 09：面板展示，不伪造缺失字段）
+      task.usage = summarizeUsage(usage);
+      task.retryCount = taskRetryCount ?? 0;
     } else {
       task.phase = 'failed';
       task.lastError = { code: outcome.error.code, message: outcome.error.message, at: now };
+      task.usage = summarizeUsage(usage);
+      task.retryCount = taskRetryCount ?? 0;
     }
     this.pushTaskEvent(task);
     await this.flush().catch(() => undefined);
@@ -852,6 +924,8 @@ export class WikiIngestQueueManager {
       attemptId: task.attemptId,
       phase: task.phase,
       lastError: task.lastError ? { ...task.lastError } : null,
+      usage: task.usage ? { ...task.usage } : null,
+      retryCount: task.retryCount,
     });
   }
 

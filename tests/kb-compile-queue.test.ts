@@ -10,12 +10,13 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { WikiIngestQueueManager } from '../src/main/kb/ingest-queue';
 import type { CompileLlm } from '../src/main/kb/compile';
+import { LlmCallError } from '../src/main/kb/llm-call';
 import { initWikiLayout, writeWikiManifest, wikiLayout, SCHEMA_MD_SKELETON, type WikiKbManifest } from '../src/main/kb/wiki-layout';
 import type { WikiSourceRecord } from '@shared/kb-types';
 
@@ -222,5 +223,73 @@ describe('编译任务运行 — 可控假响应', () => {
     const snap = q.snapshot(KB_ID);
     const t = snap?.tasks.find((x) => x.taskId === task.taskId);
     expect(t?.attempt).toBe(2);
+  });
+});
+
+// ── issue 09：重试与用量对任务面板可见 ──────────────────────────
+
+function retryableError(message: string): LlmCallError {
+  const err = new LlmCallError(message, true);
+  // Retry-After 走 1ms 分支：测试不空等真实退避
+  Object.assign(err, { retryAfterMs: 1 });
+  return err;
+}
+
+describe('编译任务 — 重试与用量（issue 09）', () => {
+  it('成功后记录 usage 汇总（只累加实际给出的字段）与内部重试数', async () => {
+    const q = makeQueue(okScript());
+    await q.attach(kbPath, KB_ID);
+    const task = await q.enqueueCompile(KB_ID, SOURCE_ID);
+    await waitForPhase(q, task.taskId, 'done');
+    const t = q.snapshot(KB_ID)?.tasks.find((x) => x.taskId === task.taskId);
+    // 分析 + 生成各返回 { outputTokens: 1 }
+    expect(t?.usage).toEqual({ outputTokens: 2 });
+    expect(t?.retryCount).toBe(0);
+  });
+
+  it('失败保留诊断：failed 任务仍有 usage 与可读失败原因', async () => {
+    const q = makeQueue([{ text: '分析' }, { text: '不是 FILE 块的输出' }]);
+    await q.attach(kbPath, KB_ID);
+    const task = await q.enqueueCompile(KB_ID, SOURCE_ID);
+    await waitForPhase(q, task.taskId, 'failed');
+    const t = q.snapshot(KB_ID)?.tasks.find((x) => x.taskId === task.taskId);
+    expect(t?.lastError?.code).toBe('llmFailed');
+    // 分析 + 生成都返回了 usage；修复调用（脚本耗尽）未给出 usage → 只累加实际字段
+    expect(t?.usage).toEqual({ outputTokens: 2 });
+  });
+
+  it('可重试失败有界退避：任务 retryCount 反映内部重试次数', async () => {
+    let calls = 0;
+    const q = new WikiIngestQueueManager({
+      notify: () => undefined,
+      compileLlmFactory: async () => ({
+        model: 'fake-retry',
+        invoke: async () => {
+          calls += 1;
+          if (calls <= 2) throw retryableError(`网络错误 #${calls}`);
+          if (calls === 3) return { text: '分析', finishReason: 'stop', usage: { inputTokens: 3 } };
+          return { text: `${SUMMARY_BLOCK}\n\n${CONCEPT_BLOCK}`, finishReason: 'stop', usage: { outputTokens: 5 } };
+        },
+      }),
+    });
+    await q.attach(kbPath, KB_ID);
+    const task = await q.enqueueCompile(KB_ID, SOURCE_ID);
+    await waitForPhase(q, task.taskId, 'done');
+    const t = q.snapshot(KB_ID)?.tasks.find((x) => x.taskId === task.taskId);
+    expect(calls).toBe(4);                 // 分析 3 次尝试 + 生成 1 次
+    expect(t?.retryCount).toBe(2);
+    expect(t?.usage).toEqual({ inputTokens: 3, outputTokens: 5 });
+  });
+
+  it('usage/retryCount 持久化到队列文件，且不含凭证', async () => {
+    const q = makeQueue(okScript());
+    await q.attach(kbPath, KB_ID);
+    const task = await q.enqueueCompile(KB_ID, SOURCE_ID);
+    await waitForPhase(q, task.taskId, 'done');
+    const raw = readFileSync(join(kbPath, '.kb', 'queue.json'), 'utf-8');
+    expect(raw).toContain('retryCount');
+    expect(raw).toContain('usage');
+    expect(raw).not.toContain('sk-');
+    expect(raw).not.toContain('apiKey');
   });
 });

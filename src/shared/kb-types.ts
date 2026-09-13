@@ -358,6 +358,18 @@ export type WikiTaskError = {
   at: string;
 };
 
+/**
+ * 任务一次 attempt 的 token 用量汇总（issue 09）。
+ *
+ * 只汇总各阶段 API 实际给出的字段；整次运行没有任何 usage 时为 null
+ * —— 不伪造 0，也不把缺失当成 0 用量展示。
+ */
+export type WikiTaskUsage = {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+};
+
 /** 持久任务记录（.kb/queue.json 的 tasks 条目 + 快照/事件传输） */
 export type WikiIngestTask = {
   /** 稳定任务 ID（跨重启不变） */
@@ -375,6 +387,10 @@ export type WikiIngestTask = {
   attempt: number;
   /** 最近一次失败原因（重试不清除，成功或新失败时更新） */
   lastError: WikiTaskError | null;
+  /** 本次 attempt 汇总的 token 用量（无可获得 usage 时为 null；issue 09） */
+  usage: WikiTaskUsage | null;
+  /** 模型调用内部有界退避重试次数（本次 attempt；issue 09） */
+  retryCount: number;
   enqueuedAt: string;
   updatedAt: string;
 };
@@ -404,6 +420,10 @@ export type WikiTaskEvent =
       attemptId: string;
       phase: WikiIngestPhase;
       lastError?: WikiTaskError | null;
+      /** 本次 attempt 汇总用量（issue 09；缺省表示未变化） */
+      usage?: WikiTaskUsage | null;
+      /** 本次 attempt 内部重试次数（issue 09；缺省表示未变化） */
+      retryCount?: number;
     }
   | {
       type: 'queue';
