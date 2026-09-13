@@ -30,6 +30,8 @@ type KbQueueState = {
   move: (taskId: string, direction: 'up' | 'down') => Promise<void>;
   clearFinished: () => Promise<void>;
   enqueue: (sourceIds: string[]) => Promise<void>;
+  /** 编译单个来源（issue 08）：入队 compileSource 任务 */
+  compile: (sourceId: string) => Promise<void>;
 };
 
 function toastError(message: string): void {
@@ -178,6 +180,15 @@ export const useKbQueueStore = create<KbQueueState>((set, get) => ({
     if (failed.length > 0) {
       const first = failed[0]!;
       toastError(`加入队列失败（${first.error.code}）：${first.error.message}`);
+    }
+    await get().loadSnapshot();
+  },
+
+  compile: async (sourceId) => {
+    const r = await trpc.kb.wikiCompileEnqueue.mutate({ sourceId });
+    const first = r.results[0];
+    if (first && !first.ok) {
+      toastError(`编译入队失败（${first.error.code}）：${first.error.message}`);
     }
     await get().loadSnapshot();
   },

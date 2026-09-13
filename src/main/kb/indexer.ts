@@ -32,7 +32,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 import type { IndexEntry, ClassificationResult } from './types';
 import { type LlmConfig, protocolForProvider } from './llm-config';
-import { buildDirectChatRequest, extractOpenAiFamilyContent } from '../agent/openai-compatible';
+import { callLlm, LlmCallError } from './llm-call';
 
 // Re-export for backward compatibility — consumers that imported
 // LlmConfig / protocolForProvider from indexer still work.
@@ -48,9 +48,6 @@ const SKELETON_LINE_MAX_CHARS = 200;
 
 /** 骨架总字符上限 — 行数上限之外的保险丝（超长行时代真实体积由它兜底） */
 const SKELETON_MAX_CHARS = 4_000;
-
-/** LLM 调用超时（毫秒）— 推理模型 + 中转网关生成 30s+ 很常见，30s 会误杀慢模型 */
-const LLM_TIMEOUT_MS = 120_000;
 
 /** LLM 调用最大尝试次数（超时/网络错误/5xx/429/解析失败自动重试一次） */
 const LLM_MAX_ATTEMPTS = 2;
@@ -180,30 +177,6 @@ const LLM_MAX_TOKENS = 2000;
 
 const CLASSIFY_SYSTEM_PROMPT = '你是一个文档分类助手。只返回 JSON。';
 
-/** 从 anthropic /v1/messages 响应提取 content[].text */
-function extractAnthropicContent(payload: Record<string, unknown>): string | null {
-  const blocks = payload.content as Array<Record<string, unknown>> | undefined;
-  if (!Array.isArray(blocks)) return null;
-  const text = blocks
-    .filter((b) => b.type === 'text' && typeof b.text === 'string')
-    .map((b) => b.text as string)
-    .join('');
-  return text || null;
-}
-
-/** 从 gemini generateContent 响应提取 candidates[].content.parts[].text */
-function extractGeminiContent(payload: Record<string, unknown>): string | null {
-  const candidates = payload.candidates as Array<Record<string, unknown>> | undefined;
-  const content = candidates?.[0]?.content as Record<string, unknown> | undefined;
-  const parts = content?.parts as Array<Record<string, unknown>> | undefined;
-  if (!Array.isArray(parts)) return null;
-  const text = parts
-    .filter((p) => typeof p.text === 'string')
-    .map((p) => p.text as string)
-    .join('');
-  return text || null;
-}
-
 /**
  * 调用 LLM 获取分类结果。
  *
@@ -243,155 +216,40 @@ export async function classifyWithLlm(
 /** 单次尝试结果：retryable 决定是否值得自动重试 */
 type AttemptOutcome = LlmResponse & { retryable: boolean };
 
-/** 判定是否为 AbortController 触发的超时/取消（Node 下 message 只有 "This operation was aborted"） */
-function isAbortError(e: unknown): boolean {
-  return e instanceof Error && (e.name === 'AbortError' || e.name === 'TimeoutError');
-}
-
-/** 错误消息连同 cause（Node fetch 网络错误的根因在 cause 里，如 DNS 解析失败、证书校验失败） */
-function errorWithCause(e: unknown): string {
-  if (!(e instanceof Error)) return String(e);
-  const cause = (e as Error & { cause?: unknown }).cause;
-  if (cause instanceof Error && cause.message && !e.message.includes(cause.message)) {
-    return `${e.message}（原因: ${cause.message}）`;
-  }
-  return e.message;
-}
-
-/** 错误信息用端点脱敏 — gemini 的 key 在查询串中，绝不能带进用户可见的错误/日志 */
-function safeEndpoint(url: string): string {
-  const withoutQuery = url.split('?')[0];
-  return withoutQuery.length > 80 ? `${withoutQuery.slice(0, 77)}…` : withoutQuery;
-}
-
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** 单次 LLM 调用：协议分派 + 请求 + 响应提取，不含重试 */
+/**
+ * 单次 LLM 调用：协议分派与请求构造统一收敛到 llm-call.ts（issue 08
+ * 模型调用边界），此处只保留分类的 JSON 解析与重试语义。
+ */
 async function classifyOnce(prompt: string, config: LlmConfig): Promise<AttemptOutcome> {
-  const fetchFn = config.fetchFn ?? fetch;
-  const base = config.baseUrl.replace(/\/+$/, '');
-  const protocol = protocolForProvider(config.providerId);
-
-  let url: string;
-  let headers: Record<string, string>;
-  let body: Record<string, unknown>;
-
-  if (protocol === 'anthropic') {
-    url = `${base}/messages`;
-    headers = {
-      'Content-Type': 'application/json',
-      'x-api-key': config.apiKey,
-      'anthropic-version': '2023-06-01',
-    };
-    body = {
-      model: config.model,
-      max_tokens: LLM_MAX_TOKENS,
-      system: CLASSIFY_SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: prompt }],
-    };
-  } else if (protocol === 'gemini') {
-    const vbase = base.includes('/v1beta') ? base : `${base}/v1beta`;
-    url = `${vbase}/models/${config.model}:generateContent?key=${config.apiKey}`;
-    headers = { 'Content-Type': 'application/json' };
-    body = {
-      systemInstruction: { parts: [{ text: CLASSIFY_SYSTEM_PROMPT }] },
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.3, maxOutputTokens: LLM_MAX_TOKENS },
-    };
-  } else {
-    // openai 兼容协议 — 按凭证的 apiFormat 分派 /chat/completions 或 /responses
-    const request = buildDirectChatRequest({
-      baseUrl: base,
-      apiFormat: config.apiFormat,
-      model: config.model,
+  let text: string;
+  try {
+    const result = await callLlm(config, {
       system: CLASSIFY_SYSTEM_PROMPT,
       user: prompt,
       maxTokens: LLM_MAX_TOKENS,
       temperature: 0.3,
     });
-    url = request.url;
-    headers = {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${config.apiKey}`,
-    };
-    body = request.body;
+    text = result.text;
+  } catch (e) {
+    if (e instanceof LlmCallError) {
+      return { ok: false, retryable: e.retryable, error: e.message };
+    }
+    return { ok: false, retryable: true, error: String(e) };
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS);
-
   try {
-    const response = await fetchFn(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      const details = await response.text().catch(() => '');
-      return {
-        ok: false,
-        retryable: response.status === 429 || response.status >= 500,
-        error: `LLM API 返回 ${response.status}: ${details.slice(0, 200)}（模型 ${config.model} @ ${safeEndpoint(url)}）`,
-      };
-    }
-
-    // 先取文本再解析：部分网关出错时返回 200 + HTML 错误页，直接 response.json()
-    // 会抛出晦涩的 SyntaxError，这里给出可读的网关异常提示
-    const raw = await response.text();
-    let payload: Record<string, unknown>;
-    try {
-      payload = JSON.parse(raw) as Record<string, unknown>;
-    } catch {
-      return {
-        ok: false,
-        retryable: true,
-        error: `LLM 响应不是有效 JSON（网关异常或返回了 HTML 错误页）: ${raw.slice(0, 150)}（模型 ${config.model} @ ${safeEndpoint(url)}）`,
-      };
-    }
-
-    const content = protocol === 'anthropic'
-      ? extractAnthropicContent(payload)
-      : protocol === 'gemini'
-        ? extractGeminiContent(payload)
-        : extractOpenAiFamilyContent(payload);
-
-    if (content === null) {
-      return {
-        ok: false,
-        retryable: true,
-        error: `LLM 返回格式异常：无法从 ${protocol} 响应中提取文本（模型 ${config.model}，常见原因：max_tokens 耗尽或推理模型未产出内容）`,
-      };
-    }
-
-    try {
-      const result = parseClassificationResponse(content);
-      return { ok: true, result, retryable: false };
-    } catch {
-      return {
-        ok: false,
-        retryable: true,
-        error: `AI 返回的 JSON 无法解析: ${content.slice(0, 150)}`,
-      };
-    }
-  } catch (e) {
-    if (isAbortError(e)) {
-      return {
-        ok: false,
-        retryable: true,
-        error: `AI 请求超时（${LLM_TIMEOUT_MS / 1000} 秒）: 模型 ${config.model} @ ${safeEndpoint(url)} 未在时限内返回。建议在设置中换用更快的模型后重试`,
-      };
-    }
+    const result = parseClassificationResponse(text);
+    return { ok: true, result, retryable: false };
+  } catch {
     return {
       ok: false,
       retryable: true,
-      error: `网络错误: ${errorWithCause(e)}（模型 ${config.model} @ ${safeEndpoint(url)}）。请检查网络连接及凭证 baseUrl 是否可达`,
+      error: `AI 返回的 JSON 无法解析: ${text.slice(0, 150)}`,
     };
-  } finally {
-    clearTimeout(timer);
   }
 }
 

@@ -348,8 +348,8 @@ export type WikiIngestPhase =
   | 'failed'
   | 'cancelled';
 
-/** 任务类型（本票仅转换任务；编译任务由后继票扩展） */
-export type WikiTaskKind = 'convertSource';
+/** 任务类型：convertSource=来源转换（issue 03）；compileSource=短来源编译（issue 08） */
+export type WikiTaskKind = 'convertSource' | 'compileSource';
 
 /** 任务失败记录（重试新 attempt 时保留上一次失败原因） */
 export type WikiTaskError = {

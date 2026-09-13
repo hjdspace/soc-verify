@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useCallback, useState } from 'react';
-import { ListTodo, Pause, Play, Trash2, RotateCcw, XCircle, ArrowUp, ArrowDown, Plus, AlertTriangle } from 'lucide-react';
+import { ListTodo, Pause, Play, Trash2, RotateCcw, XCircle, ArrowUp, ArrowDown, Plus, Sparkles, AlertTriangle } from 'lucide-react';
 import { useKbQueueStore } from '@renderer/stores/kb-queue';
 import { useKbStore } from '@renderer/stores/kb';
 import { trpc } from '@renderer/lib/trpc';
@@ -194,6 +194,14 @@ export function KbWikiTasks() {
     [enqueue],
   );
 
+  const compile = useKbQueueStore((s) => s.compile);
+  const handleCompile = useCallback(
+    (sourceId: string) => {
+      void compile(sourceId);
+    },
+    [compile],
+  );
+
   const paused = snapshot?.paused ?? false;
   const tasks = snapshot?.tasks ?? [];
 
@@ -291,6 +299,14 @@ export function KbWikiTasks() {
               >
                 <Plus className="h-3 w-3" />
                 加入队列
+              </button>
+              <button
+                onClick={() => handleCompile(s.sourceId)}
+                title="编译为知识页（提案经审阅后发布）"
+                className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                <Sparkles className="h-3 w-3" />
+                编译
               </button>
             </div>
           ))

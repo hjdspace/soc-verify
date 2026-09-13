@@ -32,6 +32,8 @@ import { writeFileAtomic } from './atomic-commit';
 import { readWikiManifest } from './wiki-layout';
 import { convertWikiSource, WikiSourceAbortedError } from './source-import';
 import type { SourceConvertOutcome } from './source-import';
+import { compileWikiSource, createDefaultCompileLlmFactory } from './compile';
+import type { CompileLlm, CompileSuccess } from './compile';
 import type {
   WikiIngestPhase,
   WikiIngestTask,
@@ -61,6 +63,15 @@ const PHASES: readonly WikiIngestPhase[] = [
 ];
 
 const TERMINAL_PHASES: ReadonlySet<WikiIngestPhase> = new Set<WikiIngestPhase>(['done', 'failed', 'cancelled']);
+
+/** 可中止的计算阶段（转换 + 编译各阶段）：暂停/取消/卸载对这些阶段中止在途运行 */
+const RUNNABLE_PHASES: ReadonlySet<WikiIngestPhase> = new Set<WikiIngestPhase>([
+  'converting',
+  'vision',
+  'analyzing',
+  'generating',
+  'validating',
+]);
 
 function queueFilePath(kbPath: string): string {
   return join(kbPath, '.kb', 'queue.json');
@@ -120,7 +131,7 @@ function parseTask(u: unknown, kbId: string): WikiIngestTask | null {
   if (u.kbId !== kbId) return null;
   const { taskId, kind, sourceId, sourcePath, phase, attemptId, attempt, lastError, enqueuedAt, updatedAt } = u;
   if (typeof taskId !== 'string' || taskId.length === 0) return null;
-  if (kind !== 'convertSource') return null;
+  if (kind !== 'convertSource' && kind !== 'compileSource') return null;
   if (typeof sourceId !== 'string' || sourceId.length === 0) return null;
   if (typeof sourcePath !== 'string') return null;
   if (typeof phase !== 'string' || !PHASES.includes(phase as WikiIngestPhase)) return null;
@@ -138,7 +149,7 @@ function parseTask(u: unknown, kbId: string): WikiIngestTask | null {
   return {
     taskId,
     kbId,
-    kind: 'convertSource',
+    kind,
     sourceId,
     sourcePath,
     phase: phase as WikiIngestPhase,
@@ -170,7 +181,10 @@ type InflightRun = {
 };
 
 /** 运行结算：转换结果或「已中止」（中止不改变任务状态，由 aborter 负责重排） */
-type RunOutcome = SourceConvertOutcome | 'aborted';
+/** 运行结算：转换/编译结果或「已中止」（中止不改变任务状态，由 aborter 负责重排）。
+ *  失败统一为 { ok:false, error:{code,message} } 形状（code 为 string，兼容编译错误码）。 */
+type RunFailure = { ok: false; error: { code: string; message: string } };
+type RunOutcome = SourceConvertOutcome | CompileSuccess | RunFailure | 'aborted';
 
 export type WikiQueueAttachResult =
   | { ok: true; /** 恢复的未完结任务数 */ restored: number; snapshot: WikiQueueSnapshot }
@@ -179,12 +193,19 @@ export type WikiQueueAttachResult =
 export type WikiIngestQueueOptions = {
   /** kb:task 事件回调（主进程经 webContents.send 转发渲染端） */
   notify?: (e: WikiTaskEvent) => void;
+  /**
+   * 编译任务的模型入口工厂（每次 attempt 开始时调用一次，固定配置快照）。
+   * 返回 null = 无可用凭证。缺省用 createDefaultCompileLlmFactory()（解析
+   * KB 设置/默认凭证）；测试注入可控假响应。凭证不流入任务文件/渲染端。
+   */
+  compileLlmFactory?: (signal: AbortSignal) => Promise<CompileLlm | null>;
 };
 
 // ── 队列管理器 ──────────────────────────────────────────────────
 
 export class WikiIngestQueueManager {
   private readonly notify: ((e: WikiTaskEvent) => void) | undefined;
+  private readonly compileLlmFactory: (signal: AbortSignal) => Promise<CompileLlm | null>;
   private state: QueueState | null = null;
   private readonly inflight = new Map<string, InflightRun>();
   private workerLimit = 1;
@@ -194,6 +215,7 @@ export class WikiIngestQueueManager {
 
   constructor(options: WikiIngestQueueOptions = {}) {
     this.notify = options.notify;
+    this.compileLlmFactory = options.compileLlmFactory ?? createDefaultCompileLlmFactory();
   }
 
   // ── 附着 / 卸载 ──
@@ -297,7 +319,7 @@ export class WikiIngestQueueManager {
 
     const committingRuns: Promise<void>[] = [];
     for (const t of st.tasks) {
-      if (t.phase === 'converting') {
+      if (RUNNABLE_PHASES.has(t.phase)) {
         const run = this.inflight.get(t.taskId);
         if (run) {
           run.controller.abort();
@@ -310,7 +332,7 @@ export class WikiIngestQueueManager {
       }
     }
     for (const t of st.tasks) {
-      if (t.phase === 'converting') {
+      if (RUNNABLE_PHASES.has(t.phase)) {
         t.phase = 'queued';
         t.attempt += 1;
         t.attemptId = randomUUID();
@@ -384,6 +406,53 @@ export class WikiIngestQueueManager {
     return copy;
   }
 
+  /**
+   * 来源编译任务入队（issue 08）。同来源活动编译任务去重；
+   * 转换任务与编译任务互不冲突（编译运行内部会保障来源就绪）。
+   * 持久化成功才算入队成功。
+   */
+  async enqueueCompile(kbId: string, sourceId: string): Promise<WikiIngestTask> {
+    const st = this.requireAttached(kbId);
+    const read = await readWikiManifest(st.kbPath);
+    if (!read.ok) {
+      throw new WikiQueueError('manifestCorrupted', `库 manifest 不可读（${read.reason}），无法入队`);
+    }
+    const rec = read.manifest.sources?.[sourceId];
+    if (!rec) {
+      throw new WikiQueueError('sourceNotFound', `来源不存在: ${sourceId}`);
+    }
+    const existing = st.tasks.find(
+      (t) => t.kind === 'compileSource' && t.sourceId === sourceId && !TERMINAL_PHASES.has(t.phase),
+    );
+    if (existing) return cloneTask(existing);
+
+    const now = new Date().toISOString();
+    const task: WikiIngestTask = {
+      taskId: randomUUID(),
+      kbId: st.kbId,
+      kind: 'compileSource',
+      sourceId,
+      sourcePath: rec.sourcePath,
+      phase: 'queued',
+      attemptId: randomUUID(),
+      attempt: 1,
+      lastError: null,
+      enqueuedAt: now,
+      updatedAt: now,
+    };
+    st.tasks.push(task);
+    this.pushTaskEvent(task);
+    try {
+      await this.flush();
+    } catch (err) {
+      st.tasks = st.tasks.filter((t) => t.taskId !== task.taskId);
+      throw err;
+    }
+    const copy = cloneTask(task);
+    this.schedulePump();
+    return copy;
+  }
+
   /** 队列级暂停：中止 converting（任务回 queued，消耗 attempt）、等待 committing 完成。 */
   async pause(kbId: string): Promise<void> {
     const st = this.requireAttached(kbId);
@@ -394,7 +463,7 @@ export class WikiIngestQueueManager {
       if (t.phase === 'committing') {
         const run = this.inflight.get(t.taskId);
         if (run) committingRuns.push(run.promise);
-      } else if (t.phase === 'converting') {
+      } else if (RUNNABLE_PHASES.has(t.phase)) {
         const run = this.inflight.get(t.taskId);
         if (run) {
           run.controller.abort();
@@ -408,7 +477,7 @@ export class WikiIngestQueueManager {
     const prevTasks = st.tasks.map(cloneTask);
     st.paused = true;
     for (const t of st.tasks) {
-      if (t.phase === 'converting') {
+      if (RUNNABLE_PHASES.has(t.phase)) {
         t.phase = 'queued';
         t.attempt += 1;
         t.attemptId = randomUUID();
@@ -456,7 +525,7 @@ export class WikiIngestQueueManager {
     if (TERMINAL_PHASES.has(task.phase)) {
       throw new WikiQueueError('invalidPhase', `任务已处于终态（${task.phase}），不能取消`);
     }
-    if (task.phase === 'converting') {
+    if (RUNNABLE_PHASES.has(task.phase)) {
       const run = this.inflight.get(taskId);
       if (run) {
         run.controller.abort();
@@ -607,7 +676,7 @@ export class WikiIngestQueueManager {
     if (!st) return;
     let dirty = false;
     for (const t of st.tasks) {
-      if ((t.phase === 'converting' || t.phase === 'committing') && !this.inflight.has(t.taskId)) {
+      if ((RUNNABLE_PHASES.has(t.phase) || t.phase === 'committing') && !this.inflight.has(t.taskId)) {
         t.phase = 'queued';
         t.attempt += 1;
         t.attemptId = randomUUID();
@@ -660,10 +729,14 @@ export class WikiIngestQueueManager {
     const sourceId = task.sourceId;
     let outcome: RunOutcome;
     try {
-      outcome = await convertWikiSource(kbPath, sourceId, {
-        signal: controller.signal,
-        onCommitting: () => this.markCommitting(taskId, attemptId),
-      });
+      if (task.kind === 'compileSource') {
+        outcome = await this.runCompile(task, attemptId, controller);
+      } else {
+        outcome = await convertWikiSource(kbPath, sourceId, {
+          signal: controller.signal,
+          onCommitting: () => this.markCommitting(taskId, attemptId),
+        });
+      }
     } catch (err) {
       outcome =
         err instanceof WikiSourceAbortedError
@@ -671,6 +744,63 @@ export class WikiIngestQueueManager {
           : { ok: false, error: { code: 'ioError', message: String(err) } };
     }
     await this.settleRun(taskId, attemptId, outcome);
+  }
+
+  /**
+   * 短来源编译运行：确保转换就绪（幂等）→ 分析 → 生成 → 校验/staging。
+   * 取消经 controller.signal 贯穿（转换与模型调用都可中止）；
+   * 阶段事件近似推进（analyzing → generating → validating），
+   * 取消/暂停的正确性只依赖 signal，不依赖阶段显示。
+   */
+  private async runCompile(task: WikiIngestTask, attemptId: string, controller: AbortController): Promise<RunOutcome> {
+    const st = this.state;
+    if (!st) return 'aborted';
+    const kbPath = st.kbPath;
+
+    // 1) 来源就绪保障：已转换且同指纹时是 no-op
+    try {
+      const conv = await convertWikiSource(kbPath, task.sourceId, { signal: controller.signal });
+      if (!conv.ok) {
+        return { ok: false, error: { code: 'ioError', message: `来源转换失败: ${conv.error.message}` } };
+      }
+    } catch (err) {
+      if (err instanceof WikiSourceAbortedError) return 'aborted';
+      return { ok: false, error: { code: 'ioError', message: String(err) } };
+    }
+    if (controller.signal.aborted) return 'aborted';
+
+    const setPhase = (phase: WikiIngestPhase): void => {
+      const t = st.tasks.find((x) => x.taskId === task.taskId);
+      if (!t || t.attemptId !== attemptId) return;
+      t.phase = phase;
+      t.updatedAt = new Date().toISOString();
+      this.pushTaskEvent(t);
+      void this.flush().catch(() => undefined);
+    };
+
+    setPhase('analyzing');
+
+    // 2) 模型入口：每次 attempt 解析一次配置快照（调用方显式传入编译管线）
+    let llm: CompileLlm | null = null;
+    try {
+      llm = await this.compileLlmFactory(controller.signal);
+    } catch (err) {
+      return { ok: false, error: { code: 'ioError', message: `解析模型配置失败: ${String(err)}` } };
+    }
+    if (controller.signal.aborted) return 'aborted';
+
+    setPhase('generating');
+    const result = await compileWikiSource(
+      kbPath,
+      { kbId: st.kbId, taskId: task.taskId, sourceId: task.sourceId },
+      { llm, signal: controller.signal },
+    );
+    if (result.ok) {
+      setPhase('validating');
+      return result;
+    }
+    // 统一失败形状为 { ok:false, error }（与 SourceConvertOutcome 一致）
+    return { ok: false, error: { code: result.code, message: result.message } };
   }
 
   private markCommitting(taskId: string, attemptId: string): void {
@@ -691,7 +821,7 @@ export class WikiIngestQueueManager {
     const task = st.tasks.find((t) => t.taskId === taskId);
     // attempt 失效或任务已被重排/取消：迟到的结果一律忽略
     if (!task || task.attemptId !== attemptId) return;
-    if (task.phase !== 'converting' && task.phase !== 'committing') return;
+    if (!RUNNABLE_PHASES.has(task.phase) && task.phase !== 'committing') return;
     if (outcome === 'aborted') return;
 
     const now = new Date().toISOString();

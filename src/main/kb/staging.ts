@@ -54,6 +54,11 @@ export type StageProposalInput = {
   /** 知识待办（issue 25 消费同一结构） */
   findings?: WikiFinding[];
   /**
+   * 调用方预检警告（如编译管线的坏输出提示），随变更集一并持久化。
+   * staging 自身校验产生的警告会追加在其后。
+   */
+  extraWarnings?: string[];
+  /**
    * 源摘要归属由应用固定：若给出，则只接受该 pageId 的 source 页，
    * 其他来源页块被丢弃并记录警告（模型不能为别的 source 伪造来源页）。
    */
@@ -121,7 +126,7 @@ export async function stageProposal(
   }
 
   const layout = wikiLayout(kbPath);
-  const warnings = [...parsed.warnings];
+  const warnings = [...(input.extraWarnings ?? []), ...parsed.warnings];
   const pages: WikiStagedPage[] = [];
 
   for (const file of parsed.files) {

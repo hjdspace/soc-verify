@@ -96,6 +96,7 @@ const mocks = vi.hoisted(() => ({
   queueCancelMutate: vi.fn(),
   queueRetryMutate: vi.fn(),
   queueClearMutate: vi.fn(),
+  wikiCompileEnqueueMutate: vi.fn(),
 }));
 
 vi.mock('@renderer/lib/trpc', () => ({
@@ -112,6 +113,7 @@ vi.mock('@renderer/lib/trpc', () => ({
       queueCancel: { mutate: mocks.queueCancelMutate.mockResolvedValue({ ok: true }) },
       queueRetry: { mutate: mocks.queueRetryMutate.mockResolvedValue({ ok: true }) },
       queueClear: { mutate: mocks.queueClearMutate.mockResolvedValue({ removed: 1 }) },
+      wikiCompileEnqueue: { mutate: mocks.wikiCompileEnqueueMutate.mockResolvedValue({ results: [{ ok: true }] }) },
     },
   },
 }));
@@ -172,6 +174,7 @@ describe('KbWikiTasks 导入任务面板（issue 03）', () => {
     mocks.queueCancelMutate.mockResolvedValue({ ok: true });
     mocks.queueRetryMutate.mockResolvedValue({ ok: true });
     mocks.queueClearMutate.mockResolvedValue({ removed: 1 });
+    mocks.wikiCompileEnqueueMutate.mockResolvedValue({ results: [{ ok: true }] });
   });
 
   it('拉取快照并渲染任务阶段与失败原因；来源列表可加入队列', async () => {
@@ -194,6 +197,18 @@ describe('KbWikiTasks 导入任务面板（issue 03）', () => {
     fireEvent.click(enqueueButtons[enqueueButtons.length - 1]!);
     await waitFor(() =>
       expect(mocks.queueEnqueueMutate).toHaveBeenCalledWith({ sourceIds: ['sid-9'] }),
+    );
+  });
+
+  it('来源列表可触发编译（issue 08）：wikiCompileEnqueue 入队', async () => {
+    render(<KbWikiTasks />);
+
+    await waitFor(() => expect(screen.getByText('docs/gamma.txt')).toBeTruthy());
+    const compileButtons = screen.getAllByTitle(/编译为知识页/);
+    expect(compileButtons.length).toBeGreaterThanOrEqual(1);
+    fireEvent.click(compileButtons[compileButtons.length - 1]!);
+    await waitFor(() =>
+      expect(mocks.wikiCompileEnqueueMutate).toHaveBeenCalledWith({ sourceId: 'sid-9' }),
     );
   });
 

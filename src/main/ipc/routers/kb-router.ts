@@ -950,6 +950,30 @@ export const kbRouter = t.router({
       return { results };
     }),
 
+  // ─── kb.wikiCompileEnqueue（issue 08） ──────────────────────
+  //
+  // 短来源编译任务入队：解析模型配置由队列在 attempt 开始时显式完成
+  // （createDefaultCompileLlmFactory），凭证不进入任务文件或渲染端。
+  // 编译产物只落既有 staging，经人工审阅后发布。
+
+  wikiCompileEnqueue: t.procedure
+    .input((raw): { sourceId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.sourceId !== 'string' || r.sourceId.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'sourceId is required' });
+      }
+      return { sourceId: r.sourceId.trim() };
+    })
+    .mutation(async ({ input }): Promise<QueueEnqueueResult> => {
+      const kb = await getWikiMountedKb();
+      try {
+        const task = await wikiIngestQueue.enqueueCompile(kb.kbId, input.sourceId);
+        return { results: [{ ok: true, task }] };
+      } catch (err) {
+        return { results: [queueErrorResult(err)] };
+      }
+    }),
+
   // ─── kb.queuePause / kb.queueResume（issue 03） ────────────
   //
   // 队列级暂停/继续。暂停中止 converting（回 queued，消耗 attempt）、
