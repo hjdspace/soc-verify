@@ -33,6 +33,7 @@ import type {
   ExtraDirEntry,
   DirGroup,
 } from '@shared/types';
+import { assertNotManagedWikiFile } from '../kb/write-guard';
 
 const SOCVERIFY_DIR = '.socverify';
 const PROJECTS_DB_FILE = 'projects.json';
@@ -997,6 +998,7 @@ class ProjectManagerImpl extends EventEmitter {
     if (!project) throw new Error(`Project not found: ${projectId}`);
 
     if (isTildePath(filePath)) {
+      await assertNotManagedWikiFile(project.rootPath, expandTildePath(filePath));
       await writeFile(expandTildePath(filePath), content, 'utf-8');
       return;
     }
@@ -1004,6 +1006,9 @@ class ProjectManagerImpl extends EventEmitter {
     if (!this.isPathWithinProjectDirs(project, filePath)) {
       throw new Error('File path is outside project directories');
     }
+
+    // 受管 Wiki 页面只读（spec §2）：应用通用写入口不得绕过 KB 发布服务
+    await assertNotManagedWikiFile(project.rootPath, filePath);
 
     await writeFile(filePath, content, 'utf-8');
   }

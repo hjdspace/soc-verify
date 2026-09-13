@@ -25,6 +25,8 @@ import { useWorkbenchStore, openFileTab } from '@renderer/stores/workbench';
 import { useToastStore } from '@renderer/stores/toast';
 import { useEditorStore } from '@renderer/stores/editor';
 import { useDiffReviewStore, useReviewSnapshot, type ReviewEntry } from '@renderer/stores/diff-review';
+import { useKbStore } from '@renderer/stores/kb';
+import { isManagedWikiPath } from '@shared/kb-wiki-guard';
 import type { FileDiffResult } from '@shared/types';
 import { cn } from '@renderer/lib/utils';
 import { createVimExtensions, resetVimMode } from './vim-extension';
@@ -280,6 +282,15 @@ export function FileEditor({ projectId, filePath, fileName, line, endLine, revea
   // 通过 useReviewSnapshot 获取 per-file 审阅快照，不再直接访问 store 的内部 map。
   const reviewSnapshot = useReviewSnapshot(filePath);
   const { entry: reviewEntry, diff: reviewDiff, hunkStates: reviewStates, loading: reviewLoading, error: reviewError, active: reviewActive, contentVersion } = reviewSnapshot;
+
+  // ── 受管 Wiki 页面只读（spec §2） ─────────────────────────────
+  // 挂载 wiki 布局库时，其 wiki/** 与 schema/purpose 属受管范围：
+  // 编辑器进入只读态，保存被拒（主进程写入口同样强制）。
+  const kbMounted = useKbStore((s) => s.kbStatus?.mounted);
+  const wikiReadOnly = useMemo(
+    () => kbMounted?.format === 'wiki' && isManagedWikiPath(kbMounted.path, filePath),
+    [kbMounted, filePath],
+  );
 
   // EditorView ref，用于 Vim 扩展获取 CodeMirror 实例
   const editorViewRef = useRef<import('@codemirror/view').EditorView | null>(null);
@@ -584,6 +595,10 @@ export function FileEditor({ projectId, filePath, fileName, line, endLine, revea
 
   const handleSave = useCallback(async (): Promise<boolean> => {
     if (!isDirty || saving) return false;
+    if (wikiReadOnly) {
+      setSaveError('受管 Wiki 页面只读：知识页由审阅/发布流程写入，schema/purpose 请在知识库「写作规则」编辑器中修改。');
+      return false;
+    }
     setSaving(true);
     setSaveError(null);
     try {
@@ -596,7 +611,7 @@ export function FileEditor({ projectId, filePath, fileName, line, endLine, revea
     } finally {
       setSaving(false);
     }
-  }, [projectId, filePath, content, isDirty, saving]);
+  }, [projectId, filePath, content, isDirty, saving, wikiReadOnly]);
 
   const handleSelectionAccept = useCallback((replacement: string, selectedText: string) => {
     const view = editorViewRef.current;
@@ -954,7 +969,7 @@ export function FileEditor({ projectId, filePath, fileName, line, endLine, revea
                 value={content}
                 onChange={setContent}
                 extensions={editorExtensions}
-                readOnly={reviewActive}
+                readOnly={reviewActive || wikiReadOnly}
                 theme={themeMode === 'dark' ? 'dark' : 'light'}
                 height="100%"
                 width="100%"

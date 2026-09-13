@@ -70,6 +70,16 @@ import {
 } from '../../kb/source-import';
 import { wikiIngestQueue } from '../../kb/wiki-queue';
 import { WikiQueueError, type WikiQueueAttachResult } from '../../kb/ingest-queue';
+import {
+  scanWikiCatalog,
+  readWikiPage,
+} from '../../kb/wiki-catalog';
+import {
+  readWikiRules,
+  saveWikiRules,
+} from '../../kb/wiki-rules';
+import { parseWikiSchema } from '../../kb/wiki-schema';
+import { WIKI_PAGE_TEMPLATES } from '../../kb/wiki-page';
 import type {
   KbRegistration,
   KbMount,
@@ -1010,5 +1020,121 @@ export const kbRouter = t.router({
     .mutation(async (): Promise<{ removed: number }> => {
       const kb = await getWikiMountedKb();
       return { removed: await wikiIngestQueue.clearFinished(kb.kbId) };
+    }),
+
+  // ─── kb.wikiCatalog（issue 04） ────────────────────────────
+  //
+  // 只读浏览：按 schema 路由编目 wiki/ 页面（pageId 含类型路径），
+  // 聚合页与 orphan 单独归类。仅 wiki 布局挂载开放。
+
+  wikiCatalog: t.procedure
+    .input((_raw): Record<string, never> => {
+      return {};
+    })
+    .query(async () => {
+      const kbPath = await getWikiMountedKbPath();
+      return scanWikiCatalog(kbPath);
+    }),
+
+  // ─── kb.wikiPage（issue 04） ───────────────────────────────
+  //
+  // 只读阅读单个页面：pageId 必须在 catalog 中（不做任意路径拼接），
+  // 读取前执行注册库路径校验（realpath 围栏）；返回统一解析的链接
+  // （歧义报告全部候选，不取第一个）。
+
+  wikiPage: t.procedure
+    .input((raw): { pageId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.pageId !== 'string' || r.pageId.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'pageId is required' });
+      }
+      return { pageId: r.pageId.trim() };
+    })
+    .query(async ({ input }) => {
+      const kbPath = await getWikiMountedKbPath();
+      const res = await readWikiPage(kbPath, input.pageId);
+      if (!res.ok) {
+        const message =
+          res.reason === 'unknownPage'
+            ? `页面不存在或不在编目中: ${input.pageId}`
+            : res.reason === 'outsideRoot'
+              ? '页面真实路径逃逸出注册库根目录，拒绝读取'
+              : res.reason === 'readFailed'
+                ? `页面读取失败: ${input.pageId}`
+                : 'schema.md 无法解析，页面目录不可用';
+        throw new TRPCError({
+          code: res.reason === 'unknownPage' ? 'NOT_FOUND' : 'PRECONDITION_FAILED',
+          message,
+        });
+      }
+      return res.page;
+    }),
+
+  // ─── kb.wikiRules（issue 04） ──────────────────────────────
+  //
+  // 读取写作规则（schema/purpose 原文 + schema 解析结果）。
+
+  wikiRules: t.procedure
+    .input((_raw): Record<string, never> => {
+      return {};
+    })
+    .query(async () => {
+      const kbPath = await getWikiMountedKbPath();
+      return readWikiRules(kbPath);
+    }),
+
+  // ─── kb.saveWikiRules（issue 04） ──────────────────────────
+  //
+  // 保存写作规则：schema 需通过受约束表校验且不重映射已有页面目录；
+  // purpose 原文任意写。Result 联合返回（不抛错）。
+
+  saveWikiRules: t.procedure
+    .input((raw): { schemaRaw?: string; purposeRaw?: string } => {
+      const r = raw as Record<string, unknown>;
+      if (r.schemaRaw === undefined && r.purposeRaw === undefined) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'schemaRaw or purposeRaw is required' });
+      }
+      if (r.schemaRaw !== undefined && typeof r.schemaRaw !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'schemaRaw must be a string' });
+      }
+      if (r.purposeRaw !== undefined && typeof r.purposeRaw !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'purposeRaw must be a string' });
+      }
+      return {
+        ...(typeof r.schemaRaw === 'string' ? { schemaRaw: r.schemaRaw } : {}),
+        ...(typeof r.purposeRaw === 'string' ? { purposeRaw: r.purposeRaw } : {}),
+      };
+    })
+    .mutation(async ({ input }) => {
+      const kbPath = await getWikiMountedKbPath();
+      return saveWikiRules(kbPath, input);
+    }),
+
+  // ─── kb.validateWikiSchema（issue 04） ─────────────────────
+  //
+  // 即时校验 schema 草稿（纯解析，不落盘）。规则编辑器防抖调用。
+
+  validateWikiSchema: t.procedure
+    .input((raw): { schemaRaw: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.schemaRaw !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'schemaRaw must be a string' });
+      }
+      return { schemaRaw: r.schemaRaw };
+    })
+    .mutation(async ({ input }) => {
+      return parseWikiSchema(input.schemaRaw);
+    }),
+
+  // ─── kb.wikiTemplates（issue 04） ──────────────────────────
+  //
+  // 八类默认模板清单（模板正文骨架 + 默认 frontmatter 字段）。
+
+  wikiTemplates: t.procedure
+    .input((_raw): Record<string, never> => {
+      return {};
+    })
+    .query(async () => {
+      return { templates: Object.values(WIKI_PAGE_TEMPLATES) };
     }),
 });

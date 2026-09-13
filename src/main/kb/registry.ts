@@ -604,6 +604,21 @@ async function dismissDisposal(disposalId: string): Promise<KbResult<void>> {
   return { ok: true, data: undefined };
 }
 
+/**
+ * 轻量查询：当前项目挂载的 wiki 布局库根路径（写路径守卫用）。
+ *
+ * 与 status 不同：不做格式探测与健康检查（无 stat 风暴），
+ * 只读挂载与注册表两份本地 JSON。非 wiki 挂载/未挂载返回 null。
+ */
+async function getMountedWikiPath(projectRoot: string): Promise<string | null> {
+  const mounts = await loadMounts(projectRoot);
+  if (mounts.length === 0) return null;
+  const entries = await loadRegistry();
+  const entry = entries.find((e) => e.id === mounts[0].kbId);
+  if (!entry) return null;
+  return entry.format === 'wiki' ? entry.path : null;
+}
+
 // ── 导出 ────────────────────────────────────────────────────────
 
 export const kbRegistry = {
@@ -616,6 +631,7 @@ export const kbRegistry = {
   mount,
   unmount,
   status,
+  getMountedWikiPath,
 };
 
 export { MAX_MOUNTS };

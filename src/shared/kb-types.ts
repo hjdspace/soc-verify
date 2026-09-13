@@ -441,3 +441,200 @@ export type KbSettings = {
   convertEngine: ConvertEngineId;
   llm: KbLlmSettings;
 };
+
+// ── Wiki 页面与规则（LLM Wiki 新布局，spec §2，issue 04）───────
+
+/** 固定八类页面类型（本期不支持新增） */
+export type WikiPageType =
+  | 'source' | 'entity' | 'concept' | 'comparison'
+  | 'synthesis' | 'query' | 'pitfall' | 'interface';
+
+// ── schema.md 受约束表 ─────────────────────────────────────────
+
+export type WikiSchemaIssueCode =
+  | 'missingPageTypes'
+  | 'missingHeader'
+  | 'unparseableRow'
+  | 'unknownType'
+  | 'missingType'
+  | 'duplicateType'
+  | 'missingDir'
+  | 'invalidDir'
+  | 'duplicateDir'
+  | 'reservedDir';
+
+export type WikiSchemaIssue = {
+  code: WikiSchemaIssueCode;
+  message: string;
+  /** 表中出错行的 1-based 行号（缺失段类 issue 无行号） */
+  line?: number;
+};
+
+/** 类型 → wiki 内相对目录（`concepts`、`entities/nested`） */
+export type WikiSchemaRouting = { typeDirs: Record<WikiPageType, string> };
+
+export type WikiSchemaParseResult =
+  | { ok: true; routing: WikiSchemaRouting }
+  | { ok: false; issues: WikiSchemaIssue[] };
+
+// ── 页面 frontmatter ───────────────────────────────────────────
+
+export type WikiSourceRef = {
+  sourceId: string;
+  sourceRevision: string;
+  parsedHash: string;
+};
+
+export type WikiPageFrontmatter = {
+  type: WikiPageType;
+  title: string;
+  summary: string;
+  keywords: string[];
+  tags: string[];
+  sources: WikiSourceRef[];
+  created: string;
+  updated: string;
+};
+
+export type WikiPageIssueCode =
+  | 'missingFrontmatter'
+  | 'badYaml'
+  | 'duplicateKey'
+  | 'notAnObject'
+  | 'tooDeep'
+  | 'missingField'
+  | 'badFieldType'
+  | 'unknownType'
+  | 'badSources'
+  | 'badDate';
+
+export type WikiPageIssue = { code: WikiPageIssueCode; message: string };
+
+export type WikiPageParseResult =
+  | { ok: true; frontmatter: WikiPageFrontmatter; body: string }
+  | { ok: false; issues: WikiPageIssue[] };
+
+// ── 页面目录 ───────────────────────────────────────────────────
+
+export type WikiCatalogPage = {
+  /** 页面主键：`<路由目录>/<文件名去 .md>`，含类型路径（标题/basename 不作主键） */
+  pageId: string;
+  /** 库内相对路径（`wiki/concepts/axi-outstanding.md`） */
+  relPath: string;
+  /** 所在路由目录对应的类型（正文声明不同类型 → routeMismatch） */
+  type: WikiPageType;
+  kind: 'page';
+  parse: WikiPageParseResult;
+  /** 正文声明的 type 与所在目录路由不一致 */
+  routeMismatch: boolean;
+};
+
+export type WikiCatalogAggregate = {
+  /** `index` / `overview` / `log` */
+  pageId: string;
+  relPath: string;
+  kind: 'aggregate';
+};
+
+export type WikiCatalogOrphan = {
+  /** 库内相对路径（不在任何路由目录，也不是聚合页） */
+  relPath: string;
+  kind: 'orphan';
+};
+
+export type WikiCatalog = {
+  typeDirs: Record<WikiPageType, string>;
+  pages: WikiCatalogPage[];
+  aggregates: WikiCatalogAggregate[];
+  orphans: WikiCatalogOrphan[];
+};
+
+export type WikiCatalogResult =
+  | { ok: true; catalog: WikiCatalog }
+  | { ok: false; schemaIssues: WikiSchemaIssue[] };
+
+// ── wikilink ───────────────────────────────────────────────────
+
+export type WikiLinkKind = 'link' | 'embed';
+
+export type WikiLinkOccurrence = {
+  kind: WikiLinkKind;
+  /** `#` 前的目标（可为空串 = 纯本页 heading 链接） */
+  target: string;
+  /** `#heading` 原文（不含 #；未指定为 undefined） */
+  heading?: string;
+  /** `|别名`（未指定为 undefined） */
+  alias?: string;
+};
+
+export type WikiLinkResolution =
+  | { status: 'resolved'; pageId: string }
+  | { status: 'ambiguous'; candidates: string[] }
+  | { status: 'unresolved' };
+
+/** 抽取结果 + 解析结论（主进程统一解析，UI/图谱/Lint 消费同一实现） */
+export type WikiResolvedLink = WikiLinkOccurrence & { resolution: WikiLinkResolution };
+
+/** 链接解析的目录查找索引（由页面目录构建） */
+export type WikiCatalogEntryInfo = { pageId: string; title?: string };
+
+export type WikiCatalogLookup = {
+  /** pageId → 条目（完整类型路径主键） */
+  byId: Map<string, WikiCatalogEntryInfo>;
+  /** 文件名（去扩展名，小写）→ 命中的 pageId 列表 */
+  byBasename: Map<string, string[]>;
+  /** 标题 → 命中的 pageId 列表 */
+  byTitle: Map<string, string[]>;
+};
+
+// ── 页面阅读视图 ───────────────────────────────────────────────
+
+export type WikiPageView = {
+  pageId: string;
+  relPath: string;
+  kind: 'page' | 'aggregate';
+  content: string;
+  parse: WikiPageParseResult;
+  /** 仅 kind=page：正文 type 与所在目录路由不一致 */
+  routeMismatch?: boolean;
+  links: WikiResolvedLink[];
+};
+
+// ── 写作规则（schema/purpose）────────────────────────────────
+
+export type WikiRulesView = {
+  /** schema.md 原文；文件不存在为 null */
+  schemaRaw: string | null;
+  /** purpose.md 原文；文件不存在为 null */
+  purposeRaw: string | null;
+  /** schema 原文解析结果（供 UI 即时展示当前路由/问题） */
+  schemaParse: WikiSchemaParseResult;
+};
+
+export type WikiRulesSaveInput = {
+  /** 新 schema.md 全文；不保存传 undefined */
+  schemaRaw?: string;
+  /** 新 purpose.md 全文；不保存传 undefined */
+  purposeRaw?: string;
+};
+
+export type WikiRulesSaveError =
+  | { code: 'schemaInvalid'; message: string; issues: WikiSchemaIssue[] }
+  | { code: 'pageDirRemap'; message: string };
+
+export type WikiRulesSaveOutcome =
+  | { ok: true; saved: { schema: boolean; purpose: boolean } }
+  | { ok: false; error: WikiRulesSaveError };
+
+// ── 默认模板 ───────────────────────────────────────────────────
+
+export type WikiTemplateInfo = {
+  type: WikiPageType;
+  /** 默认路由目录 */
+  dir: string;
+  /** 模板正文段落标题（按写作顺序） */
+  bodySections: string[];
+  defaultSummary: string;
+  defaultKeywords: string[];
+  defaultTags: string[];
+};
