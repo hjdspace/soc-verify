@@ -34,6 +34,8 @@ import { convertWikiSource, WikiSourceAbortedError } from './source-import';
 import type { SourceConvertOutcome } from './source-import';
 import { compileWikiSource, createDefaultCompileLlmFactory } from './compile';
 import type { CompileLlm, CompileSuccess } from './compile';
+import { createDefaultVisionLlmFactory } from './vision';
+import type { VisionLlm } from './vision';
 import type { LlmUsage } from './llm-call';
 import type {
   WikiIngestPhase,
@@ -175,6 +177,8 @@ function parseTask(u: unknown, kbId: string): WikiIngestTask | null {
         ? u.retryCount
         : 0,
     progress: parseTaskProgress(u.progress),
+    // 用户显式选择仅按文字继续（issue 12）：重启恢复后仍生效
+    ...(u.textOnly === true ? { textOnly: true } : {}),
     enqueuedAt,
     updatedAt,
   };
@@ -269,6 +273,14 @@ export type WikiIngestQueueOptions = {
    * KB 设置/默认凭证）；测试注入可控假响应。凭证不流入任务文件/渲染端。
    */
   compileLlmFactory?: (signal: AbortSignal) => Promise<CompileLlm | null>;
+  /**
+   * 编译任务的视觉模型入口工厂（issue 12，每次 attempt 调用一次）。
+   * 返回 null = 未配置视觉模型（含位图资产的来源将以 visionNotConfigured
+   * blocked，除非任务被用户显式标记 textOnly）。
+   * 缺省用 createDefaultVisionLlmFactory()（解析 KB 设置 vision 角色）；
+   * 测试注入可控假响应。凭证不流入任务文件/渲染端。
+   */
+  visionLlmFactory?: (signal: AbortSignal) => Promise<VisionLlm | null>;
 };
 
 // ── 队列管理器 ──────────────────────────────────────────────────
@@ -276,6 +288,7 @@ export type WikiIngestQueueOptions = {
 export class WikiIngestQueueManager {
   private readonly notify: ((e: WikiTaskEvent) => void) | undefined;
   private readonly compileLlmFactory: (signal: AbortSignal) => Promise<CompileLlm | null>;
+  private readonly visionLlmFactory: (signal: AbortSignal) => Promise<VisionLlm | null>;
   private state: QueueState | null = null;
   private readonly inflight = new Map<string, InflightRun>();
   private workerLimit = 1;
@@ -286,6 +299,7 @@ export class WikiIngestQueueManager {
   constructor(options: WikiIngestQueueOptions = {}) {
     this.notify = options.notify;
     this.compileLlmFactory = options.compileLlmFactory ?? createDefaultCompileLlmFactory();
+    this.visionLlmFactory = options.visionLlmFactory ?? createDefaultVisionLlmFactory();
   }
 
   // ── 附着 / 卸载 ──
@@ -646,6 +660,41 @@ export class WikiIngestQueueManager {
     this.schedulePump();
   }
 
+  /**
+   * 用户明确选择「仅按文字继续」（issue 12，spec §3）：textOnly 持久化进
+   * 队列文件（重启恢复后仍生效）并按原任务重试 —— 重跑跳过视觉解读生成
+   * 不完整提案（changeSet 列出视觉缺口并标 partial，不冒充完整编译）。
+   *
+   * 只允许对因视觉原因受阻/失败的任务设置（visionNotConfigured /
+   * visionFailed）；已完成的解读不删除，重跑时作为附录复用。
+   */
+  async continueTextOnly(kbId: string, taskId: string): Promise<void> {
+    const st = this.requireAttached(kbId);
+    const task = st.tasks.find((t) => t.taskId === taskId);
+    if (!task) throw new WikiQueueError('taskNotFound', `任务不存在: ${taskId}`);
+    if (!isRetryablePhase(task.phase) || task.kind !== 'compileSource') {
+      throw new WikiQueueError('invalidPhase', `只有 failed/cancelled/blocked 任务可继续（当前 ${task.phase}）`);
+    }
+    const visionCode = task.lastError?.code;
+    if (visionCode !== 'visionNotConfigured' && visionCode !== 'visionFailed') {
+      throw new WikiQueueError('invalidPhase', `只有视觉受阻的任务可仅按文字继续（lastError=${visionCode ?? '无'}）`);
+    }
+    const prev = cloneTask(task);
+    task.textOnly = true;
+    task.phase = 'queued';
+    task.attempt += 1;
+    task.attemptId = randomUUID();
+    task.updatedAt = new Date().toISOString();
+    this.pushTaskEvent(task);
+    try {
+      await this.flush();
+    } catch (err) {
+      Object.assign(task, prev);
+      throw err;
+    }
+    this.schedulePump();
+  }
+
   /** 在 queued 子序列内上/下移（非 queued 任务是固定点）。返回是否移动。 */
   async moveTask(kbId: string, taskId: string, direction: 'up' | 'down'): Promise<boolean> {
     const st = this.requireAttached(kbId);
@@ -860,20 +909,38 @@ export class WikiIngestQueueManager {
 
     // 2) 模型入口：每次 attempt 解析一次配置快照（调用方显式传入编译管线）
     let llm: CompileLlm | null = null;
+    let visionLlm: VisionLlm | null = null;
     try {
       llm = await this.compileLlmFactory(controller.signal);
+      visionLlm = await this.visionLlmFactory(controller.signal);
     } catch (err) {
       return { ok: false, error: { code: 'ioError', message: `解析模型配置失败: ${String(err)}` } };
     }
     if (controller.signal.aborted) return 'aborted';
 
-    setPhase('generating');
+    // 编译内阶段（vision/analyzing）由 onPhaseChange 驱动（issue 12）；
+    // generating/validating 仍为近似推进（编译成功前的显示语义）
     const result = await compileWikiSource(
       kbPath,
       { kbId: st.kbId, taskId: task.taskId, sourceId: task.sourceId },
       {
         llm,
+        visionLlm,
+        // 用户显式选择仅按文字继续（issue 12）：视觉缺口不阻止编译，提案标 partial
+        textOnly: task.textOnly === true,
         signal: controller.signal,
+        // vision 阶段推进（issue 12）：解读开始 → vision，进入文本分析 → analyzing
+        onPhaseChange: (phase) => setPhase(phase),
+        // 逐张解读进度（issue 12）：与分段进度同一形状（done/total）
+        onVisionProgress: (progress) => {
+          const t = st.tasks.find((x) => x.taskId === task.taskId);
+          if (!t || t.attemptId !== attemptId) return;
+          t.phase = 'vision';
+          t.progress = { ...progress };
+          t.updatedAt = new Date().toISOString();
+          this.pushTaskEvent(t);
+          void this.flush().catch(() => undefined);
+        },
         // 分段进度（长来源，issue 10）：phase 与进度分开保存，事件即时可见
         onChunkProgress: (progress) => {
           const t = st.tasks.find((x) => x.taskId === task.taskId);
@@ -934,9 +1001,13 @@ export class WikiIngestQueueManager {
       task.usage = summarizeUsage(usage);
       task.retryCount = taskRetryCount ?? 0;
     } else {
-      // 预算/配置不足 → blocked（issue 10，spec §5）：等待用户提高预算或改配置后重试，
-      // 不是普通失败；不静默裁切来源、不冒充完整成功。
-      task.phase = outcome.error.code === 'contextBudgetExceeded' ? 'blocked' : 'failed';
+      // 预算/配置不足 → blocked（issue 10/12，spec §5）：等待用户提高预算、
+      // 配置视觉模型或显式选择仅文字继续后重试，不是普通失败；
+      // 不静默裁切来源、不冒充完整成功。
+      task.phase =
+        outcome.error.code === 'contextBudgetExceeded' || outcome.error.code === 'visionNotConfigured'
+          ? 'blocked'
+          : 'failed';
       task.lastError = { code: outcome.error.code, message: outcome.error.message, at: now };
       task.usage = summarizeUsage(usage);
       task.retryCount = taskRetryCount ?? 0;

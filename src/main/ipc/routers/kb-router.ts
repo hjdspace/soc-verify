@@ -119,6 +119,7 @@ import type {
   WikiSourceRevisionInfo,
   WikiSourceSummary,
   WikiIngestTask,
+  WikiVisionInterpretation,
 } from '@shared/kb-types';
 
 // ── Result 联合类型（供 tRPC 输出推导） ─────────────────────────
@@ -820,32 +821,73 @@ export const kbRouter = t.router({
   // 渲染端先 load 再整体提交，与 TV 配置保存模式一致）。
 
   updateSettings: t.procedure
-    .input((raw): { convertEngine: string; llm: { providerId?: string; model?: string } } => {
-      const r = raw as Record<string, unknown>;
-      if (typeof r.convertEngine !== 'string' || !ENGINE_IDS.has(r.convertEngine)) {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'convertEngine must be anydoc' });
-      }
-      const llmRaw = (r.llm ?? {}) as Record<string, unknown>;
-      if (
-        (llmRaw.providerId !== undefined && typeof llmRaw.providerId !== 'string')
-        || (llmRaw.model !== undefined && typeof llmRaw.model !== 'string')
-      ) {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'llm.providerId and llm.model must be strings' });
-      }
-      return {
-        convertEngine: r.convertEngine,
-        llm: {
-          providerId: typeof llmRaw.providerId === 'string' ? llmRaw.providerId : '',
-          model: typeof llmRaw.model === 'string' ? llmRaw.model : '',
-        },
-      };
-    })
+    .input(
+      (
+        raw,
+      ): {
+        convertEngine: string;
+        llm: { providerId?: string; model?: string };
+        vision?: { providerId?: string; model?: string };
+      } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.convertEngine !== 'string' || !ENGINE_IDS.has(r.convertEngine)) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'convertEngine must be anydoc' });
+        }
+        const parseRole = (value: unknown, name: string): { providerId?: string; model?: string } => {
+          const roleRaw = (value ?? {}) as Record<string, unknown>;
+          if (
+            (roleRaw.providerId !== undefined && typeof roleRaw.providerId !== 'string')
+            || (roleRaw.model !== undefined && typeof roleRaw.model !== 'string')
+          ) {
+            throw new TRPCError({ code: 'BAD_REQUEST', message: `${name}.providerId and ${name}.model must be strings` });
+          }
+          return {
+            providerId: typeof roleRaw.providerId === 'string' ? roleRaw.providerId : '',
+            model: typeof roleRaw.model === 'string' ? roleRaw.model : '',
+          };
+        };
+        return {
+          convertEngine: r.convertEngine,
+          llm: parseRole(r.llm, 'llm'),
+          // vision 角色可选（issue 12）；不传视为清除显式配置
+          ...(r.vision !== undefined ? { vision: parseRole(r.vision, 'vision') } : {}),
+        };
+      },
+    )
     .mutation(async ({ input }): Promise<{ settings: KbSettings }> => {
       const settings = await kbSettingsManager.save({
         convertEngine: input.convertEngine as KbSettings['convertEngine'],
         llm: input.llm,
+        ...(input.vision ? { vision: input.vision } : {}),
       });
       return { settings };
+    }),
+
+  // ─── kb.verifyVisionModel（issue 12） ──────────────────────
+  //
+  // 图片能力独立验证（spec §3：文本 chat 成功不代表支持图片）。
+  // 解析 vision 角色显式配置 → 发送 1x1 PNG 真实请求 → 按可操作类别
+  // 返回结果（未配置/认证/模型不存在/图片被拒/限流/网络/API 异常）。
+  // 用户主动触发的真实网络调用。
+
+  verifyVisionModel: t.procedure
+    .input((_raw): Record<string, never> => {
+      return {};
+    })
+    .mutation(async () => {
+      const { resolveKbVisionLlmConfig } = await import('../../kb/llm-config');
+      const { verifyVisionModel } = await import('../../kb/vision');
+      const config = await resolveKbVisionLlmConfig();
+      if (!config) {
+        return {
+          ok: false as const,
+          error: {
+            kind: 'notConfigured' as const,
+            message: '未配置视觉模型（设置 → 知识库 → 视觉模型）：先选择凭证引用与模型',
+          },
+        };
+      }
+      return verifyVisionModel(config);
     }),
 
   // ─── kb.importSources（issue 02） ──────────────────────────
@@ -1004,6 +1046,27 @@ export const kbRouter = t.router({
       };
     }),
 
+  // ─── kb.visionInterpretations（issue 12） ──────────────────
+  //
+  // 来源的模型图像解读记录（.kb/vision/<sourceId>/<revision>/<assetId>.json）。
+  // 供资产面板并排展示：缩略图（原图字节）+ 模型解读（图类型/可见信号/
+  // 不确定项），审阅时逐张核对。无记录返回 null（从未解读过）。
+
+  visionInterpretations: t.procedure
+    .input((raw): { sourceId: string; revision?: string } => {
+      const parsed = parseSourceIdInput(raw, ['revision']);
+      return parsed.revision
+        ? { sourceId: parsed.sourceId, revision: parsed.revision }
+        : { sourceId: parsed.sourceId };
+    })
+    .query(async ({ input }): Promise<{ interpretations: WikiVisionInterpretation[] | null }> => {
+      const kbPath = await getWikiMountedKbPath();
+      const { readVisionInterpretations } = await import('../../kb/vision');
+      return {
+        interpretations: await readVisionInterpretations(kbPath, input.sourceId, input.revision),
+      };
+    }),
+
   // ─── kb.importExtensions（issue 02） ───────────────────────
   //
   // UI/工具能力清单：当前引擎可导入的扩展名（不宣称未支持格式）。
@@ -1157,6 +1220,31 @@ export const kbRouter = t.router({
       const kb = await getWikiMountedKb();
       try {
         await wikiIngestQueue.retryTask(kb.kbId, input.taskId);
+        return { ok: true };
+      } catch (err) {
+        return queueErrorResult(err);
+      }
+    }),
+
+  // ─── kb.queueContinueTextOnly（issue 12） ──────────────────
+  //
+  // 用户显式选择「仅按文字继续」：textOnly 持久化进队列文件并按原任务
+  // 重试，跳过视觉解读生成不完整提案（partial + 视觉缺口列表，不冒充
+  // 完整编译）。只允许视觉受阻（visionNotConfigured/visionFailed）的
+  // failed/cancelled/blocked 任务；非法阶段返回 invalidPhase。
+
+  queueContinueTextOnly: t.procedure
+    .input((raw): { taskId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.taskId !== 'string' || r.taskId.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'taskId is required' });
+      }
+      return { taskId: r.taskId.trim() };
+    })
+    .mutation(async ({ input }): Promise<QueueOpResult> => {
+      const kb = await getWikiMountedKb();
+      try {
+        await wikiIngestQueue.continueTextOnly(kb.kbId, input.taskId);
         return { ok: true };
       } catch (err) {
         return queueErrorResult(err);

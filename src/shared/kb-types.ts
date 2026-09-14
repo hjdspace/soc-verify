@@ -432,6 +432,8 @@ export type WikiIngestTask = {
   retryCount: number;
   /** 分段进度（issue 10；未分段任务为 null） */
   progress: WikiTaskProgress | null;
+  /** 用户明确选择仅按文字继续（issue 12）：视觉缺口不阻止编译，提案标 partial */
+  textOnly?: boolean;
   enqueuedAt: string;
   updatedAt: string;
 };
@@ -500,9 +502,62 @@ export type KbLlmSettings = {
   model?: string;
 };
 
+/**
+ * KB 模型角色设置（spec §3）：compile（分类/编译，即 `llm` 字段）、
+ * vision（图像解读）。角色相互独立 —— 视觉必须显式选择凭证与模型，
+ * 文本对话成功不代表支持图片输入，不自动跟随 compile 角色。
+ */
 export type KbSettings = {
   convertEngine: ConvertEngineId;
+  /** compile 角色（来源分类与编译） */
   llm: KbLlmSettings;
+  /** vision 角色（图像解读；缺省/空 = 未配置，视觉任务 blocked） */
+  vision?: KbLlmSettings;
+};
+
+// ── 图像解读（spec §3，issue 12）────────────────────────────────
+
+/** 单张图像的模型解读记录（.kb/vision/<sourceId>/<revision>/<assetId>.json） */
+export type WikiVisionInterpretation = {
+  /** 资产身份 = 图像字节 SHA256（内容寻址，与 pdf-assets 清单一致） */
+  assetId: string;
+  sourceId: string;
+  /** 解读时的来源修订 */
+  sourceRevision: string;
+  /** 1-based 页码（PDF）；来源不提供时为 null */
+  page: number | null;
+  /** 提取方式（与资产记录一致：object=位图对象 / page-render=整页渲染） */
+  method: 'object' | 'page-render';
+  /** 解读模型配置指纹（模型名，仅供显示与复用判断） */
+  model: string;
+  /** 提示词版本（提示变更后旧解读不复用） */
+  promptVersion: string;
+  /** 上下文指纹：图片字节 hash + 模型 + 提示版本 + 邻近文本 hash */
+  contextHash: string;
+  status: 'ok' | 'failed';
+  /** 图类型（时序图/框图/位段图/照片…；模型输出） */
+  imageType: string | null;
+  /** 可见元素/信号（原样记录，不换算） */
+  visibleElements: string | null;
+  /** 关系或时序 */
+  relations: string | null;
+  /** 可辨认的原文数值（保留原值；不清晰写「不清晰」，不补齐） */
+  visibleValues: string | null;
+  /** 无法确定项 */
+  uncertainties: string | null;
+  /** 模型输出原文 */
+  text: string | null;
+  errorCode?: string;
+  errorMessage?: string;
+  interpretedAt: string;
+};
+
+/** 视觉缺口：未获得解读的资产（用户明确选择仅按文字继续时随提案持久化） */
+export type WikiVisionGap = {
+  assetId: string;
+  page: number | null;
+  /** 缺口原因（visionNotConfigured / 模型失败信息摘要） */
+  reason: string;
 };
 
 // ── Wiki 页面与规则（LLM Wiki 新布局，spec §2，issue 04）───────
@@ -758,6 +813,13 @@ export type WikiChangeSet = {
   findings: WikiFinding[];
   /** 模型运行时未闭合/被丢弃的块说明（可见，不静默丢失） */
   warnings: string[];
+  /**
+   * 视觉缺口（issue 12）：用户明确选择仅按文字继续时列出未解读的资产。
+   * 非空时 partial=true（审阅可见「部分产出」徽标）；完整视觉覆盖或缺省为 null。
+   */
+  visionGaps?: WikiVisionGap[] | null;
+  /** 部分产出标记：visionGaps 非空时为 true，不冒充完整编译 */
+  partial?: boolean;
   createdAt: string;
   updatedAt: string;
 };

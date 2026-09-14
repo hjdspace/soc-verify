@@ -44,6 +44,11 @@ export type LlmCallResult = {
 export type LlmCallRequest = {
   system: string;
   user: string;
+  /**
+   * 受管图像字节（issue 12）：base64 数据（不含 data: 前缀）+ mediaType。
+   * 以实际字节内联发送 —— 绝不把本机文件路径当作模型可读图片引用。
+   */
+  images?: ReadonlyArray<{ mediaType: string; base64: string }>;
   maxTokens?: number;
   temperature?: number;
   /** 外部取消信号（请求中途取消同样生效） */
@@ -240,11 +245,20 @@ function planRequest(config: LlmConfig, req: LlmCallRequest): RequestPlan {
   const maxTokens = req.maxTokens ?? 2000;
 
   if (protocol === 'anthropic') {
+    const userContent: string | Array<Record<string, unknown>> = req.images?.length
+      ? [
+          { type: 'text', text: req.user },
+          ...req.images.map((img) => ({
+            type: 'image',
+            source: { type: 'base64', media_type: img.mediaType, data: img.base64 },
+          })),
+        ]
+      : req.user;
     const body: Record<string, unknown> = {
       model: config.model,
       max_tokens: maxTokens,
       system: req.system,
-      messages: [{ role: 'user', content: req.user }],
+      messages: [{ role: 'user', content: userContent }],
     };
     return {
       url: `${base}/messages`,
@@ -259,12 +273,20 @@ function planRequest(config: LlmConfig, req: LlmCallRequest): RequestPlan {
 
   if (protocol === 'gemini') {
     const vbase = base.includes('/v1beta') ? base : `${base}/v1beta`;
+    const userParts: Array<Record<string, unknown>> = req.images?.length
+      ? [
+          { text: req.user },
+          ...req.images.map((img) => ({
+            inline_data: { mime_type: img.mediaType, data: img.base64 },
+          })),
+        ]
+      : [{ text: req.user }];
     return {
       url: `${vbase}/models/${config.model}:generateContent?key=${config.apiKey}`,
       headers: { 'Content-Type': 'application/json' },
       body: {
         systemInstruction: { parts: [{ text: req.system }] },
-        contents: [{ role: 'user', parts: [{ text: req.user }] }],
+        contents: [{ role: 'user', parts: userParts }],
         generationConfig: {
           ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
           maxOutputTokens: maxTokens,
@@ -282,6 +304,7 @@ function planRequest(config: LlmConfig, req: LlmCallRequest): RequestPlan {
     user: req.user,
     maxTokens,
     temperature: req.temperature,
+    ...(req.images?.length ? { images: req.images } : {}),
   });
   return {
     url: request.url,

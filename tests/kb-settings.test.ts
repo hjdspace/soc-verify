@@ -78,4 +78,61 @@ describe('kb-settings', () => {
     expect(settings.convertEngine).toBe('anydoc');
     expect(existsSync(settingsPath)).toBe(false);
   });
+
+  // ── vision 角色（issue 12）：显式配置、独立于 llm 角色、规范化一致 ──
+
+  it('vision 角色 save → load round-trip 持久化，与 llm 角色独立', async () => {
+    await kbSettingsManager.save({
+      convertEngine: 'anydoc',
+      llm: { providerId: 'openai', model: 'glm-4.7' },
+      vision: { providerId: 'zhipu', model: 'glm-4.6v' },
+    });
+
+    kbSettingsManager.resetCache();
+    const settings = await kbSettingsManager.load();
+    expect(settings.llm.providerId).toBe('openai');
+    // vision 显式独立配置，不自动跟随 llm 角色
+    expect(settings.vision?.providerId).toBe('zhipu');
+    expect(settings.vision?.model).toBe('glm-4.6v');
+
+    const raw = JSON.parse(readFileSync(settingsPath, 'utf-8'));
+    expect(raw.vision).toEqual({ providerId: 'zhipu', model: 'glm-4.6v' });
+  });
+
+  it('vision 角色规范化：trim、空串清空、完全未配置时不产生 vision 字段', async () => {
+    // 全空 → 无 vision 字段（= 未配置，resolveKbVisionLlmConfig 返回 null）
+    const empty = await kbSettingsManager.save({
+      convertEngine: 'anydoc',
+      llm: {},
+      vision: { providerId: '  ', model: '' },
+    });
+    expect(empty.vision).toBeUndefined();
+
+    // 部分配置（只填 providerId）→ 保留；空白 trim
+    const partial = await kbSettingsManager.save({
+      convertEngine: 'anydoc',
+      llm: {},
+      vision: { providerId: '  zhipu  ', model: '  ' },
+    });
+    expect(partial.vision).toEqual({ providerId: 'zhipu' });
+
+    // 保存 vision 后再保存不含 vision 的设置 → vision 被清除（显式覆盖）
+    await kbSettingsManager.save({
+      convertEngine: 'anydoc',
+      llm: {},
+      vision: { providerId: 'zhipu' },
+    });
+    const cleared = await kbSettingsManager.save({ convertEngine: 'anydoc', llm: {} });
+    expect(cleared.vision).toBeUndefined();
+  });
+
+  it('损坏文件中 vision 字段异常时按规范化回退（不抛错）', async () => {
+    writeFileSync(
+      settingsPath,
+      JSON.stringify({ convertEngine: 'anydoc', llm: {}, vision: { providerId: 42, model: true } }),
+      'utf-8',
+    );
+    const settings = await kbSettingsManager.load();
+    expect(settings.vision).toBeUndefined();
+  });
 });

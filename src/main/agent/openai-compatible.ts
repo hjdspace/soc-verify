@@ -287,6 +287,12 @@ export type DirectChatRequest = {
  *  - openai-responses   → POST {base}/responses（input 角色消息 + max_output_tokens）
  *
  * `baseUrl` 需已含 `/v1` 前缀（可先过 ensureV1Prefix）。
+ *
+ * 图片（issue 12）：`images` 以 base64 字节附带在用户消息内容数组中
+ *  - completions：`{type:'image_url', image_url:{url:'data:<mediaType>;base64,<data>'}}`
+ *    （image_url 同时接受 URL 与 data URL；data URL 保证字节内联，不引用本机路径）
+ *  - responses：`{type:'input_image', image_url:'data:<mediaType>;base64,<data>'}`
+ * 无图片时保持纯文本消息（既有行为不变）。
  */
 export function buildDirectChatRequest(options: {
   baseUrl: string;
@@ -296,11 +302,15 @@ export function buildDirectChatRequest(options: {
   user: string;
   maxTokens: number;
   temperature?: number;
+  /** 受管图像字节（base64，不含 data: 前缀）；按顺序附带在用户消息之后 */
+  images?: ReadonlyArray<{ mediaType: string; base64: string }>;
 }): DirectChatRequest {
   const base = options.baseUrl.replace(/\/+$/, '');
   const temperature = options.temperature !== undefined
     ? { temperature: options.temperature }
     : {};
+  const images = options.images ?? [];
+  const hasImages = images.length > 0;
 
   if (normalizeApiFormat(options.apiFormat) === 'openai-responses') {
     return {
@@ -309,7 +319,18 @@ export function buildDirectChatRequest(options: {
         model: options.model,
         input: [
           { role: 'system', content: options.system },
-          { role: 'user', content: options.user },
+          {
+            role: 'user',
+            content: hasImages
+              ? [
+                  { type: 'input_text', text: options.user },
+                  ...images.map((img) => ({
+                    type: 'input_image',
+                    image_url: `data:${img.mediaType};base64,${img.base64}`,
+                  })),
+                ]
+              : options.user,
+          },
         ],
         max_output_tokens: options.maxTokens,
         ...temperature,
@@ -324,7 +345,18 @@ export function buildDirectChatRequest(options: {
       model: options.model,
       messages: [
         { role: 'system', content: options.system },
-        { role: 'user', content: options.user },
+        {
+          role: 'user',
+          content: hasImages
+            ? [
+                { type: 'text', text: options.user },
+                ...images.map((img) => ({
+                  type: 'image_url',
+                  image_url: { url: `data:${img.mediaType};base64,${img.base64}` },
+                })),
+              ]
+            : options.user,
+        },
       ],
       max_tokens: options.maxTokens,
       ...temperature,

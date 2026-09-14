@@ -27,6 +27,8 @@ type KbQueueState = {
   resume: () => Promise<void>;
   cancel: (taskId: string) => Promise<void>;
   retry: (taskId: string) => Promise<void>;
+  /** 视觉受阻任务「仅按文字继续」（issue 12）：textOnly 持久化并按原任务重试 */
+  continueTextOnly: (taskId: string) => Promise<void>;
   move: (taskId: string, direction: 'up' | 'down') => Promise<void>;
   clearFinished: () => Promise<void>;
   enqueue: (sourceIds: string[]) => Promise<void>;
@@ -172,6 +174,15 @@ export const useKbQueueStore = create<KbQueueState>((set, get) => ({
     const r = await trpc.kb.queueRetry.mutate({ taskId });
     if (!r.ok) {
       toastError(`重试失败（${r.error.code}）：${r.error.message}`);
+      return;
+    }
+    await get().loadSnapshot();
+  },
+
+  continueTextOnly: async (taskId) => {
+    const r = await trpc.kb.queueContinueTextOnly.mutate({ taskId });
+    if (!r.ok) {
+      toastError(`仅按文字继续失败（${r.error.code}）：${r.error.message}`);
       return;
     }
     await get().loadSnapshot();

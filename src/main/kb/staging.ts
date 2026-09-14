@@ -36,6 +36,7 @@ import type {
   WikiStagedPage,
   WikiStagingErrorCode,
   WikiStagingResult,
+  WikiVisionGap,
 } from '@shared/kb-types';
 
 // ── 输入契约 ────────────────────────────────────────────────────
@@ -63,6 +64,11 @@ export type StageProposalInput = {
    * 其他来源页块被丢弃并记录警告（模型不能为别的 source 伪造来源页）。
    */
   fixedSourcePageId?: string;
+  /**
+   * 视觉缺口（issue 12）：用户明确选择仅按文字继续时列出未解读的资产。
+   * 非空时 changeSet.partial=true（审阅可见「部分产出」徽标）。
+   */
+  visionGaps?: WikiVisionGap[];
   /** 测试/显式覆盖 schema/purpose hash；生产路径不传，由库内文件计算 */
   schemaHash?: string;
   /** 同上 */
@@ -192,6 +198,9 @@ export async function stageProposal(
     pages,
     findings: input.findings ?? [],
     warnings,
+    // 视觉缺口（issue 12）：非空即部分产出（不冒充完整编译）
+    visionGaps: input.visionGaps && input.visionGaps.length > 0 ? input.visionGaps : null,
+    partial: (input.visionGaps?.length ?? 0) > 0,
     createdAt: now,
     updatedAt: now,
   };

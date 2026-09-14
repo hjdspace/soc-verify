@@ -30,20 +30,32 @@ export const DEFAULT_KB_SETTINGS: KbSettings = {
   llm: {},
 };
 
+/** 角色规范化：字符串 trim、空串清空（compile/vision 角色共用） */
+function normalizeRole(raw: Partial<KbLlmSettings> | undefined): KbLlmSettings {
+  const providerId = typeof raw?.providerId === 'string' ? raw.providerId.trim() : '';
+  const model = typeof raw?.model === 'string' ? raw.model.trim() : '';
+  return {
+    ...(providerId ? { providerId } : {}),
+    ...(model ? { model } : {}),
+  };
+}
+
 /** 规范化外部输入：未知引擎回退默认、字符串 trim、空串清空 */
 function normalize(input: unknown): KbSettings {
-  const raw = (input ?? {}) as Partial<KbSettings> & { llm?: Partial<KbLlmSettings> };
+  const raw = (input ?? {}) as Partial<KbSettings> & {
+    llm?: Partial<KbLlmSettings>;
+    vision?: Partial<KbLlmSettings>;
+  };
   const convertEngine = typeof raw.convertEngine === 'string' && ENGINE_IDS.has(raw.convertEngine)
     ? (raw.convertEngine as ConvertEngineId)
     : DEFAULT_KB_SETTINGS.convertEngine;
-  const providerId = typeof raw.llm?.providerId === 'string' ? raw.llm.providerId.trim() : '';
-  const model = typeof raw.llm?.model === 'string' ? raw.llm.model.trim() : '';
+  const llm = normalizeRole(raw.llm);
+  const vision = normalizeRole(raw.vision);
   return {
     convertEngine,
-    llm: {
-      ...(providerId ? { providerId } : {}),
-      ...(model ? { model } : {}),
-    },
+    llm,
+    // vision 角色显式保存（issue 12）；完全未配置时不产生字段（= 未配置）
+    ...(vision.providerId || vision.model ? { vision } : {}),
   };
 }
 

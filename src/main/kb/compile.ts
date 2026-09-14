@@ -63,6 +63,13 @@ import { stageProposal } from './staging';
 import { writeFileAtomic } from './atomic-commit';
 import { callLlm, LlmCallError, type LlmUsage } from './llm-call';
 import { resolveKbLlmConfig } from './llm-config';
+import { readPdfAssetManifest } from './pdf-asset-store';
+import {
+  runVisionPhase,
+  readVisionInterpretations,
+  buildVisionAppendix,
+  type VisionLlm,
+} from './vision';
 import {
   buildAnalysisPrompt,
   buildGenerationPrompt,
@@ -82,6 +89,7 @@ import {
   type CompileBudget,
 } from './token-budget';
 import { planLongSource, formatCoverageManifest, type SourceCoverage, type LongSourcePlan } from './long-source';
+import type { PdfAssetRecord } from './pdf-assets';
 import {
   longSourceCheckpointKey,
   loadLongSourceCheckpoint,
@@ -94,6 +102,8 @@ import type {
   WikiPageType,
   WikiSourceRef,
   WikiStagingErrorCode,
+  WikiVisionGap,
+  WikiVisionInterpretation,
 } from '@shared/kb-types';
 
 // ── 模型调用边界 ────────────────────────────────────────────────
@@ -144,6 +154,8 @@ export function createDefaultCompileLlmFactory(): (signal: AbortSignal) => Promi
 
 export type CompileErrorCode =
   | 'noCredential'
+  | 'visionNotConfigured'
+  | 'visionFailed'
   | 'sourceNotFound'
   | 'manifestCorrupted'
   | 'sourceNotReady'
@@ -229,6 +241,17 @@ export type CompileInput = {
 export type CompileDeps = {
   /** 模型入口；null = 未配置凭证 */
   llm: CompileLlm | null;
+  /**
+   * 视觉模型入口（issue 12）；缺省/null = 未配置视觉模型。
+   * 来源含位图资产时：未配置且未显式 textOnly → visionNotConfigured 阻止编译
+   * （不暗退回纯文字，spec §3）。
+   */
+  visionLlm?: VisionLlm | null;
+  /**
+   * 用户明确选择仅按文字继续（issue 12）：跳过视觉解读生成不完整提案，
+   * changeSet 列出视觉缺口并标 partial —— 只有显式传入才生效。
+   */
+  textOnly?: boolean;
   /** 外部取消信号（队列取消/暂停共用） */
   signal?: AbortSignal;
   /** 注入时钟（测试用） */
@@ -237,6 +260,13 @@ export type CompileDeps = {
   retryBaseDelayMs?: number;
   /** 分段进度回调（长来源：已完成段数/总段数；队列据此展示分段进度） */
   onChunkProgress?: (progress: { done: number; total: number }) => void;
+  /** 逐张视觉解读进度回调（队列据此展示 vision 阶段进度） */
+  onVisionProgress?: (progress: { done: number; total: number }) => void;
+  /**
+   * 编译内阶段切换回调（队列据此推进 phase 显示）：
+   * 'vision' = 开始图像解读；'analyzing' = 进入文本分析。
+   */
+  onPhaseChange?: (phase: 'vision' | 'analyzing') => void;
 };
 
 /** 有界修复最多一次（spec §4：只允许一次有界修复调用） */
@@ -630,6 +660,8 @@ async function analyzeInChunks(args: {
   sourceName: string;
   sourceRef: WikiSourceRef;
   availableInputTokens: number;
+  /** 视觉附录指纹（issue 12；无附录为 null —— 键占位不改口径） */
+  visionHash: string | null;
   /** 每次调用中累计摘要可占用的 token（由预算推导；超出即裁剪并告警） */
   digestMaxTokens: number;
   onChunkProgress?: (progress: { done: number; total: number }) => void;
@@ -643,8 +675,8 @@ async function analyzeInChunks(args: {
     sourceId,
     sourceRevision: sourceRef.sourceRevision,
     parsedHash: sourceRef.parsedHash,
-    // 本期未接入视觉解读：视觉指纹占位为 null（字段先在键中占位，接入后不再改口径）
-    visionHash: null,
+    // 视觉附录指纹（issue 12）：解读变化 → 旧 checkpoint 失配重算
+    visionHash: args.visionHash,
     schemaHash: sha256(args.schema),
     purposeHash: sha256(args.purpose),
     modelFingerprint: args.modelFingerprint,
@@ -867,6 +899,78 @@ export async function compileWikiSource(
       parsedHash: rec.parsedHash,
     };
 
+    // ── 视觉门禁（issue 12，spec §3：失败/未配置阻止完整编译，不暗退回纯文字）──
+    const assetManifest = await readPdfAssetManifest(kbPath, input.sourceId, rec.currentRevision);
+    const uniqueAssets: PdfAssetRecord[] = [];
+    {
+      const seen = new Set<string>();
+      for (const a of assetManifest?.assets ?? []) {
+        if (!seen.has(a.assetId)) {
+          seen.add(a.assetId);
+          uniqueAssets.push(a);
+        }
+      }
+    }
+    let visionGaps: WikiVisionGap[] = [];
+    let visionAppendix = '';
+    if (uniqueAssets.length > 0) {
+      const existingRecords = (await readVisionInterpretations(kbPath, input.sourceId, rec.currentRevision)) ?? [];
+      const okByAsset = new Map(
+        existingRecords.filter((r) => r.status === 'ok').map((r) => [r.assetId, r] as const),
+      );
+
+      if (deps.textOnly) {
+        // 用户明确选择仅按文字继续：跳过视觉解读，缺口随提案列出（不冒充完整编译）
+        visionGaps = uniqueAssets
+          .filter((a) => !okByAsset.has(a.assetId))
+          .map((a) => ({
+            assetId: a.assetId,
+            page: a.page ?? null,
+            reason: '用户选择仅按文字继续（该图未解读）',
+          }));
+        visionAppendix = buildVisionAppendix(
+          uniqueAssets.map((a) => okByAsset.get(a.assetId)).filter((r): r is WikiVisionInterpretation => r !== undefined),
+        );
+      } else if (!deps.visionLlm) {
+        return failWith(
+          'visionNotConfigured',
+          `来源包含 ${uniqueAssets.length} 张待解读图像，但未配置视觉模型`
+            + '（设置 → 知识库 → 视觉模型）。配置并重试，或显式选择「仅按文字继续」'
+            + '生成不完整提案（将列出视觉缺口并标部分产出）。',
+        );
+      } else {
+        deps.onPhaseChange?.('vision');
+        const vr = await runVisionPhase({
+          kbPath,
+          sourceId: input.sourceId,
+          sourceRevision: rec.currentRevision,
+          llm: deps.visionLlm,
+          signal,
+          onProgress: deps.onVisionProgress,
+        });
+        if (vr.cancelled) {
+          return failWith('aborted', '图像解读已取消（已完成解读已保留，重试只重做剩余项）');
+        }
+        if (vr.failures.length > 0) {
+          const first = vr.failures[0]!;
+          const okCount = vr.stats.interpreted + vr.stats.reused;
+          return failWith(
+            'visionFailed',
+            `图像解读失败 ${vr.failures.length}/${vr.stats.total} 张`
+              + `（已成功 ${okCount} 张保留，重试只重做失败项）。`
+              + `首个失败 [${first.errorCode}]: ${first.errorMessage}`,
+          );
+        }
+        visionAppendix = buildVisionAppendix(vr.interpretations);
+      }
+    }
+
+    // 附录进编译输入：预算按附录计入（不静默超出上下文）；
+    // 机械 parsed 保持纯原文 —— 附录只存在于提示词与 .kb/vision 记录。
+    const sourceWithVision = visionAppendix
+      ? `${parsedView.content}\n\n${visionAppendix}`
+      : parsedView.content;
+
     // 读集：purpose / schema / 当前知识库目录
     const purpose = await readFileOrNull(layout.purposeMdPath);
     const schema = await readFileOrNull(layout.schemaMdPath);
@@ -883,7 +987,7 @@ export async function compileWikiSource(
     });
 
     // 单次 / 分段 / blocked：预算不足放最小原子证据就明确 blocked，不裁掉参数表
-    const plan = planLongSource(parsedView.content, {
+    const plan = planLongSource(sourceWithVision, {
       availableInputTokens: budget.availableInputTokens,
     });
     if (plan.mode === 'blocked') {
@@ -914,7 +1018,14 @@ export async function compileWikiSource(
 
     // ── 阶段 1：结构化分析（预算内单次；超预算按章节分段 + checkpoint） ──
     throwIfAborted();
+    deps.onPhaseChange?.('analyzing');
     const preWarnings: string[] = [];
+    if (visionGaps.length > 0) {
+      preWarnings.push(
+        `部分产出：用户选择仅按文字继续，${visionGaps.length} 张图像未解读`
+          + `（视觉缺口已随变更集列出；可配置视觉模型后重新编译补齐）。`,
+      );
+    }
     let analysisText: string;
     let chunking: CompileChunking | null = null;
     let coverageManifest: string | null = null;
@@ -922,7 +1033,7 @@ export async function compileWikiSource(
     if (plan.mode === 'single') {
       const analysis = await invokePhase(llm, {
         system: ANALYSIS_SYSTEM,
-        user: buildAnalysisPrompt({ purpose, schema, index, sourceContent: parsedView.content }),
+        user: buildAnalysisPrompt({ purpose, schema, index, sourceContent: sourceWithVision }),
         maxTokens: ANALYSIS_MAX_TOKENS,
       }, signal, baseDelayMs);
       retryCount += analysis.retryCount;
@@ -946,6 +1057,7 @@ export async function compileWikiSource(
         sourceName: rec.sourcePath,
         sourceRef,
         availableInputTokens: budget.availableInputTokens,
+        visionHash: visionAppendix ? sha256(visionAppendix) : null,
         digestMaxTokens: plan.digestTokens,
         onChunkProgress: deps.onChunkProgress,
       });
@@ -1110,6 +1222,8 @@ export async function compileWikiSource(
       proposalText,
       fixedSourcePageId: `sources/${input.sourceId}`,
       extraWarnings: dedupeWarnings(extraWarnings),
+      // 视觉缺口（issue 12）：仅文字继续时随提案持久化并标 partial
+      ...(visionGaps.length > 0 ? { visionGaps } : {}),
     });
     if (!staged.ok) {
       return failWith(mapStagingError(staged.error.code), staged.error.message, { retryCount, repairAttempted });

@@ -113,6 +113,7 @@ const mocks = vi.hoisted(() => ({
   pdfAssetFileQuery: vi.fn(),
   pdfAssetExtractMutate: vi.fn(),
   queueEnqueueMutate: vi.fn(),
+  visionInterpretationsQuery: vi.fn(),
 }));
 
 let currentSources: unknown[];
@@ -135,6 +136,7 @@ vi.mock('@renderer/lib/trpc', () => ({
       pdfAssets: { query: mocks.pdfAssetsQuery },
       pdfAssetFile: { query: mocks.pdfAssetFileQuery },
       pdfAssetExtract: { mutate: mocks.pdfAssetExtractMutate },
+      visionInterpretations: { query: mocks.visionInterpretationsQuery },
     },
   },
 }));
@@ -163,6 +165,7 @@ beforeEach(() => {
     return Promise.resolve({ path: `D:\\kb\\assets\\${input.assetId}.png` });
   });
   mocks.pdfAssetExtractMutate.mockResolvedValue({ ok: true, dir: 'D:\\kb\\assets', written: 2, addedRecords: 2, manifest });
+  mocks.visionInterpretationsQuery.mockResolvedValue({ interpretations: null });
 });
 
 afterEach(() => {
@@ -184,6 +187,7 @@ describe('KbWikiTasks PDF 资产面板（issue 11）', () => {
     });
     mocks.pdfAssetsQuery.mockResolvedValue({ manifest });
     mocks.pdfAssetExtractMutate.mockClear();
+    mocks.visionInterpretationsQuery.mockResolvedValue({ interpretations: null });
   });
 
   it('.pdf 来源出现图片入口；展开渲染摘要、资产缩略图（local-resource）与页码', async () => {
@@ -267,5 +271,91 @@ describe('KbWikiTasks PDF 资产面板（issue 11）', () => {
     await waitFor(() => expect(screen.getByTestId('pdf-assets-panel')).toBeTruthy());
     expect(screen.getByText(/第 5 页/)).toBeTruthy();
     expect(screen.getByText(/位图对象不可解析/)).toBeTruthy();
+  });
+
+  // ── 模型解读并排面板（issue 12） ──────────────────────────────
+
+  it('选中卡片并排显示模型解读：字段完整且标注非原文', async () => {
+    mocks.visionInterpretationsQuery.mockResolvedValue({
+      interpretations: [
+        {
+          assetId: 'a'.repeat(64),
+          sourceId: 'sid-pdf',
+          sourceRevision: 'f'.repeat(64),
+          page: 1,
+          method: 'object',
+          model: 'glm-4.6v',
+          promptVersion: 'v1',
+          contextHash: 'c'.repeat(64),
+          status: 'ok',
+          imageType: '框图',
+          visibleElements: 'CPU、DDR 控制器',
+          relations: null,
+          visibleValues: '频率标注 3200',
+          uncertainties: '右侧小字不清晰',
+          text: '模型原始输出',
+          interpretedAt: '2026-09-14T00:00:00.000Z',
+        },
+      ],
+    });
+    render(<KbWikiTasks />);
+    await waitFor(() => expect(screen.getByText('docs/spec.pdf')).toBeTruthy());
+    fireEvent.click(screen.getByTitle('查看 PDF 图像资产'));
+
+    await waitFor(() => expect(screen.getByTestId(`pdf-asset-${'a'.repeat(8)}`)).toBeTruthy());
+    fireEvent.click(screen.getByTestId(`pdf-asset-${'a'.repeat(8)}`));
+
+    await waitFor(() => expect(screen.getByTestId('vision-interpretation')).toBeTruthy());
+    // 明确标注「模型图像解读（非原文）」
+    expect(screen.getByText(/模型图像解读（非原文）/)).toBeTruthy();
+    expect(screen.getByText('glm-4.6v')).toBeTruthy();
+    // 结构化字段逐项可见
+    expect(screen.getByText('框图')).toBeTruthy();
+    expect(screen.getByText('CPU、DDR 控制器')).toBeTruthy();
+    expect(screen.getByText('频率标注 3200')).toBeTruthy();
+    expect(screen.getByText('右侧小字不清晰')).toBeTruthy();
+    // 查询按来源拉取
+    expect(mocks.visionInterpretationsQuery).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 'sid-pdf' }));
+  });
+
+  it('解读失败与无解读的卡片给出可操作提示', async () => {
+    mocks.visionInterpretationsQuery.mockResolvedValue({
+      interpretations: [
+        {
+          assetId: 'a'.repeat(64),
+          sourceId: 'sid-pdf',
+          sourceRevision: 'f'.repeat(64),
+          page: 1,
+          method: 'object',
+          model: 'glm-4.6v',
+          promptVersion: 'v1',
+          contextHash: 'c'.repeat(64),
+          status: 'failed',
+          imageType: null,
+          visibleElements: null,
+          relations: null,
+          visibleValues: null,
+          uncertainties: null,
+          text: null,
+          errorCode: 'imageRejected',
+          errorMessage: '端点拒绝图片输入',
+          interpretedAt: '2026-09-14T00:00:00.000Z',
+        },
+      ],
+    });
+    render(<KbWikiTasks />);
+    await waitFor(() => expect(screen.getByText('docs/spec.pdf')).toBeTruthy());
+    fireEvent.click(screen.getByTitle('查看 PDF 图像资产'));
+
+    await waitFor(() => expect(screen.getByTestId(`pdf-asset-${'a'.repeat(8)}`)).toBeTruthy());
+
+    // 失败解读：错误码与详情可见，提示重试
+    fireEvent.click(screen.getByTestId(`pdf-asset-${'a'.repeat(8)}`));
+    await waitFor(() => expect(screen.getByText(/端点拒绝图片输入/)).toBeTruthy());
+    expect(screen.getByText(/imageRejected/)).toBeTruthy();
+
+    // 无解读：点击 b 卡片 → 尚无模型解读提示
+    fireEvent.click(screen.getByTestId(`pdf-asset-${'b'.repeat(8)}`));
+    await waitFor(() => expect(screen.getByText(/该图尚无模型解读/)).toBeTruthy());
   });
 });

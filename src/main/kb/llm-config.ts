@@ -204,3 +204,24 @@ export async function resolveKbLlmConfig(): Promise<LlmConfig | null> {
     apiFormat: cred.api,
   };
 }
+
+/**
+ * 解析 vision 角色配置（issue 12，spec §3）。
+ *
+ * vision 角色必须**显式**配置（settings.vision.providerId）：
+ * 文本 chat 成功不代表支持图片输入，不自动跟随 compile 角色或
+ * Agent 会话凭证降级（不暗退回）。未配置返回 null（视觉任务 blocked）。
+ * model 解析：vision.model > 凭证首个配置模型 > API 首个可用模型。
+ */
+export async function resolveKbVisionLlmConfig(): Promise<LlmConfig | null> {
+  const kbSettings = await kbSettingsManager.load();
+  const vision = kbSettings.vision;
+  if (!vision?.providerId) return null;
+  const cred = await credentialManager.get(vision.providerId);
+  if (!cred?.baseUrl || !cred.apiKey) return null;
+  const baseUrl = baseUrlForCredential(cred);
+  const model = vision.model?.trim()
+    || cred.models?.[0]?.id.trim()
+    || await firstAvailableModel(cred, baseUrl);
+  return { baseUrl, apiKey: cred.apiKey, model, providerId: cred.providerId, apiFormat: cred.api };
+}

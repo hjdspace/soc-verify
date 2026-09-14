@@ -98,10 +98,21 @@ vi.mock('@firecrawl/anydoc', () => ({
   formatFromExtension: vi.fn(),
 }));
 
+// Mock kb/vision 的 verifyVisionModel（issue 12 验证接口测试不触真实网络；其余导出保留）
+vi.mock('../src/main/kb/vision', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/main/kb/vision')>();
+  return {
+    ...actual,
+    verifyVisionModel: vi.fn(),
+  };
+});
+
 // ─── Imports (after mocks) ──────────────────────────────────
 
 import { kbRouter } from '../src/main/ipc/routers/kb-router';
 import { kbSettingsManager } from '../src/main/kb/kb-settings';
+import { verifyVisionModel } from '../src/main/kb/vision';
+import { credentialManager } from '../src/main/credentials/credential-manager';
 import { initWikiLayout, readWikiManifest } from '../src/main/kb/wiki-layout';
 import { prepareCommit } from '../src/main/kb/atomic-commit';
 import type { WikiSourceSummary, WikiSourceRevisionInfo } from '@shared/kb-types';
@@ -918,6 +929,91 @@ describe('kb-router', () => {
           llm: { providerId: 123 },
         } as unknown as { convertEngine: string; llm: { providerId?: string; model?: string } }),
       ).rejects.toThrow();
+    });
+  });
+
+  // ─── kb vision 角色与图片能力验证（issue 12） ────────────────
+
+  describe('kb vision 角色（issue 12）', () => {
+    it('updateSettings 保存 vision 角色 → getSettings 回读（独立于 llm 角色）', async () => {
+      const result = await caller.updateSettings({
+        convertEngine: 'anydoc',
+        llm: { providerId: 'relay-cred', model: 'glm-4.7' },
+        vision: { providerId: 'zhipu-cred', model: 'glm-4.6v' },
+      });
+      expect(result.settings.vision).toEqual({ providerId: 'zhipu-cred', model: 'glm-4.6v' });
+
+      kbSettingsManager.resetCache();
+      const reread = await caller.getSettings({});
+      expect(reread.settings.llm.providerId).toBe('relay-cred');
+      expect(reread.settings.vision?.providerId).toBe('zhipu-cred');
+    });
+
+    it('updateSettings 不传 vision → 清除显式视觉配置（全量覆写语义）', async () => {
+      await caller.updateSettings({
+        convertEngine: 'anydoc',
+        llm: {},
+        vision: { providerId: 'zhipu-cred' },
+      });
+      const result = await caller.updateSettings({ convertEngine: 'anydoc', llm: {} });
+      expect(result.settings.vision).toBeUndefined();
+    });
+
+    it('vision 字段类型错误抛出 BAD_REQUEST', async () => {
+      await expect(
+        caller.updateSettings({
+          convertEngine: 'anydoc',
+          llm: {},
+          vision: { providerId: 42 },
+        } as unknown as { convertEngine: string; llm: { providerId?: string; model?: string } }),
+      ).rejects.toThrow();
+    });
+
+    it('verifyVisionModel 未配置 → notConfigured（不触网络）', async () => {
+      const result = await caller.verifyVisionModel({});
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.kind).toBe('notConfigured');
+      }
+    });
+
+    it('verifyVisionModel 已配置 → 转发 vision 模块真实验证结果', async () => {
+      // vision 配置指向存在且可用的凭证
+      await caller.updateSettings({
+        convertEngine: 'anydoc',
+        llm: {},
+        vision: { providerId: 'zhipu-cred', model: 'glm-4.6v' },
+      });
+      vi.mocked(credentialManager.get).mockResolvedValue({
+        providerId: 'zhipu-cred',
+        apiKey: 'sk-test',
+        baseUrl: 'https://gw.test/v1',
+        api: 'chat completions',
+      } as never);
+
+      vi.mocked(verifyVisionModel).mockResolvedValue({
+        ok: true,
+        model: 'glm-4.6v',
+        sample: 'OK',
+      });
+      const ok = await caller.verifyVisionModel({});
+      expect(ok).toEqual({ ok: true, model: 'glm-4.6v', sample: 'OK' });
+      expect(verifyVisionModel).toHaveBeenCalledWith(
+        expect.objectContaining({ baseUrl: 'https://gw.test/v1', model: 'glm-4.6v', apiKey: 'sk-test' }),
+      );
+
+      // 图片被拒（400）→ 可操作类别透传
+      vi.mocked(verifyVisionModel).mockResolvedValue({
+        ok: false,
+        error: { kind: 'imageRejected', message: '端点拒绝图片输入' },
+      });
+      const rejected = await caller.verifyVisionModel({});
+      expect(rejected.ok).toBe(false);
+      if (!rejected.ok) {
+        expect(rejected.error.kind).toBe('imageRejected');
+      }
+
+      vi.mocked(credentialManager.get).mockResolvedValue(null);
     });
   });
 

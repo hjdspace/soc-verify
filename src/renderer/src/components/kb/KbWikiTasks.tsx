@@ -21,7 +21,7 @@ import { useKbQueueStore } from '@renderer/stores/kb-queue';
 import { useKbStore } from '@renderer/stores/kb';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
-import type { WikiIngestPhase, WikiIngestTask, WikiSourceSummary, WikiTaskUsage } from '@shared/kb-types';
+import type { WikiIngestPhase, WikiIngestTask, WikiSourceSummary, WikiTaskUsage, WikiVisionInterpretation } from '@shared/kb-types';
 import { isActivePhase, isRetryablePhase } from '@shared/kb-task-phases';
 
 type PdfAssetsOutput = inferRouterOutputs<AppRouter>['kb']['pdfAssets'];
@@ -107,11 +107,17 @@ function usageText(usage: WikiTaskUsage | null | undefined): string {
 function TaskRow({ task, index, total }: { task: WikiIngestTask; index: number; total: number }) {
   const cancel = useKbQueueStore((s) => s.cancel);
   const retry = useKbQueueStore((s) => s.retry);
+  const continueTextOnly = useKbQueueStore((s) => s.continueTextOnly);
   const move = useKbQueueStore((s) => s.move);
 
   const active = task.phase === 'queued' || task.phase === 'converting' || task.phase === 'committing';
   const usage = usageText(task.usage);
   const retryCount = task.retryCount ?? 0;
+  // 视觉受阻（issue 12）：未配置/解读失败 → 提供「仅按文字继续」显式降级入口
+  const visionBlocked =
+    task.kind === 'compileSource'
+    && isRetryablePhase(task.phase)
+    && (task.lastError?.code === 'visionNotConfigured' || task.lastError?.code === 'visionFailed');
 
   return (
     <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2 text-xs last:border-b-0">
@@ -179,6 +185,16 @@ function TaskRow({ task, index, total }: { task: WikiIngestTask; index: number; 
             className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           >
             <RotateCcw className="h-3.5 w-3.5" />
+          </button>
+        )}
+        {visionBlocked && (
+          <button
+            onClick={() => void continueTextOnly(task.taskId)}
+            title="仅按文字继续：跳过图像解读生成不完整提案（标部分产出并列出视觉缺口）；已成功的解读保留复用"
+            data-testid="continue-text-only"
+            className="rounded px-1.5 py-0.5 text-[10px] font-medium text-amber-600 transition-colors hover:bg-accent dark:text-amber-400"
+          >
+            仅按文字继续
           </button>
         )}
         {active && task.phase === 'committing' && (
@@ -436,6 +452,83 @@ function AssetDetail({ record }: { record: PdfAssetRecord }) {
   );
 }
 
+/** 解读字段行（空值显示「无」保持结构完整，便于逐项核对） */
+function InterpretLine({ label, value }: { label: string; value: string | null }) {
+  return (
+    <div className="flex gap-1.5">
+      <span className="w-20 shrink-0 text-muted-foreground">{label}</span>
+      <span className="min-w-0 flex-1 whitespace-pre-wrap text-foreground">
+        {value && value.trim().length > 0 ? value.trim() : '无'}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * 模型图像解读并排面板（issue 12）：原图缩略图旁边显示模型对该图的
+ * 结构化解读（图类型/可见元素与信号/关系或时序/可辨认数值/不确定项），
+ * 供人工审阅时逐张核对。明确标注「模型图像解读（非原文）」。
+ */
+function InterpretationPanel({ sourceId, record }: { sourceId: string; record: PdfAssetRecord }) {
+  const [interp, setInterp] = useState<WikiVisionInterpretation | null>(null);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    trpc.kb.visionInterpretations
+      .query({ sourceId })
+      .then((r) => {
+        if (!alive) return;
+        const hit = (r.interpretations ?? []).find((x) => x.assetId === record.assetId) ?? null;
+        setInterp(hit);
+        setLoaded(true);
+      })
+      .catch(() => {
+        if (alive) setLoaded(true);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [sourceId, record.assetId]);
+
+  if (!loaded) {
+    return (
+      <div className="mt-2 text-[11px] text-muted-foreground">加载模型解读…</div>
+    );
+  }
+  if (!interp) {
+    return (
+      <div className="mt-2 rounded border border-border/60 bg-secondary/20 px-3 py-2 text-[11px] text-muted-foreground">
+        该图尚无模型解读（未配置视觉模型或未编译过；编译含图像来源时自动解读）。
+      </div>
+    );
+  }
+  if (interp.status === 'failed') {
+    return (
+      <div className="mt-2 rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] text-red-500">
+        模型解读失败（{interp.errorCode ?? '未知错误'}）：{interp.errorMessage ?? '无错误详情'}。重试编译只重做失败项。
+      </div>
+    );
+  }
+  return (
+    <div data-testid="vision-interpretation" className="mt-2 rounded border border-border/60 bg-secondary/20 px-3 py-2 text-[11px] leading-relaxed">
+      <div className="mb-1.5 flex items-center gap-2">
+        <span className="font-medium text-foreground">模型图像解读（非原文）</span>
+        <span className="rounded bg-secondary px-1 text-[10px] text-secondary-foreground" title={interp.model}>
+          {interp.model}
+        </span>
+      </div>
+      <div className="space-y-1">
+        <InterpretLine label="图类型" value={interp.imageType} />
+        <InterpretLine label="可见元素与信号" value={interp.visibleElements} />
+        <InterpretLine label="关系或时序" value={interp.relations} />
+        <InterpretLine label="可辨认数值" value={interp.visibleValues} />
+        <InterpretLine label="不确定项" value={interp.uncertainties} />
+      </div>
+    </div>
+  );
+}
+
 function PdfAssetsPanel({ sourceId }: { sourceId: string }) {
   const [manifest, setManifest] = useState<PdfAssetsManifest | null>(null);
   const [loading, setLoading] = useState(true);
@@ -556,6 +649,7 @@ function PdfAssetsPanel({ sourceId }: { sourceId: string }) {
           {selectedId && manifest.assets.find((a) => a.assetId === selectedId) && (
             <div className="mt-2">
               <AssetDetail record={manifest.assets.find((a) => a.assetId === selectedId)!} />
+              <InterpretationPanel sourceId={sourceId} record={manifest.assets.find((a) => a.assetId === selectedId)!} />
             </div>
           )}
         </>
