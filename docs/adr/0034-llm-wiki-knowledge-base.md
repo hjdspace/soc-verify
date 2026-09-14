@@ -197,7 +197,7 @@ Wiki Layer 的 `[[wikilink]]` 引用关系被抽取为**知识图谱**（节点 
 
 | 项 | 实测结果 | 证据 |
 | --- | --- | --- |
-| Electron / Chromium | `v43.1.0`，Electron 内置 Node 24.18.0 | `electron.exe --version` |
+| Electron / Chromium | `v43.1.0`（Chromium **150.0.7871.47**，内置 Node 24.18.0） | `electron.exe --version` + 冒烟的运行时自描述 |
 | WebGL | `WebGL 2.0 (OpenGL ES 3.0 Chromium)`，ANGLE D3D11，Intel Arc | 冒烟读取 `gl.getParameter` + `WEBGL_debug_renderer_info` |
 | **`file://` 下的 module worker** | **可用**（worker 内再 `import` 兄弟模块也成功）。生产 `loadFile` 加载渲染进程，这一条决定了能不能把布局放进 worker | worker-probe（`.scratch/llm-wiki/spikes/26-graph/worker-probe`）与冒烟 |
 | 产品 CSP 下的 worker | 可用。harness 的 CSP 与 `src/renderer/index.html` **逐字节一致**并在冒烟里断言 | 冒烟 check「harness 使用与产品一致的 CSP」 |

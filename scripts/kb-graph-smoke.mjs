@@ -130,7 +130,14 @@ async function main() {
   mkdirSync(reportDir, { recursive: true });
   writeFileSync(
     reportPath,
-    JSON.stringify({ generatedAt: new Date().toISOString(), electron: process.versions.electron ?? null, ok, reports }, null, 2),
+    JSON.stringify({
+      generatedAt: new Date().toISOString(),
+      // 编排器是 Node 进程，Electron 版本取自场景报告自身的运行时自描述
+      electron: reports[0]?.runtime?.electron ?? null,
+      chrome: reports[0]?.runtime?.chrome ?? null,
+      ok,
+      reports,
+    }, null, 2),
     'utf8',
   );
 

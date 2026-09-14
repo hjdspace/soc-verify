@@ -31,6 +31,12 @@ const repositoryRoot = path.resolve(__dirname, '..', '..');
 const report = {
   scenario,
   ok: false,
+  // 运行时自描述：证据要能独立说明「在哪个 Electron/Chromium 上跑出来的」
+  runtime: {
+    electron: process.versions.electron ?? null,
+    chrome: process.versions.chrome ?? null,
+    node: process.versions.node ?? null,
+  },
   checks: [],
   metrics: {},
   diagnostics: { console: [], requests: [], failures: [] },
