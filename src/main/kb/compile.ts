@@ -156,6 +156,7 @@ export type CompileErrorCode =
   | 'noCredential'
   | 'visionNotConfigured'
   | 'visionFailed'
+  | 'visionBatchLimit'
   | 'sourceNotFound'
   | 'manifestCorrupted'
   | 'sourceNotReady'
@@ -260,8 +261,8 @@ export type CompileDeps = {
   retryBaseDelayMs?: number;
   /** 分段进度回调（长来源：已完成段数/总段数；队列据此展示分段进度） */
   onChunkProgress?: (progress: { done: number; total: number }) => void;
-  /** 逐张视觉解读进度回调（队列据此展示 vision 阶段进度） */
-  onVisionProgress?: (progress: { done: number; total: number }) => void;
+  /** 逐张视觉解读进度回调（队列据此展示 vision 阶段进度与缓存命中） */
+  onVisionProgress?: (progress: { done: number; total: number; reused?: number }) => void;
   /**
    * 编译内阶段切换回调（队列据此推进 phase 显示）：
    * 'vision' = 开始图像解读；'analyzing' = 进入文本分析。
@@ -948,17 +949,38 @@ export async function compileWikiSource(
           signal,
           onProgress: deps.onVisionProgress,
         });
+        // 视觉阶段真实 usage 汇入编译诊断（issue 13：UI 报告真实用量，不伪造）
+        if (vr.usage) usage.push(vr.usage);
         if (vr.cancelled) {
           return failWith('aborted', '图像解读已取消（已完成解读已保留，重试只重做剩余项）');
         }
         if (vr.failures.length > 0) {
           const first = vr.failures[0]!;
           const okCount = vr.stats.interpreted + vr.stats.reused;
+          // 失败与批次上限同时发生时不能暗漏待处理页
+          const pendingNote = vr.batchLimitReached
+            ? `另有 ${vr.stats.pages.pending.length} 页因单批上限待处理。`
+            : '';
           return failWith(
             'visionFailed',
             `图像解读失败 ${vr.failures.length}/${vr.stats.total} 张`
               + `（已成功 ${okCount} 张保留，重试只重做失败项）。`
-              + `首个失败 [${first.errorCode}]: ${first.errorMessage}`,
+              + `首个失败 [${first.errorCode}]: ${first.errorMessage}${pendingNote}`,
+          );
+        }
+        if (vr.batchLimitReached) {
+          // 单批页数上限（issue 13，spec §3）：不暗漏页 —— 待处理页可见，
+          // 用户可重试继续下一批（已完成解读复用）或显式仅按文字继续缩小范围。
+          const pendingPages = vr.stats.pages.pending;
+          const pendingShown = pendingPages
+            .slice(0, 10)
+            .join(', ');
+          return failWith(
+            'visionBatchLimit',
+            `图像解读达到单批页数上限（本批 ${vr.stats.pages.processed}/${vr.stats.pages.total} 页），`
+              + `待处理页共 ${pendingPages.length} 页: ${pendingShown}${pendingPages.length > 10 ? '…' : ''}。`
+              + `可重试任务继续下一批（已成功解读会复用，只处理待处理页），`
+              + `或选择「仅按文字继续」缩小范围（剩余页将列为视觉缺口并标部分产出）。`,
           );
         }
         visionAppendix = buildVisionAppendix(vr.interpretations);

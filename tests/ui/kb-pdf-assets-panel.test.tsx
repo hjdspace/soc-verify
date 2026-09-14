@@ -114,6 +114,7 @@ const mocks = vi.hoisted(() => ({
   pdfAssetExtractMutate: vi.fn(),
   queueEnqueueMutate: vi.fn(),
   visionInterpretationsQuery: vi.fn(),
+  retryVisionAssetMutate: vi.fn(),
 }));
 
 let currentSources: unknown[];
@@ -137,6 +138,7 @@ vi.mock('@renderer/lib/trpc', () => ({
       pdfAssetFile: { query: mocks.pdfAssetFileQuery },
       pdfAssetExtract: { mutate: mocks.pdfAssetExtractMutate },
       visionInterpretations: { query: mocks.visionInterpretationsQuery },
+      retryVisionAsset: { mutate: mocks.retryVisionAssetMutate.mockResolvedValue({ ok: true, interpretation: null }) },
     },
   },
 }));
@@ -357,5 +359,113 @@ describe('KbWikiTasks PDF 资产面板（issue 11）', () => {
     // 无解读：点击 b 卡片 → 尚无模型解读提示
     fireEvent.click(screen.getByTestId(`pdf-asset-${'b'.repeat(8)}`));
     await waitFor(() => expect(screen.getByText(/该图尚无模型解读/)).toBeTruthy());
+  });
+
+  // ── 失败单图独立重试与真实 usage（issue 13）──────────────────
+
+  it('失败解读提供「重试本图」：只重做该图并刷新显示（含 usage）', async () => {
+    const failedRecord = {
+      assetId: 'a'.repeat(64),
+      sourceId: 'sid-pdf',
+      sourceRevision: 'f'.repeat(64),
+      page: 1,
+      method: 'object',
+      model: 'glm-4.6v',
+      promptVersion: 'v1',
+      contextHash: 'c'.repeat(64),
+      status: 'failed',
+      imageType: null,
+      visibleElements: null,
+      relations: null,
+      visibleValues: null,
+      uncertainties: null,
+      text: null,
+      errorCode: 'imageRejected',
+      errorMessage: '端点拒绝图片输入',
+      interpretedAt: '2026-09-14T00:00:00.000Z',
+    };
+    const okRecord = {
+      ...failedRecord,
+      status: 'ok',
+      errorCode: undefined,
+      errorMessage: undefined,
+      imageType: '框图',
+      visibleElements: 'CPU',
+      usage: { inputTokens: 10, outputTokens: 5 },
+    };
+    // 首次加载 → 失败记录；重试成功后的刷新 → 成功记录
+    mocks.visionInterpretationsQuery
+      .mockResolvedValueOnce({ interpretations: [failedRecord] })
+      .mockResolvedValueOnce({ interpretations: [okRecord] });
+    mocks.retryVisionAssetMutate.mockResolvedValue({ ok: true, interpretation: okRecord });
+
+    render(<KbWikiTasks />);
+    await waitFor(() => expect(screen.getByText('docs/spec.pdf')).toBeTruthy());
+    fireEvent.click(screen.getByTitle('查看 PDF 图像资产'));
+    await waitFor(() => expect(screen.getByTestId(`pdf-asset-${'a'.repeat(8)}`)).toBeTruthy());
+    fireEvent.click(screen.getByTestId(`pdf-asset-${'a'.repeat(8)}`));
+
+    // 失败面板给出单图重试入口
+    const retryBtn = await screen.findByTestId('retry-vision-asset');
+    fireEvent.click(retryBtn);
+
+    // 只重做该图：携带来源/修订/资产身份
+    await waitFor(() =>
+      expect(mocks.retryVisionAssetMutate).toHaveBeenCalledWith({
+        sourceId: 'sid-pdf',
+        assetId: 'a'.repeat(64),
+        revision: 'f'.repeat(64),
+      }),
+    );
+    // 重试后刷新解读 → 成功面板 + 真实 usage 可见
+    await waitFor(() => expect(screen.getByTestId('vision-interpretation')).toBeTruthy());
+    expect(screen.getByText('框图')).toBeTruthy();
+    expect(screen.getByText('tokens 入 10 / 出 5')).toBeTruthy();
+    // 解读查询被重新拉取（按修订）
+    expect(mocks.visionInterpretationsQuery).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sourceId: 'sid-pdf', revision: 'f'.repeat(64) }),
+    );
+  });
+
+  it('重试本图失败（如未配置视觉模型）→ 错误原因内联可见', async () => {
+    const failedRecord = {
+      assetId: 'a'.repeat(64),
+      sourceId: 'sid-pdf',
+      sourceRevision: 'f'.repeat(64),
+      page: 1,
+      method: 'object',
+      model: '',
+      promptVersion: 'v1',
+      contextHash: 'c'.repeat(64),
+      status: 'failed',
+      imageType: null,
+      visibleElements: null,
+      relations: null,
+      visibleValues: null,
+      uncertainties: null,
+      text: null,
+      errorCode: 'llmFailed',
+      errorMessage: '模型调用失败',
+      interpretedAt: '2026-09-14T00:00:00.000Z',
+    };
+    mocks.visionInterpretationsQuery.mockResolvedValue({ interpretations: [failedRecord] });
+    mocks.retryVisionAssetMutate.mockResolvedValue({
+      ok: false,
+      code: 'visionNotConfigured',
+      message: '未配置视觉模型（设置 → 知识库 → 视觉模型）',
+    });
+
+    render(<KbWikiTasks />);
+    await waitFor(() => expect(screen.getByText('docs/spec.pdf')).toBeTruthy());
+    fireEvent.click(screen.getByTitle('查看 PDF 图像资产'));
+    await waitFor(() => expect(screen.getByTestId(`pdf-asset-${'a'.repeat(8)}`)).toBeTruthy());
+    fireEvent.click(screen.getByTestId(`pdf-asset-${'a'.repeat(8)}`));
+
+    const retryBtn = await screen.findByTestId('retry-vision-asset');
+    fireEvent.click(retryBtn);
+
+    await waitFor(() => expect(screen.getByText(/未配置视觉模型/)).toBeTruthy());
+    // 解读查询未被触发刷新（失败不重拉）
+    expect(mocks.visionInterpretationsQuery).toHaveBeenCalledTimes(1);
   });
 });

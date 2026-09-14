@@ -97,6 +97,7 @@ const mocks = vi.hoisted(() => ({
   queueResumeMutate: vi.fn(),
   queueCancelMutate: vi.fn(),
   queueRetryMutate: vi.fn(),
+  queueContinueTextOnlyMutate: vi.fn(),
   queueClearMutate: vi.fn(),
   wikiCompileEnqueueMutate: vi.fn(),
 }));
@@ -114,6 +115,7 @@ vi.mock('@renderer/lib/trpc', () => ({
       queueResume: { mutate: mocks.queueResumeMutate.mockResolvedValue({ ok: true }) },
       queueCancel: { mutate: mocks.queueCancelMutate.mockResolvedValue({ ok: true }) },
       queueRetry: { mutate: mocks.queueRetryMutate.mockResolvedValue({ ok: true }) },
+      queueContinueTextOnly: { mutate: mocks.queueContinueTextOnlyMutate.mockResolvedValue({ ok: true }) },
       queueClear: { mutate: mocks.queueClearMutate.mockResolvedValue({ removed: 1 }) },
       wikiCompileEnqueue: { mutate: mocks.wikiCompileEnqueueMutate.mockResolvedValue({ results: [{ ok: true }] }) },
     },
@@ -175,6 +177,7 @@ describe('KbWikiTasks 导入任务面板（issue 03）', () => {
     mocks.queueResumeMutate.mockResolvedValue({ ok: true });
     mocks.queueCancelMutate.mockResolvedValue({ ok: true });
     mocks.queueRetryMutate.mockResolvedValue({ ok: true });
+    mocks.queueContinueTextOnlyMutate.mockResolvedValue({ ok: true });
     mocks.queueClearMutate.mockResolvedValue({ removed: 1 });
     mocks.wikiCompileEnqueueMutate.mockResolvedValue({ results: [{ ok: true }] });
   });
@@ -350,5 +353,73 @@ describe('KbWikiTasks 导入任务面板（issue 03）', () => {
     // blocked 可重试（补齐预算后继续）
     const retryButtons = screen.getAllByTitle(/重试任务/);
     expect(retryButtons.length).toBeGreaterThanOrEqual(1);
+  });
+
+  // ── 批量读图进度与缓存命中（issue 13）────────────────────────
+
+  it('vision 阶段进度显示解读进度与缓存命中（issue 13）：视觉 n/m · 复用 r', async () => {
+    render(<KbWikiTasks />);
+    await waitFor(() => expect(screen.getByText('排队中')).toBeTruthy());
+
+    kbTaskCallbacks[0]!({
+      type: 'task',
+      kbId: 'kb-1',
+      seq: 11,
+      taskId: 'task-1',
+      attemptId: 'att-1',
+      phase: 'vision',
+      lastError: null,
+      progress: { done: 30, total: 61, reused: 20 },
+    });
+    await waitFor(() => expect(screen.getByText('视觉 30/61')).toBeTruthy());
+    expect(screen.getByText('复用 20')).toBeTruthy();
+    expect(screen.getByText('视觉解析')).toBeTruthy();
+  });
+
+  it('非 vision 阶段的进度仍显示分段（issue 10 回归）', async () => {
+    render(<KbWikiTasks />);
+    await waitFor(() => expect(screen.getByText('排队中')).toBeTruthy());
+
+    kbTaskCallbacks[0]!({
+      type: 'task',
+      kbId: 'kb-1',
+      seq: 12,
+      taskId: 'task-1',
+      attemptId: 'att-1',
+      phase: 'analyzing',
+      lastError: null,
+      progress: { done: 3, total: 12 },
+    });
+    await waitFor(() => expect(screen.getByText('分段 3/12')).toBeTruthy());
+  });
+
+  it('visionBatchLimit → blocked 显示继续批次/缩小范围两个入口（issue 13）', async () => {
+    render(<KbWikiTasks />);
+    await waitFor(() => expect(screen.getByText('排队中')).toBeTruthy());
+
+    kbTaskCallbacks[0]!({
+      type: 'task',
+      kbId: 'kb-1',
+      seq: 11,
+      taskId: 'task-1',
+      attemptId: 'att-1',
+      phase: 'blocked',
+      lastError: {
+        code: 'visionBatchLimit',
+        message: '图像解读达到单批页数上限，待处理页共 11 页。',
+        at: '2026-01-01T00:00:02.000Z',
+      },
+      progress: null,
+    });
+
+    await waitFor(() => expect(screen.getByText('已阻塞')).toBeTruthy());
+    expect(screen.getByText(/待处理页共 11 页/)).toBeTruthy();
+    // 重试 = 继续下一批（已成功解读复用）；仅按文字继续 = 缩小范围
+    expect(screen.getByTitle(/继续下一批/)).toBeTruthy();
+    const textOnly = screen.getByTestId('continue-text-only');
+    fireEvent.click(textOnly);
+    await waitFor(() =>
+      expect(mocks.queueContinueTextOnlyMutate).toHaveBeenCalledWith({ taskId: 'task-1' }),
+    );
   });
 });

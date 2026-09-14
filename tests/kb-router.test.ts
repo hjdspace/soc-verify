@@ -98,12 +98,15 @@ vi.mock('@firecrawl/anydoc', () => ({
   formatFromExtension: vi.fn(),
 }));
 
-// Mock kb/vision 的 verifyVisionModel（issue 12 验证接口测试不触真实网络；其余导出保留）
+// Mock kb/vision 的 verifyVisionModel / retryVisionAsset / createDefaultVisionLlmFactory
+// （issue 12/13 验证与单图重试接口测试不触真实网络；其余导出保留并默认透传）
 vi.mock('../src/main/kb/vision', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/main/kb/vision')>();
   return {
     ...actual,
     verifyVisionModel: vi.fn(),
+    retryVisionAsset: vi.fn(),
+    createDefaultVisionLlmFactory: vi.fn(actual.createDefaultVisionLlmFactory),
   };
 });
 
@@ -111,11 +114,11 @@ vi.mock('../src/main/kb/vision', async (importOriginal) => {
 
 import { kbRouter } from '../src/main/ipc/routers/kb-router';
 import { kbSettingsManager } from '../src/main/kb/kb-settings';
-import { verifyVisionModel } from '../src/main/kb/vision';
+import { verifyVisionModel, retryVisionAsset, createDefaultVisionLlmFactory, type VisionLlm } from '../src/main/kb/vision';
 import { credentialManager } from '../src/main/credentials/credential-manager';
 import { initWikiLayout, readWikiManifest } from '../src/main/kb/wiki-layout';
 import { prepareCommit } from '../src/main/kb/atomic-commit';
-import type { WikiSourceSummary, WikiSourceRevisionInfo } from '@shared/kb-types';
+import type { WikiSourceSummary, WikiSourceRevisionInfo, WikiVisionInterpretation } from '@shared/kb-types';
 import type {
   KbListEntry,
   KbStatus,
@@ -1014,6 +1017,84 @@ describe('kb-router', () => {
       }
 
       vi.mocked(credentialManager.get).mockResolvedValue(null);
+    });
+  });
+
+  // ─── kb.retryVisionAsset（issue 13） ─────────────────────────
+  //
+  // 失败单图独立重试：解析 vision 角色配置 → 定位当前修订资产清单中的
+  // 单张 → 只重做该图。未配置 vision → visionNotConfigured（不触模型）；
+  // 资产不在清单 → assetNotInManifest（不伪造记录）。
+
+  describe('kb.retryVisionAsset（issue 13）', () => {
+    afterEach(() => {
+      vi.mocked(retryVisionAsset).mockReset();
+      vi.mocked(createDefaultVisionLlmFactory).mockReset();
+    });
+
+    async function mountWiki(): Promise<string> {
+      const kbDir = makeEmptyDir(`vision-retry-kb-${Math.random().toString(36).slice(2, 6)}`);
+      const id = regId(await caller.register({ name: '视觉重试库', path: kbDir }));
+      const mounted = await caller.mount({ kbId: id });
+      if (!mounted.ok) throw new Error('mount failed');
+      return kbDir;
+    }
+
+    it('未配置视觉模型 → visionNotConfigured（不触模型）', async () => {
+      await mountWiki();
+      const r = await caller.retryVisionAsset({ sourceId: 's'.repeat(64), assetId: 'a'.repeat(64) });
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.code).toBe('visionNotConfigured');
+      expect(retryVisionAsset).not.toHaveBeenCalled();
+    });
+
+    it('已配置 → 转发 vision 模块单图重试结果（携带 kbPath/sourceId/revision/llm）', async () => {
+      const kbDir = await mountWiki();
+      const fakeLlm = { model: 'vision-model', invoke: async () => 'ok' } as unknown as VisionLlm;
+      vi.mocked(createDefaultVisionLlmFactory).mockImplementation(
+        () => async () => fakeLlm,
+      );
+      const record = { assetId: 'a'.repeat(64), status: 'ok', imageType: '框图' } as WikiVisionInterpretation;
+      vi.mocked(retryVisionAsset).mockResolvedValue(record);
+
+      const r = await caller.retryVisionAsset({
+        sourceId: 's'.repeat(64),
+        assetId: 'a'.repeat(64),
+        revision: 'r'.repeat(64),
+      });
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.interpretation).toEqual(record);
+      expect(retryVisionAsset).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kbPath: kbDir,
+          sourceId: 's'.repeat(64),
+          sourceRevision: 'r'.repeat(64),
+          assetId: 'a'.repeat(64),
+          llm: fakeLlm,
+        }),
+      );
+    });
+
+    it('资产不在当前修订清单 → assetNotInManifest（不伪造记录）', async () => {
+      await mountWiki();
+      const fakeLlm = { model: 'vision-model', invoke: async () => 'ok' } as unknown as VisionLlm;
+      vi.mocked(createDefaultVisionLlmFactory).mockImplementation(
+        () => async () => fakeLlm,
+      );
+      vi.mocked(retryVisionAsset).mockResolvedValue(null);
+
+      const r = await caller.retryVisionAsset({ sourceId: 's'.repeat(64), assetId: 'a'.repeat(64) });
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.code).toBe('assetNotInManifest');
+    });
+
+    it('缺 assetId 抛出 BAD_REQUEST', async () => {
+      await expect(
+        caller.retryVisionAsset({ sourceId: 's'.repeat(64) } as { sourceId: string; assetId: string }),
+      ).rejects.toThrow();
     });
   });
 

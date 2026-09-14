@@ -94,7 +94,7 @@ describe('文字导入 → 任务 → 审阅 → 知识页与索引（issue 08 �
       '---END FILE---',
     ].join('\n');
 
-    let script: Array<{ text: string }> = [{ text: '## 关键实体\n- AXI 握手' }, { text: proposalText }];
+    const script: Array<{ text: string }> = [{ text: '## 关键实体\n- AXI 握手' }, { text: proposalText }];
     const queue = new WikiIngestQueueManager({
       notify: () => undefined,
       compileLlmFactory: async () =>

@@ -317,6 +317,129 @@ describe('视觉解读失败与重试复用', () => {
   });
 });
 
+// ── 批次页数上限（issue 13）：blocked → 继续批次 / 缩小范围 ─────
+
+describe('批次页数上限（issue 13）', () => {
+  /** 生成 pages 页、每页一张独立小图的清单（含真实字节以通过内容寻址校验） */
+  function manifestOfPages(pages: number): Array<Record<string, unknown>> {
+    const out: Array<Record<string, unknown>> = [];
+    for (let p = 1; p <= pages; p += 1) {
+      const bytes = Buffer.from(`queue-page-${p}-image`);
+      const id = createHash('sha256').update(bytes).digest('hex');
+      out.push({ assetId: id, file: `${id}.png`, ext: 'png', method: 'object', page: p, width: 1, height: 1, _bytes: bytes });
+    }
+    return out;
+  }
+
+  it('单批上限 → blocked（visionBatchLimit）+ 真实视觉 usage；重试继续下一批（复用缓存）→ done', async () => {
+    const progressEvents: Array<{ done: number; total: number; reused?: number }> = [];
+    const vision = fakeVisionLlm();
+    const q = new WikiIngestQueueManager({
+      notify: (e) => {
+        if (e.type === 'task' && e.progress) progressEvents.push(e.progress);
+      },
+      compileLlmFactory: async () => fakeCompileLlm(okScript()),
+      visionLlmFactory: async () => vision,
+    });
+    await q.attach(kbPath, KB_ID);
+    writeAssetManifest(manifestOfPages(61));
+    const task = await q.enqueueCompile(KB_ID, SOURCE_ID);
+    await waitForPhase(q, task.taskId, 'blocked');
+    const snap = q.snapshot(KB_ID);
+    const t = snap?.tasks.find((x) => x.taskId === task.taskId);
+    // blocked 而非 failed：等待用户决定（继续批次/缩小范围），不冒充普通失败
+    expect(t?.lastError?.code).toBe('visionBatchLimit');
+    expect(t?.phase).toBe('blocked');
+    // 真实 usage：50 张 × {inputTokens:5, outputTokens:2}（不伪造 0，不丢弃）
+    expect(t?.usage).toEqual({ inputTokens: 250, outputTokens: 100 });
+    expect(vision.calls).toBe(50);
+
+    // 继续批次（重试）：前 50 页复用缓存（reused 进入进度事件），只做剩余 11 页
+    await q.retryTask(KB_ID, task.taskId);
+    await waitForPhase(q, task.taskId, 'done');
+    expect(vision.calls).toBe(61);
+    expect(progressEvents.some((p) => (p.reused ?? 0) >= 50)).toBe(true);
+    const staged = readStagedChangeSets();
+    expect(staged).toHaveLength(1);
+    expect(staged[0]!.partial).toBeFalsy();
+    expect(staged[0]!.visionGaps ?? []).toHaveLength(0);
+  });
+
+  it('单批上限后 continueTextOnly → 剩余页不再解读，done 且 partial=true（visionGaps 只列剩余页）', async () => {
+    const vision = fakeVisionLlm();
+    const q = new WikiIngestQueueManager({
+      notify: () => undefined,
+      compileLlmFactory: async () => fakeCompileLlm(okScript()),
+      visionLlmFactory: async () => vision,
+    });
+    await q.attach(kbPath, KB_ID);
+    writeAssetManifest(manifestOfPages(61));
+    const task = await q.enqueueCompile(KB_ID, SOURCE_ID);
+    await waitForPhase(q, task.taskId, 'blocked');
+    expect(vision.calls).toBe(50);
+
+    await q.continueTextOnly(KB_ID, task.taskId);
+    await waitForPhase(q, task.taskId, 'done');
+    expect(vision.calls).toBe(50); // 剩余 11 页不再调用模型
+    const staged = readStagedChangeSets();
+    expect(staged).toHaveLength(1);
+    expect(staged[0]!.partial).toBe(true);
+    expect(staged[0]!.visionGaps).toHaveLength(11);
+  });
+});
+
+// ── 取消后迟到响应（issue 13）：不改变已作废任务 ────────────────
+
+describe('取消后迟到响应', () => {
+  it('取消后 vision 响应迟到 → 任务保持 cancelled，不写 staging，compile LLM 不被调用', async () => {
+    type VisionReply = { text: string; finishReason: 'stop'; usage: { inputTokens: number; outputTokens: number } | null };
+    const resolvers: Array<(v: VisionReply) => void> = [];
+    let visionCalls = 0;
+    const vision = {
+      model: 'vision-queue-model',
+      invoke: async () => {
+        visionCalls += 1;
+        return new Promise<VisionReply>((resolve) => {
+          resolvers.push(resolve);
+        });
+      },
+    } as unknown as VisionLlm;
+    let compileInvokes = 0;
+    const compileLlm: CompileLlm = {
+      model: 'fake-queue-model',
+      invoke: async () => {
+        compileInvokes += 1;
+        return { text: okScript()[0]!.text, finishReason: 'stop', usage: null };
+      },
+    } as unknown as CompileLlm;
+    const q = new WikiIngestQueueManager({
+      notify: () => undefined,
+      compileLlmFactory: async () => compileLlm,
+      visionLlmFactory: async () => vision,
+    });
+    await q.attach(kbPath, KB_ID);
+    writeAssetManifest([OBJECT_ASSET]);
+    const task = await q.enqueueCompile(KB_ID, SOURCE_ID);
+    await waitForPhase(q, task.taskId, 'vision');
+    // phase 事件先于首次模型调用（解读前置检查是异步的）：等待调用真正发生
+    await vi.waitFor(() => expect(visionCalls).toBe(1), { timeout: 3_000, interval: 20 });
+    await q.cancelTask(KB_ID, task.taskId);
+    await waitForPhase(q, task.taskId, 'cancelled');
+
+    // 迟到响应到达（模拟网络延迟后返回的完整解读）
+    for (const resolve of resolvers.splice(0)) {
+      resolve({ text: VISION_OUTPUT, finishReason: 'stop', usage: { inputTokens: 5, outputTokens: 2 } });
+    }
+    await new Promise((r) => setTimeout(r, 50));
+
+    // 已作废任务不被迟到结果改变：phase 不变、不基于迟到证据继续编译
+    const snap = q.snapshot(KB_ID);
+    expect(snap?.tasks.find((x) => x.taskId === task.taskId)?.phase).toBe('cancelled');
+    expect(readStagedChangeSets()).toHaveLength(0);
+    expect(compileInvokes).toBe(0);
+  });
+});
+
 describe('vision 阶段可见性', () => {
   it('解读挂起时任务 phase=vision，取消可观察', async () => {
     const vision = fakeVisionLlm({ hang: true });

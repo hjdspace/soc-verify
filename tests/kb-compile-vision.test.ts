@@ -53,7 +53,7 @@ const MODEL_OUTPUT = [
   '右侧小字不清晰',
 ].join('\n');
 
-/** 写入受管资产字节 + pdf-assets.json 清单（issue 11 落盘格式） */
+/** 写入受管资产字节 + pdf-assets.json 清单（issue 11 落盘格式；_bytes 覆写默认字节） */
 function writeAssetManifest(assets: Array<Record<string, unknown>>): void {
   const dir = join(wikiLayout(kbPath).rawAssetsDir, SOURCE_ID, REVISION);
   mkdirSync(dir, { recursive: true });
@@ -61,10 +61,11 @@ function writeAssetManifest(assets: Array<Record<string, unknown>>): void {
   for (const a of assets) {
     const id = String(a.assetId);
     if (!seen.has(id)) {
-      writeFileSync(join(dir, `${id}.${a.ext ?? 'png'}`), PNG_BYTES);
+      writeFileSync(join(dir, `${id}.${a.ext ?? 'png'}`), (a._bytes as Buffer | undefined) ?? PNG_BYTES);
       seen.add(id);
     }
   }
+  const records = assets.map(({ _bytes, ...rest }) => rest);
   writeFileSync(
     join(dir, 'pdf-assets.json'),
     JSON.stringify({
@@ -73,7 +74,7 @@ function writeAssetManifest(assets: Array<Record<string, unknown>>): void {
       revision: REVISION,
       parsedHash: PARSED_HASH,
       extractor: { runtime: 'test', version: '0' },
-      assets,
+      assets: records,
       pages: [],
       stats: {
         totalPages: 1, processedPages: 1, failedPages: 0, skippedPages: 0,
@@ -335,5 +336,47 @@ describe('compileWikiSource — 仅按文字继续（textOnly）', () => {
     // 既有解读作为附录进入编译输入（复用已完成产物）
     expect(llm.requests[0]!.user).toContain('模型图像解读');
     expect(llm.requests[0]!.user).toContain(ASSET_ID.slice(0, 8));
+  });
+});
+
+// ── 批次页数上限与真实 usage（issue 13）────────────────────────
+
+describe('compileWikiSource — 批次上限与真实 usage（issue 13）', () => {
+  /** 生成 pages 页、每页一张独立小图的清单 */
+  function manifestOfPages(pages: number): Array<Record<string, unknown>> {
+    const out: Array<Record<string, unknown>> = [];
+    for (let p = 1; p <= pages; p += 1) {
+      const bytes = Buffer.from(`compile-page-${p}-image`);
+      const id = createHash('sha256').update(bytes).digest('hex');
+      out.push({ assetId: id, file: `${id}.png`, ext: 'png', method: 'object', page: p, width: 1, height: 1, _bytes: bytes });
+    }
+    return out;
+  }
+
+  it('解读达到单批页上限 → visionBatchLimit 阻止编译（不暗漏页），提示继续批次或缩小范围', async () => {
+    writeAssetManifest(manifestOfPages(61));
+    const llm = fakeLlm(standardScript());
+    const res = await compile({ llm, visionLlm: fakeVisionLlm(MODEL_OUTPUT) });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.code).toBe('visionBatchLimit');
+    // 可操作信息：待处理页可见，给出继续批次/缩小范围两条路
+    expect(res.message).toContain('待处理');
+    expect(res.message).toContain('11');
+    expect(res.message).toContain('继续');
+    expect(res.message).toContain('缩小范围');
+    // 不基于不完整证据生成
+    expect(llm.requests).toHaveLength(0);
+    expect(readdirSync(wikiLayout(kbPath).stagingDir)).toHaveLength(0);
+  });
+
+  it('解读成功的真实 usage 汇入编译诊断（UI 报告真实用量，不伪造）', async () => {
+    writeAssetManifest([OBJECT_ASSET]);
+    const llm = fakeLlm(standardScript());
+    const res = await compile({ llm, visionLlm: fakeVisionLlm(MODEL_OUTPUT) });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    // fakeVisionLlm 每次调用 usage {inputTokens:10, outputTokens:5}
+    expect(res.usage).toContainEqual({ inputTokens: 10, outputTokens: 5 });
   });
 });

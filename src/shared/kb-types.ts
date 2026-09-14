@@ -380,11 +380,14 @@ export type WikiIngestPhase =
 
 /**
  * 任务进度（spec §5「phase 与进度分开保存」；issue 10 引入）。
- * 长来源分段编译时表示「已完成段数 / 总段数」。
+ * 长来源分段编译时表示「已完成段数 / 总段数」；
+ * vision 阶段（issue 13）表示「已解读张数 / 总张数」，reused 为缓存命中数。
  */
 export type WikiTaskProgress = {
   done: number;
   total: number;
+  /** 缓存命中（复用既有成功解读）张数（vision 阶段；缺省 = 无该统计） */
+  reused?: number;
 };
 
 /** 任务类型：convertSource=来源转换（issue 03）；compileSource=短来源编译（issue 08） */
@@ -517,6 +520,13 @@ export type KbSettings = {
 
 // ── 图像解读（spec §3，issue 12）────────────────────────────────
 
+/** 单次模型调用的真实 token 用量（API 返回才写；缺失字段不伪造 0） */
+export type WikiLlmUsage = {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+};
+
 /** 单张图像的模型解读记录（.kb/vision/<sourceId>/<revision>/<assetId>.json） */
 export type WikiVisionInterpretation = {
   /** 资产身份 = 图像字节 SHA256（内容寻址，与 pdf-assets 清单一致） */
@@ -532,8 +542,14 @@ export type WikiVisionInterpretation = {
   model: string;
   /** 提示词版本（提示变更后旧解读不复用） */
   promptVersion: string;
-  /** 上下文指纹：图片字节 hash + 模型 + 提示版本 + 邻近文本 hash */
+  /** 上下文指纹：图片字节 hash + 处理参数 + 模型 + 提示版本 + 输出语言 + 邻近文本 hash */
   contextHash: string;
+  /** 发送图像的处理参数（'orig'=原图 / 'maxEdge=2048'=等比缩小；issue 13） */
+  processParams?: string;
+  /** 解读输出语言（issue 13；参与缓存指纹） */
+  language?: string;
+  /** 本次模型调用真实 token 用量（成功解读时记录；issue 13） */
+  usage?: WikiLlmUsage;
   status: 'ok' | 'failed';
   /** 图类型（时序图/框图/位段图/照片…；模型输出） */
   imageType: string | null;
@@ -1005,4 +1021,82 @@ export type WikiReadGateStatus = {
   /** manifest 损坏、无法自动恢复的事务（现场保留，恢复报告用） */
   corrupt: string[];
 };
+export type WikiReadGateStatus = {
+  /** true = 存在未恢复的 prepared 事务，同库读取/发布暂停 */
+  blocked: boolean;
+  /** 未恢复事务 ID 列表（prepared 状态） */
+  pending: string[];
+  /** manifest 损坏、无法自动恢复的事务（现场保留，恢复报告用） */
+  corrupt: string[];
+};
+
+// ── 统一关键词检索（spec §8，issue 14）──────────────────────────
+
+/** 检索对象：wiki = 已发布知识页；parsed = 来源当前机械全文 */
+export type WikiSearchKind = 'wiki' | 'parsed';
+
+/** 检索结果单条（tRPC 与 Host Tool 共用同一 DTO，不复制排序） */
+export type WikiSearchHit = {
+  kind: WikiSearchKind;
+  /** wiki = pageId（类型路径+文件名）；parsed = sourceId */
+  id: string;
+  /** 库内相对路径（`wiki/<...>.md` / `raw/parsed/<...>.md`） */
+  relativePath: string;
+  /** 运行时绝对路径（由当前挂载根解析；每次调用动态核对） */
+  absolutePath: string;
+  title: string;
+  /** 正文命中片段；仅元数据命中时为 null */
+  snippet: string | null;
+  /** wiki 专有 */
+  pageType?: WikiPageType;
+  tags?: string[];
+  keywords?: string[];
+  sourceRefs?: WikiSourceRef[];
+  /**
+   * wiki：任一来源引用的修订与 manifest 当前修订不一致（或来源已不在
+   * manifest）。parsed 只检索当前修订，恒为 false。
+   */
+  stale: boolean;
+  /** parsed 专有：来源当前修订 */
+  sourceRevision?: string;
+  /** 排序值（越高越相关），不是正确率 */
+  score: number;
+};
+
+/** 检索模式：本期仅关键词；向量/图由 issue 22/23/24 在同一契约上扩展 */
+export type WikiSearchMode = 'keyword';
+
+export type WikiSearchResponse = {
+  mode: WikiSearchMode;
+  kbId: string;
+  /** 索引覆盖状态（参与排名的候选数） */
+  coverage: { wikiPages: number; parsedSources: number };
+  hits: WikiSearchHit[];
+};
+
+export type WikiSearchErrorCode =
+  | 'emptyQuery'
+  | 'notMounted'
+  | 'notWikiLayout'
+  | 'readGateBlocked'
+  | 'catalogFailed';
+
+export type WikiSearchError = { code: WikiSearchErrorCode; message: string };
+
+export type WikiSearchOptions = {
+  query: string;
+  /** 默认 20，范围 1–50 */
+  topK?: number;
+  /** 按页面类型筛选（仅 wiki 命中） */
+  pageType?: WikiPageType;
+  /** 按标签筛选（仅 wiki 命中，精确匹配） */
+  tag?: string;
+  /** 限定检索对象；缺省两者都搜 */
+  kind?: WikiSearchKind;
+};
+
+export type WikiSearchOutcome =
+  | { ok: true; result: WikiSearchResponse }
+  | { ok: false; error: WikiSearchError };
+
 

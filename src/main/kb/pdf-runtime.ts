@@ -68,6 +68,8 @@ export type PdfCanvasContextLike = {
   getImageData(x: number, y: number, w: number, h: number): { data: Uint8ClampedArray };
   putImageData(data: object, x: number, y: number): void;
   fillRect?(x: number, y: number, w: number, h: number): void;
+  /** 绘制位图（issue 13 视觉发送前缩小用；页面渲染路径不使用） */
+  drawImage?(image: unknown, dx: number, dy: number, dw?: number, dh?: number): void;
 };
 
 /** pdfjs PDFObjects（objs / commonObjs 共用形态）：get 带回调时在数据就绪后调用 */
@@ -113,6 +115,8 @@ export type PdfJsModule = {
 
 export type NodeCanvasModule = {
   createCanvas(width: number, height: number): PdfCanvasLike;
+  /** 解码图片字节为可绘制 Image（issue 13 视觉发送前缩小用；缺失时调用方降级） */
+  loadImage?: (data: Buffer | Uint8Array) => Promise<{ width: number; height: number }>;
   DOMMatrix?: unknown;
   ImageData?: unknown;
   Path2D?: unknown;

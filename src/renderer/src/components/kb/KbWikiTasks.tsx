@@ -113,11 +113,19 @@ function TaskRow({ task, index, total }: { task: WikiIngestTask; index: number; 
   const active = task.phase === 'queued' || task.phase === 'converting' || task.phase === 'committing';
   const usage = usageText(task.usage);
   const retryCount = task.retryCount ?? 0;
-  // 视觉受阻（issue 12）：未配置/解读失败 → 提供「仅按文字继续」显式降级入口
+  // 视觉受阻（issue 12/13）：未配置/解读失败/单批上限 → 提供「仅按文字继续」
+  // 显式降级入口；单批上限还可用重试继续下一批（已成功解读复用）。
+  // 错误码只可能由编译路径的视觉阶段产生，码本身即充分判别
   const visionBlocked =
-    task.kind === 'compileSource'
-    && isRetryablePhase(task.phase)
-    && (task.lastError?.code === 'visionNotConfigured' || task.lastError?.code === 'visionFailed');
+    isRetryablePhase(task.phase)
+    && (task.lastError?.code === 'visionNotConfigured'
+      || task.lastError?.code === 'visionFailed'
+      || task.lastError?.code === 'visionBatchLimit');
+  const retryTitle = task.lastError?.code === 'visionBatchLimit'
+    ? '继续下一批：只处理待处理页（已成功解读复用，不重复调用模型）'
+    : task.phase === 'blocked'
+      ? '重试任务（补齐预算/配置后继续；已完成分段不会重做）'
+      : '重试任务';
 
   return (
     <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2 text-xs last:border-b-0">
@@ -132,9 +140,22 @@ function TaskRow({ task, index, total }: { task: WikiIngestTask; index: number; 
         {(retryCount > 0 || usage || task.progress) && (
           <div className="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
             {task.progress && task.progress.total > 0 && (
-              <span title="长来源分段编译进度（已完成段数 / 总段数）">
-                分段 {task.progress.done}/{task.progress.total}
-              </span>
+              task.phase === 'vision' ? (
+                <>
+                  <span title="图像解读进度（已完成页 / 总页数）">
+                    视觉 {task.progress.done}/{task.progress.total}
+                  </span>
+                  {task.progress.reused !== undefined && task.progress.reused > 0 && (
+                    <span title="缓存命中：已成功解读直接复用，不重复调用模型">
+                      复用 {task.progress.reused}
+                    </span>
+                  )}
+                </>
+              ) : (
+                <span title="长来源分段编译进度（已完成段数 / 总段数）">
+                  分段 {task.progress.done}/{task.progress.total}
+                </span>
+              )
             )}
             {retryCount > 0 && (
               <span title="模型调用内部有界退避重试次数">已重试 {retryCount} 次</span>
@@ -181,7 +202,7 @@ function TaskRow({ task, index, total }: { task: WikiIngestTask; index: number; 
         {isRetryablePhase(task.phase) && (
           <button
             onClick={() => void retry(task.taskId)}
-            title={task.phase === 'blocked' ? '重试任务（补齐预算/配置后继续；已完成分段不会重做）' : '重试任务'}
+            title={retryTitle}
             className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           >
             <RotateCcw className="h-3.5 w-3.5" />
@@ -465,18 +486,31 @@ function InterpretLine({ label, value }: { label: string; value: string | null }
 }
 
 /**
- * 模型图像解读并排面板（issue 12）：原图缩略图旁边显示模型对该图的
+ * 模型图像解读并排面板（issue 12/13）：原图缩略图旁边显示模型对该图的
  * 结构化解读（图类型/可见元素与信号/关系或时序/可辨认数值/不确定项），
  * 供人工审阅时逐张核对。明确标注「模型图像解读（非原文）」。
+ * 失败解读提供「重试本图」（issue 13）：只重做该图并刷新显示（含 usage）。
  */
-function InterpretationPanel({ sourceId, record }: { sourceId: string; record: PdfAssetRecord }) {
+function InterpretationPanel({
+  sourceId,
+  revision,
+  record,
+}: {
+  sourceId: string;
+  revision: string;
+  record: PdfAssetRecord;
+}) {
   const [interp, setInterp] = useState<WikiVisionInterpretation | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState<string | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
     let alive = true;
+    setRetryError(null);
     trpc.kb.visionInterpretations
-      .query({ sourceId })
+      .query(revision ? { sourceId, revision } : { sourceId })
       .then((r) => {
         if (!alive) return;
         const hit = (r.interpretations ?? []).find((x) => x.assetId === record.assetId) ?? null;
@@ -489,7 +523,29 @@ function InterpretationPanel({ sourceId, record }: { sourceId: string; record: P
     return () => {
       alive = false;
     };
-  }, [sourceId, record.assetId]);
+  }, [sourceId, revision, record.assetId, refreshKey]);
+
+  // 单图重试（issue 13）：只重做该图（已成功且同指纹的解读在主进程直接复用）
+  const retryAsset = useCallback(async () => {
+    setRetrying(true);
+    setRetryError(null);
+    try {
+      const res = await trpc.kb.retryVisionAsset.mutate(
+        revision
+          ? { sourceId, assetId: record.assetId, revision }
+          : { sourceId, assetId: record.assetId },
+      );
+      if (res.ok) {
+        setRefreshKey((k) => k + 1); // 重新拉取解读记录（含 usage）
+      } else {
+        setRetryError(res.message); // 未配置视觉模型/资产不在清单 → 内联可见
+      }
+    } catch (err) {
+      setRetryError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRetrying(false);
+    }
+  }, [sourceId, revision, record.assetId]);
 
   if (!loaded) {
     return (
@@ -506,7 +562,19 @@ function InterpretationPanel({ sourceId, record }: { sourceId: string; record: P
   if (interp.status === 'failed') {
     return (
       <div className="mt-2 rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] text-red-500">
-        模型解读失败（{interp.errorCode ?? '未知错误'}）：{interp.errorMessage ?? '无错误详情'}。重试编译只重做失败项。
+        <div>
+          模型解读失败（{interp.errorCode ?? '未知错误'}）：{interp.errorMessage ?? '无错误详情'}
+        </div>
+        {retryError && <div className="mt-1 font-medium">重试失败：{retryError}</div>}
+        <button
+          onClick={() => void retryAsset()}
+          disabled={retrying}
+          data-testid="retry-vision-asset"
+          title="只重做该图：已成功解读不受影响，不重复调用模型"
+          className="mt-1.5 rounded bg-red-500/15 px-2 py-1 text-[10px] font-medium text-red-500 transition-colors hover:bg-red-500/25 disabled:opacity-40"
+        >
+          {retrying ? '重试中…' : '重试本图'}
+        </button>
       </div>
     );
   }
@@ -517,6 +585,11 @@ function InterpretationPanel({ sourceId, record }: { sourceId: string; record: P
         <span className="rounded bg-secondary px-1 text-[10px] text-secondary-foreground" title={interp.model}>
           {interp.model}
         </span>
+        {usageText(interp.usage) && (
+          <span className="text-[10px] text-muted-foreground" title="本次解读 token 用量">
+            {usageText(interp.usage)}
+          </span>
+        )}
       </div>
       <div className="space-y-1">
         <InterpretLine label="图类型" value={interp.imageType} />
@@ -649,7 +722,11 @@ function PdfAssetsPanel({ sourceId }: { sourceId: string }) {
           {selectedId && manifest.assets.find((a) => a.assetId === selectedId) && (
             <div className="mt-2">
               <AssetDetail record={manifest.assets.find((a) => a.assetId === selectedId)!} />
-              <InterpretationPanel sourceId={sourceId} record={manifest.assets.find((a) => a.assetId === selectedId)!} />
+              <InterpretationPanel
+                sourceId={sourceId}
+                revision={manifest.revision}
+                record={manifest.assets.find((a) => a.assetId === selectedId)!}
+              />
             </div>
           )}
         </>

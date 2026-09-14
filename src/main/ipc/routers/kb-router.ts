@@ -152,6 +152,11 @@ type QueueSnapshotResult =
   | { ok: true; snapshot: WikiQueueSnapshot }
   | { ok: false; reason: 'notMounted' | 'notWikiLayout' | 'notAttached' };
 
+/** kb.retryVisionAsset 结果（issue 13）：单图重试，null 语义不伪造记录 */
+type RetryVisionAssetResult =
+  | { ok: true; interpretation: WikiVisionInterpretation }
+  | { ok: false; code: 'visionNotConfigured' | 'assetNotInManifest'; message: string };
+
 type UploadResult =
   | { ok: true; document: KbDocument }
   | { ok: false; error: { code: string; message: string } };
@@ -1065,6 +1070,67 @@ export const kbRouter = t.router({
       return {
         interpretations: await readVisionInterpretations(kbPath, input.sourceId, input.revision),
       };
+    }),
+
+  // ─── kb.retryVisionAsset（issue 13） ────────────────────────
+  //
+  // 失败单图独立重试：解析 vision 角色配置 → 按资产清单定位单张 →
+  // 只重做该图（已成功且同指纹的解读直接复用，不重复调用模型）。
+  // 未配置视觉模型 → visionNotConfigured；资产不在清单 → assetNotInManifest
+  //（不伪造记录）。revision 缺省 = 资产清单当前修订。
+
+  retryVisionAsset: t.procedure
+    .input((raw): { sourceId: string; assetId: string; revision?: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.sourceId !== 'string' || r.sourceId.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'sourceId is required' });
+      }
+      if (typeof r.assetId !== 'string' || r.assetId.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'assetId is required' });
+      }
+      const out: { sourceId: string; assetId: string; revision?: string } = {
+        sourceId: r.sourceId.trim(),
+        assetId: r.assetId.trim(),
+      };
+      if (typeof r.revision === 'string' && r.revision.trim().length > 0) {
+        out.revision = r.revision.trim();
+      }
+      return out;
+    })
+    .mutation(async ({ input }): Promise<RetryVisionAssetResult> => {
+      const kb = await getWikiMountedKb();
+      const { retryVisionAsset, createDefaultVisionLlmFactory } = await import('../../kb/vision');
+      const llm = await createDefaultVisionLlmFactory()(new AbortController().signal);
+      if (!llm) {
+        return {
+          ok: false,
+          code: 'visionNotConfigured',
+          message: '未配置视觉模型（设置 → 知识库 → 视觉模型）',
+        };
+      }
+      const revision = input.revision ?? (await readPdfAssetManifest(kb.path, input.sourceId))?.revision;
+      if (!revision) {
+        return {
+          ok: false,
+          code: 'assetNotInManifest',
+          message: '来源尚无图像资产清单，无法定位该资产',
+        };
+      }
+      const interpretation = await retryVisionAsset({
+        kbPath: kb.path,
+        sourceId: input.sourceId,
+        sourceRevision: revision,
+        assetId: input.assetId,
+        llm,
+      });
+      if (!interpretation) {
+        return {
+          ok: false,
+          code: 'assetNotInManifest',
+          message: `资产不在当前修订清单中: ${input.assetId.slice(0, 8)}`,
+        };
+      }
+      return { ok: true, interpretation };
     }),
 
   // ─── kb.importExtensions（issue 02） ───────────────────────

@@ -184,13 +184,20 @@ function parseTask(u: unknown, kbId: string): WikiIngestTask | null {
   };
 }
 
-/** 持久形态的分段进度：只接受非负整数，其余按「无进度」处理（向后兼容旧队列文件） */
+/** 持久形态的分段进度：只接受非负整数，其余按「无进度」处理（向后兼容旧队列文件）；
+ *  reused（缓存命中数，issue 13）存在且合法时一并保留。 */
 function parseTaskProgress(value: unknown): WikiTaskProgress | null {
   if (!isRecord(value)) return null;
   const { done, total } = value;
   if (typeof done !== 'number' || !Number.isInteger(done) || done < 0) return null;
   if (typeof total !== 'number' || !Number.isInteger(total) || total < 0) return null;
-  return { done: Math.min(done, total), total };
+  return {
+    done: Math.min(done, total),
+    total,
+    ...(typeof value.reused === 'number' && Number.isInteger(value.reused) && value.reused >= 0
+      ? { reused: value.reused }
+      : {}),
+  };
 }
 
 /** 持久形态的 usage：只接受有限数字字段，其余忽略（未知字段不伪造） */
@@ -666,7 +673,8 @@ export class WikiIngestQueueManager {
    * 不完整提案（changeSet 列出视觉缺口并标 partial，不冒充完整编译）。
    *
    * 只允许对因视觉原因受阻/失败的任务设置（visionNotConfigured /
-   * visionFailed）；已完成的解读不删除，重跑时作为附录复用。
+   * visionFailed / visionBatchLimit，issue 12/13）；已完成的解读不删除，
+   * 重跑时作为附录复用。
    */
   async continueTextOnly(kbId: string, taskId: string): Promise<void> {
     const st = this.requireAttached(kbId);
@@ -676,7 +684,11 @@ export class WikiIngestQueueManager {
       throw new WikiQueueError('invalidPhase', `只有 failed/cancelled/blocked 任务可继续（当前 ${task.phase}）`);
     }
     const visionCode = task.lastError?.code;
-    if (visionCode !== 'visionNotConfigured' && visionCode !== 'visionFailed') {
+    if (
+      visionCode !== 'visionNotConfigured' &&
+      visionCode !== 'visionFailed' &&
+      visionCode !== 'visionBatchLimit'
+    ) {
       throw new WikiQueueError('invalidPhase', `只有视觉受阻的任务可仅按文字继续（lastError=${visionCode ?? '无'}）`);
     }
     const prev = cloneTask(task);
@@ -896,9 +908,16 @@ export class WikiIngestQueueManager {
     }
     if (controller.signal.aborted) return 'aborted';
 
+    // 迟到回调边界（issue 13）：取消/暂停/卸载会先行释放 inflight 槽位，
+    // 之后到达的阶段/进度回调不得复活任务（attempt 失效语义的运行态部分）
+    const runActive = (): boolean => {
+      const run = this.inflight.get(task.taskId);
+      return run !== undefined && run.attemptId === attemptId;
+    };
+
     const setPhase = (phase: WikiIngestPhase): void => {
       const t = st.tasks.find((x) => x.taskId === task.taskId);
-      if (!t || t.attemptId !== attemptId) return;
+      if (!t || t.attemptId !== attemptId || !runActive()) return;
       t.phase = phase;
       t.updatedAt = new Date().toISOString();
       this.pushTaskEvent(t);
@@ -931,10 +950,10 @@ export class WikiIngestQueueManager {
         signal: controller.signal,
         // vision 阶段推进（issue 12）：解读开始 → vision，进入文本分析 → analyzing
         onPhaseChange: (phase) => setPhase(phase),
-        // 逐张解读进度（issue 12）：与分段进度同一形状（done/total）
+        // 逐张解读进度（issue 12/13）：与分段进度同一形状（done/total/reused）
         onVisionProgress: (progress) => {
           const t = st.tasks.find((x) => x.taskId === task.taskId);
-          if (!t || t.attemptId !== attemptId) return;
+          if (!t || t.attemptId !== attemptId || !runActive()) return;
           t.phase = 'vision';
           t.progress = { ...progress };
           t.updatedAt = new Date().toISOString();
@@ -944,7 +963,7 @@ export class WikiIngestQueueManager {
         // 分段进度（长来源，issue 10）：phase 与进度分开保存，事件即时可见
         onChunkProgress: (progress) => {
           const t = st.tasks.find((x) => x.taskId === task.taskId);
-          if (!t || t.attemptId !== attemptId) return;
+          if (!t || t.attemptId !== attemptId || !runActive()) return;
           // 分段分析是长来源的主要耗时阶段：进度回调即证明仍在 analyzing
           t.phase = 'analyzing';
           t.progress = { ...progress };
@@ -1001,11 +1020,13 @@ export class WikiIngestQueueManager {
       task.usage = summarizeUsage(usage);
       task.retryCount = taskRetryCount ?? 0;
     } else {
-      // 预算/配置不足 → blocked（issue 10/12，spec §5）：等待用户提高预算、
-      // 配置视觉模型或显式选择仅文字继续后重试，不是普通失败；
-      // 不静默裁切来源、不冒充完整成功。
+      // 预算/配置不足/批次上限 → blocked（issue 10/12/13，spec §5）：等待用户
+      // 提高预算、配置视觉模型、继续下一批或显式选择仅文字继续后重试，
+      // 不是普通失败；不静默裁切来源、不冒充完整成功。
       task.phase =
-        outcome.error.code === 'contextBudgetExceeded' || outcome.error.code === 'visionNotConfigured'
+        outcome.error.code === 'contextBudgetExceeded' ||
+        outcome.error.code === 'visionNotConfigured' ||
+        outcome.error.code === 'visionBatchLimit'
           ? 'blocked'
           : 'failed';
       task.lastError = { code: outcome.error.code, message: outcome.error.message, at: now };
