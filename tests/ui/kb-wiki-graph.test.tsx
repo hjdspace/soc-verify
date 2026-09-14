@@ -70,7 +70,6 @@ vi.mock('@renderer/lib/sigma-graph-renderer', async (importOriginal) => {
       return {
         refresh: () => undefined,
         resize: () => undefined,
-        setNodePosition: () => undefined,
         applyPositions: (positions: unknown[]) => {
           fakeState.appliedPositions.push(positions.length);
           return positions.length;
@@ -82,7 +81,6 @@ vi.mock('@renderer/lib/sigma-graph-renderer', async (importOriginal) => {
           fakeState.focused.push(pageId);
           return true;
         },
-        describe: () => ({ canvases: 1, killed: false }),
         kill: () => {
           fakeState.rendererKills += 1;
         },
@@ -346,6 +344,23 @@ describe('KbWikiGraph — 画布模式（WebGL 可用）', () => {
     await waitFor(() => {
       expect(screen.getByTestId('kb-graph-coverage')).toHaveTextContent('共 1 页');
     });
+  });
+
+  it('一键清除全部过滤条件（类型/关键词/社区）', async () => {
+    await renderGraph();
+    expect(screen.queryByTestId('kb-graph-clear-filter')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('kb-graph-type-source'));
+    fireEvent.change(screen.getByTestId('kb-graph-keyword'), { target: { value: '手册' } });
+    const clear = await screen.findByTestId('kb-graph-clear-filter');
+
+    fireEvent.click(clear);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('kb-graph-coverage')).toHaveTextContent('共 4 页');
+    });
+    expect(useKbWikiGraphStore.getState().filter).toEqual({ types: null, keyword: '', communityId: null });
+    expect(screen.queryByTestId('kb-graph-clear-filter')).not.toBeInTheDocument();
   });
 
   it('记录首个可交互画面耗时（不是组件挂载耗时）', async () => {

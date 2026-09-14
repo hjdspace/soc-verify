@@ -21,7 +21,7 @@ export type RenderHighlight = {
   neighbors: ReadonlySet<string>;
   /** 被预算/过滤排除的节点（reducer 直接隐藏） */
   hidden: ReadonlySet<string>;
-  /** 桥接节点（图洞察命中，用描边强调） */
+  /** 桥接节点（图洞察命中）：用告警色 + highlighted 强调；含义由详情面板文案说明 */
   bridges: ReadonlySet<string>;
 };
 
@@ -36,8 +36,6 @@ export type SigmaRendererOptions = {
   onStageClick: () => void;
   onNodeDragEnd: (pageId: string, position: { x: number; y: number }) => void;
   onFirstFrame?: (elapsedMs: number) => void;
-  /** 首帧后的可见性/尺寸变化用（resize 由组件触发） */
-  onAfterRender?: () => void;
   /**
    * 渲染期运行时错误（sigma 在 rAF 中抛错）。
    *
@@ -52,15 +50,12 @@ export type SigmaRendererHandle = {
   refresh(): void;
   /** 容器尺寸变化后重算 */
   resize(): void;
-  setNodePosition(pageId: string, position: { x: number; y: number }): void;
   /** 批量写入布局结果（worker 回传） */
   applyPositions(positions: ReadonlyArray<{ id: string; x: number; y: number }>): number;
   /** 高亮状态变更（不重建画布） */
   setHighlight(highlight: RenderHighlight): void;
   /** 把相机移到指定节点（节点跳转） */
   focusNode(pageId: string): boolean;
-  /** 诊断信息（冒烟测试与错误面板用） */
-  describe(): { canvases: number; killed: boolean };
   /** 释放画布、监听与 WebGL 上下文；幂等 */
   kill(): void;
 };
@@ -252,9 +247,6 @@ export async function createSigmaRenderer(
       options.onFirstFrame?.(now - startAt);
     });
   }
-  if (options.onAfterRender) {
-    sigma.on('afterRender', options.onAfterRender);
-  }
 
   // ── 节点拖拽 ───────────────────────────────────────────────────
   //
@@ -339,11 +331,6 @@ export async function createSigmaRenderer(
         sigma.refresh();
       }, undefined);
     },
-    setNodePosition: (pageId, position) => {
-      if (killed || !graph.hasNode(pageId)) return;
-      graph.setNodeAttribute(pageId, 'x', position.x);
-      graph.setNodeAttribute(pageId, 'y', position.y);
-    },
     applyPositions: (positions) => {
       if (killed) return 0;
       return guard(() => {
@@ -381,10 +368,6 @@ export async function createSigmaRenderer(
         return true;
       }, false);
     },
-    describe: () => ({
-      canvases: options.container.querySelectorAll('canvas').length,
-      killed,
-    }),
     kill: () => {
       if (killed) return;
       killed = true;

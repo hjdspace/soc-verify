@@ -68,6 +68,8 @@ export type KbWikiGraphState = {
   setTypes: (types: WikiPageType[] | null) => void;
   toggleType: (type: WikiPageType) => void;
   setCommunityFilter: (communityId: number | null) => void;
+  /** 一键清空全部过滤条件（类型/关键词/社区） */
+  clearFilter: () => void;
   setColorMode: (mode: GraphColorMode) => void;
   selectNode: (pageId: string | null) => void;
   expand: () => void;
@@ -184,6 +186,8 @@ export const useKbWikiGraphStore = create<KbWikiGraphState>((set, get) => ({
   },
 
   setCommunityFilter: (communityId) => set({ filter: { ...get().filter, communityId } }),
+
+  clearFilter: () => set({ filter: EMPTY_GRAPH_FILTER }),
 
   setColorMode: (colorMode) => set({ colorMode }),
 

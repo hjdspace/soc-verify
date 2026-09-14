@@ -29,6 +29,7 @@ import {
   describeGraphCoverage,
   filterGraph,
   graphDataKey,
+  hasActiveFilter,
   layoutIterations,
   layoutScalingRatio,
   nodeColor,
@@ -120,6 +121,7 @@ function GraphWorkspace({ onOpenPage }: KbWikiGraphProps) {
 
   const setKeyword = useKbWikiGraphStore((s) => s.setKeyword);
   const toggleType = useKbWikiGraphStore((s) => s.toggleType);
+  const clearFilter = useKbWikiGraphStore((s) => s.clearFilter);
   const setTypes = useKbWikiGraphStore((s) => s.setTypes);
   const setCommunityFilter = useKbWikiGraphStore((s) => s.setCommunityFilter);
   const setColorMode = useKbWikiGraphStore((s) => s.setColorMode);
@@ -238,6 +240,7 @@ function GraphWorkspace({ onOpenPage }: KbWikiGraphProps) {
         onKeyword={setKeyword}
         onToggleType={toggleType}
         onClearTypes={() => setTypes(null)}
+        onClearFilter={clearFilter}
         onCommunity={setCommunityFilter}
         onColorMode={setColorMode}
         onForceList={(value) => setForceList(value)}
@@ -325,6 +328,7 @@ type GraphToolbarProps = {
   onKeyword: (value: string) => void;
   onToggleType: (type: WikiPageType) => void;
   onClearTypes: () => void;
+  onClearFilter: () => void;
   onCommunity: (communityId: number | null) => void;
   onColorMode: (mode: 'type' | 'community') => void;
   onForceList: (value: boolean) => void;
@@ -422,6 +426,16 @@ function GraphToolbar(props: GraphToolbarProps) {
       </label>
 
       <div className="flex-1" />
+
+      {hasActiveFilter(filter) && (
+        <button
+          onClick={props.onClearFilter}
+          data-testid="kb-graph-clear-filter"
+          className="rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          清除过滤
+        </button>
+      )}
 
       <span className="text-[10px] text-muted-foreground" data-testid="kb-graph-diagnostics">
         {props.useList ? '列表视图' : `WebGL(${props.webgl})`}
