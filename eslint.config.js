@@ -14,7 +14,6 @@ export default tseslint.config(
       // pdf.js 与终端 shell 集成的第三方 vendored 产物，不参与 lint
       'resources/pdfjs',
       'resources/terminal',
-      'engine/oh-my-pi',
       '.tmp',
       '.cache',
       // 渲染端静态资源（drawio viewer-static.min.js 等第三方打包产物）

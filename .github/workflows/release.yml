@@ -20,19 +20,13 @@ jobs:
           - name: Windows
             os: windows-latest
             package_script: package:win
-            runner_output: resources/binaries/socverify-runner.exe
-            runner_asset: socverify-runner-windows-x64.exe
           - name: Linux
             os: ubuntu-latest
             package_script: package:linux
-            runner_output: resources/binaries/socverify-runner
-            runner_asset: socverify-runner-linux-x64
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -40,117 +34,17 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.14
-
       - name: Install app dependencies
         run: npm ci
-
-      - name: Install engine dependencies
-        run: bun install --frozen-lockfile
-        working-directory: engine/oh-my-pi
-
-      - name: Read omp version
-        id: omp-version
-        shell: bash
-        run: |
-          VERSION=$(node -e "console.log(require('./engine/oh-my-pi/packages/natives/package.json').version)")
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-      # Cache the pi_natives .node files — they only change when the omp
-      # engine version changes, so this avoids re-downloading the 150MB omp
-      # binary on every CI run.
-      - name: Cache pi_natives addon
-        id: natives-cache
-        uses: actions/cache@v4
-        with:
-          path: resources/binaries/pi_natives.*.node
-          key: pi-natives-${{ matrix.name }}-${{ steps.omp-version.outputs.version }}
-
-      # build:runner compiles the runner binary AND runs download-natives.
-      # When the cache is hit, download-natives detects the .node files
-      # already exist and skips instantly.
-      - name: Build agent runner + native addon
-        run: npm run build:runner
 
       - name: Package desktop app
         run: npm run ${{ matrix.package_script }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload runner binary artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: runner-${{ matrix.os }}
-          path: ${{ matrix.runner_output }}
-
-  upload-runner-assets:
-    name: Upload runner binaries
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Download runner artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: runner-artifacts
-          merge-multiple: true
-
-      - name: Upload runner binaries to release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-
-          # Retry wrapper for GitHub API 5xx errors.
-          # Uses a simple loop that captures the real exit code correctly.
-          gh_retry() {
-            local max_retries=5
-            local delay=30
-            local attempt=1
-            while [ "$attempt" -le "$max_retries" ]; do
-              "$@" && return 0
-              local rc=$?
-              if [ "$attempt" -eq "$max_retries" ]; then
-                echo "::error::Command failed after $max_retries attempts (exit $rc): $*"
-                return $rc
-              fi
-              echo "::warning::Attempt $attempt/$max_retries failed (exit $rc), retrying in ${delay}s..."
-              sleep "$delay"
-              delay=$((delay * 2))
-              attempt=$((attempt + 1))
-            done
-          }
-
-          # If the release doesn't exist yet (electron-builder may have
-          # created it as draft, or 503 may have prevented creation),
-          # create it as draft so we can upload runner binaries.
-          if ! gh_retry gh release view "${GITHUB_REF_NAME}" > /dev/null 2>&1; then
-            gh_retry gh release create "${GITHUB_REF_NAME}" \
-              --draft \
-              --title "${GITHUB_REF_NAME}" \
-              --notes ""
-            echo "Created draft release ${GITHUB_REF_NAME}"
-          else
-            echo "Release ${GITHUB_REF_NAME} already exists, skipping creation"
-          fi
-
-          for f in runner-artifacts/*; do
-            [ -e "$f" ] || continue
-            gh_retry gh release upload "${GITHUB_REF_NAME}" "$f" --clobber
-          done
-
   publish-release:
     name: Publish GitHub Release
-    needs: [build, upload-runner-assets]
+    needs: [build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
