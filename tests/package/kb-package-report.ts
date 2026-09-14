@@ -24,6 +24,12 @@ import type { RealModelJourneyResult, ModelCallRecord } from './kb-journey-real-
 
 const execFileAsync = promisify(execFile);
 
+/** 门禁报告目录（三处使用者共享的单一来源；.scratch 已 gitignore） */
+export function packageReportDir(repoRoot: string): string {
+  return process.env.KB_PACKAGE_REPORT_DIR
+    ?? join(repoRoot, '.scratch', 'llm-wiki', 'spikes', '30-package');
+}
+
 // ── 环境 ────────────────────────────────────────────────────────
 
 export type EnvironmentInfo = {
@@ -256,14 +262,24 @@ export function buildReport(parts: {
     ticket: kw && kw.stats.p95Ms > GATE_THRESHOLDS.keywordP95Ms ? '14' : null,
   });
 
-  const guiGraph = parts.measurements.gui?.find((g) => !g.adjacencyDegraded && g.firstFrameMs !== null);
+  const guiScenarios = parts.measurements.gui ?? [];
+  const guiWarm = guiScenarios.filter((g) => !g.adjacencyDegraded && g.firstFrameMs !== null);
+  const guiCold = guiWarm[0];
+  const guiRestart = guiWarm[1];
+  // 门禁按 spec 口径从严：以「首次打开」判定；重启后的暖缓存数值作为诊断记录
+  const firstFrameOk = Boolean((guiCold?.firstFrameMs ?? Infinity) <= GATE_THRESHOLDS.graphFirstFrameMs);
   gates.push({
     id: 'graph-first-frame',
-    name: '图首个可交互画面（实际安装包）',
-    met: Boolean(guiGraph && guiGraph.firstFrameMs !== null && guiGraph.firstFrameMs <= GATE_THRESHOLDS.graphFirstFrameMs),
-    actual: guiGraph?.firstFrameMs != null ? `${guiGraph.firstFrameMs} ms` : '未测量',
+    name: '图首个可交互画面（实际安装包，1000 页）',
+    met: firstFrameOk,
+    actual: [
+      guiCold?.firstFrameMs != null ? `首次打开 ${guiCold.firstFrameMs}ms` : '首次打开未测量',
+      guiRestart?.firstFrameMs != null ? `（重启后暖缓存 ${guiRestart.firstFrameMs}ms，仅诊断）` : null,
+    ]
+      .filter(Boolean)
+      .join('，'),
     threshold: `≤ ${GATE_THRESHOLDS.graphFirstFrameMs} ms`,
-    ticket: guiGraph && guiGraph.firstFrameMs !== null && guiGraph.firstFrameMs > GATE_THRESHOLDS.graphFirstFrameMs ? '26' : null,
+    ticket: firstFrameOk ? null : '23',
   });
 
   const fx = parts.fixture;

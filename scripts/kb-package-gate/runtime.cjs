@@ -118,9 +118,13 @@ function guardNetwork() {
 
 async function timed(name, fn) {
   const t0 = Date.now();
+  const rssBefore = process.memoryUsage().rss;
   const value = await fn();
   const ms = Date.now() - t0;
+  const rssAfter = process.memoryUsage().rss;
   report.metrics[name] = ms;
+  report.metrics[`${name}.rssDeltaMB`] = Math.round((rssAfter - rssBefore) / 1048576);
+  report.metrics[`${name}.rssAfterMB`] = Math.round(rssAfter / 1048576);
   return { ms, value };
 }
 

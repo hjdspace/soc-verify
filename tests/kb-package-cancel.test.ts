@@ -39,6 +39,7 @@ import { importWikiSources } from '../src/main/kb/source-import';
 import { initWikiLayout } from '../src/main/kb/wiki-layout';
 import { sourceIdFor } from '../src/main/kb/source-identity';
 import { createMemorySampler, formatBytes } from './package/kb-package-perf';
+import { packageReportDir } from './package/kb-package-report';
 
 vi.setConfig({ testTimeout: 60_000 });
 
@@ -142,8 +143,7 @@ describe('issue 30 — 取消响应测量（转换期间 pause/cancel）', () =>
     );
 
     // 5) 供主门禁汇总
-    const reportDir = process.env.KB_PACKAGE_REPORT_DIR
-      ?? join(repoRoot, '.scratch', 'llm-wiki', 'spikes', '30-package');
+    const reportDir = packageReportDir(repoRoot);
     mkdirSync(reportDir, { recursive: true });
     writeFileSync(
       join(reportDir, 'cancel-measurement.json'),

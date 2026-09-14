@@ -147,12 +147,25 @@ function realCompileLlm(config: LlmConfig, log: ModelCallRecord[]): CompileLlm {
     model: config.model,
     invoke: async (req) => {
       const t0 = Date.now();
-      const result = await callLlm(config, {
-        system: req.system,
-        user: req.user,
-        maxTokens: req.maxTokens,
-        timeoutMs: 300_000,
-      });
+      let result;
+      try {
+        result = await callLlm(config, {
+          system: req.system,
+          user: req.user,
+          maxTokens: req.maxTokens,
+          timeoutMs: 300_000,
+        });
+      } catch (error) {
+        log.push({
+          role: 'compile',
+          model: config.model,
+          ms: Date.now() - t0,
+          usage: null,
+          finishReason: null,
+          textHead: `THROW: ${error instanceof Error ? error.message : String(error)}`.slice(0, 400),
+        });
+        throw error;
+      }
       log.push({
         role: 'compile',
         model: config.model,
@@ -473,9 +486,13 @@ export async function runRealModelJourney(options: JourneyOptions): Promise<Real
     if (lastTask?.phase !== 'done') return result;
     await mgr2.detach(kbId);
   } else {
-    // 未观察到 running（可能瞬时完成）——直接等结束
+    // 未观察到执行中（可能瞬时完成或快速失败）——直接等结束
     const done = await waitForTask(queue, kbId, task.taskId, taskTimeoutMs);
-    step('真实模型编译完成', done.task?.phase === 'done', `phase=${done.task?.phase}`);
+    step(
+      '真实模型编译完成',
+      done.task?.phase === 'done',
+      done.task && done.task.phase !== 'done' ? `phase=${done.task.phase} lastError=${JSON.stringify(done.task.lastError)}` : `modelCalls=${modelCalls.length}`,
+    );
     if (done.task?.phase !== 'done') return result;
     await queue.detach(kbId);
   }

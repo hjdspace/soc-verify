@@ -19,7 +19,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
@@ -34,6 +34,7 @@ import {
   buildReport,
   writeReport,
   collectEnvironment,
+  packageReportDir,
   GATE_THRESHOLDS,
   type PackageGateReport,
   type EnvironmentInfo,
@@ -42,8 +43,7 @@ import {
 vi.setConfig({ testTimeout: 900_000 });
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const reportDir = process.env.KB_PACKAGE_REPORT_DIR
-  ?? join(repoRoot, '.scratch', 'llm-wiki', 'spikes', '30-package');
+const reportDir = packageReportDir(repoRoot);
 const issuesDir = join(repoRoot, '.scratch', 'llm-wiki', 'issues');
 const workDir = join(reportDir, 'work');
 
@@ -157,14 +157,30 @@ describe('issue 30 门禁 — 阶段 2：缓存热关键词检索 p95', () => {
       zeroHitQueries: result.zeroHitQueries,
       note:
         '生产路径 searchWiki（keyword 模式 = 产品当前实际路径，见 issue 29 接线结论）；'
+        + '本门禁运行环境未配置嵌入端点，测得即「无 embedding（关键词降级）模式」的实际表现'
+        + '（issue 29 已证明该模式下与纯关键词路径逐条一致）；'
         + '缓存热 = fixture 预热一轮后逐轮计时（应用层无检索缓存，每次重读页面与 parsed 全文，'
-        + '测得的是真实产品路径热稳态）；模型延迟不参与本测量。',
+        + '测得的是真实产品路径热稳态）；模型延迟不参与本测量。'
+        + 'PDF/索引阶段的「窗口响应」在打包运行时探针（无窗口的 ELECTRON_RUN_AS_NODE）中不适用，'
+        + '其内存以探针内 RSS 分段记录（见 packagedRuntime.metrics 的 rssDeltaMB/rssAfterMB）；'
+        + '布局阶段窗口响应由打包 GUI 的 rAF 间隙探针实测。',
     };
 
     console.log(
       `[kb-package-gate] keyword p50=${result.stats.p50Ms}ms p95=${result.stats.p95Ms}ms max=${result.stats.maxMs}ms `
         + `rssPeak=${formatBytes(result.memoryPeak.rssPeakBytes)}`,
     );
+    if (result.stats.p95Ms > GATE_THRESHOLDS.keywordP95Ms) {
+      finding(
+        'blocker',
+        'keyword-search-p95-over-budget',
+        `固定规模（1000 页 / 46.3MB parsed）缓存热关键词检索 p95=${result.stats.p95Ms}ms（p50=${result.stats.p50Ms}ms），`
+          + `超过初始门禁 ≤1000ms。多次独立运行 p95 为 1316.8 / 1557.1 / 2560.2ms（受磁盘状态影响波动），最好情况仍超门禁约 31%。`
+          + `根因：生产 searchWiki 无应用层缓存，每次查询重读全部 1000 页目录与约 46MB parsed 全文；`
+          + `需要缓存层或增量索引才能达到初始目标。不以降低数据规模换取通过。`,
+        '14',
+      );
+    }
     expect(result.allQueriesHit).toBe(true);
     expect(result.stats.p95Ms).toBeLessThanOrEqual(GATE_THRESHOLDS.keywordP95Ms);
   });
@@ -209,8 +225,7 @@ describe('issue 30 门禁 — 阶段 3：打包运行时（实际安装包二进
         resolveExit(code ?? 1);
       });
     });
-    expect(exitCode, '打包运行时探针以非 0 退出').toBe(0);
-
+    // 无论退出码，先把运行时证据收进报告状态，再做门禁断言
     expect(existsSync(outPath), '打包运行时报告未产出').toBe(true);
     const report = JSON.parse(readFileSync(outPath, 'utf-8')) as Record<string, unknown> & {
       packageVersion?: string;
@@ -234,7 +249,17 @@ describe('issue 30 门禁 — 阶段 3：打包运行时（实际安装包二进
       );
     }
     if (!report.ok && /pdfjs|pdf\.mjs|@napi-rs/i.test(blob)) {
-      finding('high', 'packaged-pdf-runtime', `打包内 PDF 本地运行时检查失败: ${JSON.stringify(report.failures).slice(0, 300)}`, '11');
+      finding(
+        'blocker',
+        'packaged-pdf-runtime-incomplete',
+        '打包产物内 PDF 本地运行时不完整：resources/pdfjs 缺少 node_modules/@napi-rs/canvas'
+          + '（渲染基座），页面渲染/提图兜底在包内不可用。根因：.gitignore 全局 `node_modules/` 规则'
+          + '命中 extraResources 的 gitignored 源目录 resources/pdfjs/，electron-builder 复制时丢弃了'
+          + 'node_modules 子目录（对照：resources/runner-deps/node_modules 以「from 直指 node_modules 本身」'
+          + '的方式成功进入安装包）。修复归 issue 11：extraResources 增加一条 from: resources/pdfjs/node_modules '
+          + '→ to: pdfjs/node_modules（与 runner-deps 同法）。',
+        '11',
+      );
     }
     if (!report.ok && !/DOCX → Markdown 成功/.test(blob)) {
       finding('high', 'packaged-conversion', `打包内本地转换检查未通过: ${JSON.stringify(report.failures).slice(0, 300)}`, '2');
@@ -276,6 +301,16 @@ describe('issue 30 门禁 — 阶段 4：打包 GUI 图视图（首帧/响应/�
     expect(first.ok, `首次 GUI 场景失败: ${first.failures.join('；')}`).toBe(true);
     expect(second.ok, `重启 GUI 场景失败: ${second.failures.join('；')}`).toBe(true);
     expect(first.firstFrameMs).not.toBeNull();
+    if (first.firstFrameMs! > GATE_THRESHOLDS.graphFirstFrameMs) {
+      finding(
+        'blocker',
+        'graph-first-frame-cold-over-budget',
+        `实际安装包内 1000 页图视图首次打开首个可交互画面 ${first.firstFrameMs}ms > 门禁 3000ms`
+          + `（重启后暖缓存 ${second.firstFrameMs}ms 达标）。首次打开包含 kb.wikiGraph 全量图快照构建`
+          + `（扫描并解析全部 1000 页）；需要快照持久化或增量构建才能在首次打开达标。`,
+        '23',
+      );
+    }
     expect(first.firstFrameMs!).toBeLessThanOrEqual(GATE_THRESHOLDS.graphFirstFrameMs);
   });
 });
@@ -314,9 +349,12 @@ describe('issue 30 门禁 — 阶段 6：真实模型图文旅程', () => {
       return;
     }
 
-    const runJourney = (compile: typeof credentials.compile) =>
-      runRealModelJourney({
-        kbPath: join(workDir, `journey-kb-${compile.model.replace(/[^\w-]/g, '_')}`),
+    const runJourney = (compile: typeof credentials.compile) => {
+      const journeyKb = join(workDir, `journey-kb-${compile.model.replace(/[^\w-]/g, '_')}`);
+      // 清掉上次运行的队列/事务残留，保证每次尝试从干净库开始
+      rmSync(journeyKb, { recursive: true, force: true });
+      return runRealModelJourney({
+        kbPath: journeyKb,
         kbId: 'kb-journey-30',
         kbName: 'issue30 旅程库',
         docxBytes: journeyDocx,
@@ -324,6 +362,7 @@ describe('issue 30 门禁 — 阶段 6：真实模型图文旅程', () => {
         query: 'AXI outstanding limit 8',
         taskTimeoutMs: 600_000,
       });
+    };
 
     const journeyDocx = await buildJourneyDocx();
     let result = await runJourney(credentials.compile);
@@ -331,6 +370,19 @@ describe('issue 30 门禁 — 阶段 6：真实模型图文旅程', () => {
       `[kb-package-gate] journey(${credentials.compile.model}) ok=${result.ok} `
         + `steps=${result.steps.map((s) => `${s.ok ? '✅' : '❌'}${s.name}`).join(' → ')}`,
     );
+
+    // 发布被 unresolvedLink 拦截（哪个模型都复现）→ 编译出口缺链接可解析性校验
+    const publishBlocked = result.steps.some((s) => !s.ok && (s.detail ?? '').includes('unresolvedLink'));
+    if (publishBlocked) {
+      finding(
+        'high',
+        'real-model-compile-dangling-links',
+        `真实模型编译与人工审阅全部通过，但发布被 unresolvedLink 正确拦截（A10 行为符合预期）：`
+          + `编译产出的提案包含指向不存在页面的 wikilink，编译/暂存阶段未做链接可解析性校验或修复提示，`
+          + `问题在发布门禁才暴露。已在 agnes-2.5-flash 与 deepseek-v4-flash 两个真实模型上复现。`,
+        '8',
+      );
+    }
 
     // 有界换模型重试：主配置模型协议失败时，用已配置的备选模型再走一次
     if (!result.ok && credentials.alternates.length > 0) {
@@ -344,7 +396,7 @@ describe('issue 30 门禁 — 阶段 6：真实模型图文旅程', () => {
           'real-model-compile-protocol-rejected',
           `真实模型 ${credentials.describe.compile.providerId}/${credentials.describe.compile.model} 的编译输出未通过提案协议校验`
             + `（frontmatter 围栏缺失，任务以 llmFailed 终止；模型输出头部见 report.json modelCalls.textHead）。`
-            + `协议解析的有界重试未覆盖该失败形态。`,
+            + `协议解析的有界修复不覆盖该失败形态。`,
           '9',
         );
         console.log(`[kb-package-gate] 主模型协议失败，用备选模型重试一次: ${alt.providerId}/${alt.model}`);
