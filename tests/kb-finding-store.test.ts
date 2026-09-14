@@ -396,3 +396,126 @@ describe('重复扫描回归', () => {
     expect(found!.status).toBe('ignored');
   });
 });
+
+// ── 图洞察 finding 持久化（issue 26）─────────────────────────────
+
+describe('graph insight findings — 图洞察持久化', () => {
+  it('bridge-node finding 可持久化与读取', async () => {
+    const f = makeFinding({
+      kind: 'bridge-node' as never,
+      pageIds: ['concepts/bridge'],
+      evidenceRefs: ['wiki/concepts/bridge.md', 'revision:1', 'communities:0,1'],
+      evidenceHashes: ['bridgehash00123456'],
+    });
+
+    await mergeFindings(kbPath, [f], '2026-09-14T00:00:00Z');
+
+    const result = await listFindings(kbPath);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0].kind).toBe('bridge-node');
+  });
+
+  it('sparse-community finding 可持久化与读取', async () => {
+    const f = makeFinding({
+      kind: 'sparse-community' as never,
+      pageIds: ['concepts/a', 'concepts/b'],
+      evidenceRefs: ['community:0', 'revision:1', 'members:concepts/a,concepts/b'],
+      evidenceHashes: ['sparsehash0001234567'],
+    });
+
+    await mergeFindings(kbPath, [f], '2026-09-14T00:00:00Z');
+
+    const result = await listFindings(kbPath);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0].kind).toBe('sparse-community');
+  });
+
+  it('图洞察 finding 与结构 finding 共存', async () => {
+    const orphan = makeFinding({ kind: 'orphan', pageIds: ['concepts/a'] });
+    const bridge = makeFinding({
+      kind: 'bridge-node' as never,
+      pageIds: ['concepts/b'],
+      evidenceRefs: ['wiki/concepts/b.md', 'revision:1', 'communities:0,1'],
+      evidenceHashes: ['bridgehash00123456'],
+    });
+    const sparse = makeFinding({
+      kind: 'sparse-community' as never,
+      pageIds: ['concepts/c'],
+      evidenceRefs: ['community:1', 'revision:1', 'members:concepts/c'],
+      evidenceHashes: ['sparsehash0001234567'],
+    });
+
+    await mergeFindings(kbPath, [orphan, bridge, sparse], '2026-09-14T00:00:00Z');
+
+    const result = await listFindings(kbPath);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.findings).toHaveLength(3);
+    const kinds = result.findings.map((f) => f.kind).sort();
+    expect(kinds).toEqual(['bridge-node', 'orphan', 'sparse-community']);
+  });
+
+  it('图洞察 finding 重复刷新保留 ignored 状态', async () => {
+    const f = makeFinding({
+      kind: 'bridge-node' as never,
+      pageIds: ['concepts/bridge'],
+      evidenceRefs: ['wiki/concepts/bridge.md', 'revision:1', 'communities:0,1'],
+      evidenceHashes: ['bridgehash00123456'],
+    });
+
+    await mergeFindings(kbPath, [f], '2026-09-14T00:00:00Z');
+    await updateFindingStatus(kbPath, f.findingId, 'ignore', '2026-09-14T01:00:00Z');
+
+    const merged = await mergeFindings(kbPath, [f], '2026-09-14T02:00:00Z');
+    const found = merged.find((x) => x.findingId === f.findingId);
+    expect(found!.status).toBe('ignored');
+  });
+
+  it('图洞察 finding 证据变化可重开', async () => {
+    const f = makeFinding({
+      kind: 'bridge-node' as never,
+      pageIds: ['concepts/bridge'],
+      evidenceRefs: ['wiki/concepts/bridge.md', 'revision:1', 'communities:0,1'],
+      evidenceHashes: ['hash-v1'],
+    });
+
+    await mergeFindings(kbPath, [f], '2026-09-14T00:00:00Z');
+    await updateFindingStatus(kbPath, f.findingId, 'resolve', '2026-09-14T01:00:00Z');
+
+    // 证据变化
+    const f2 = { ...f, evidenceHashes: ['hash-v2'] };
+    const merged = await mergeFindings(kbPath, [f2], '2026-09-14T02:00:00Z');
+    const found = merged.find((x) => x.findingId === f2.findingId);
+    expect(found!.status).toBe('open');
+  });
+
+  it('按 kind 过滤图洞察 finding', async () => {
+    const orphan = makeFinding({ kind: 'orphan', pageIds: ['concepts/a'] });
+    const bridge = makeFinding({
+      kind: 'bridge-node' as never,
+      pageIds: ['concepts/b'],
+      evidenceRefs: ['wiki/concepts/b.md', 'revision:1', 'communities:0,1'],
+      evidenceHashes: ['bridgehash00123456'],
+    });
+
+    await mergeFindings(kbPath, [orphan, bridge], '2026-09-14T00:00:00Z');
+
+    // 过滤 bridge-node
+    const bridgeResult = await listFindings(kbPath, { kind: 'bridge-node' as never });
+    expect(bridgeResult.ok).toBe(true);
+    if (!bridgeResult.ok) return;
+    expect(bridgeResult.findings).toHaveLength(1);
+    expect(bridgeResult.findings[0].kind).toBe('bridge-node');
+
+    // 过滤 orphan
+    const orphanResult = await listFindings(kbPath, { kind: 'orphan' });
+    expect(orphanResult.ok).toBe(true);
+    if (!orphanResult.ok) return;
+    expect(orphanResult.findings).toHaveLength(1);
+    expect(orphanResult.findings[0].kind).toBe('orphan');
+  });
+});

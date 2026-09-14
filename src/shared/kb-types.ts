@@ -1523,8 +1523,18 @@ export type VectorIndexErrorStatus = {
 
 // ── 结构 Lint 与知识待办（spec §9，issue 25）──────────────────────
 
-/** 结构 finding 的规则类型（决定稳定身份） */
-export type WikiFindingKind = 'orphan' | 'no-outlinks' | 'broken-link';
+/**
+ * 结构 finding 的规则类型（决定稳定身份）。
+ *
+ * 图洞察类型（issue 26）：`bridge-node` 和 `sparse-community` 是启发式建议，
+ * 不阻断发布；文案明确标注为「启发式建议，桥接节点可为健康枢纽」。
+ */
+export type WikiFindingKind =
+  | 'orphan'
+  | 'no-outlinks'
+  | 'broken-link'
+  | 'bridge-node'
+  | 'sparse-community';
 
 /** finding 的用户处置状态 */
 export type WikiFindingStatus = 'open' | 'ignored' | 'resolved';
@@ -1600,6 +1610,39 @@ export type WikiFindingFilter = {
   status?: WikiFindingStatus;
   /** 按规则类型过滤 */
   kind?: WikiFindingKind;
+};
+
+// ── 图洞察（spec §9，issue 26）──────────────────────────────────
+
+/** 图洞察成功结果（spec §9，issue 26） */
+export type WikiGraphInsightOk = {
+  ok: true;
+  kbId: string;
+  revision: number;
+  /** 洞察产出的 findings（桥接节点 + 稀疏社区） */
+  findings: WikiStructuralFinding[];
+  /** 社区统计信息 */
+  communities: WikiCommunitySummary[];
+  /** 运行时间（ISO） */
+  ranAt: string;
+};
+
+/** 图洞察结果（spec §9，issue 26） */
+export type WikiGraphInsightResult = WikiGraphInsightOk
+  | { ok: false; code: 'catalogFailed' | 'readGateBlocked'; message: string };
+
+/** 社区统计摘要 */
+export type WikiCommunitySummary = {
+  /** 社区 ID（从 0 开始的序号） */
+  communityId: number;
+  /** 社区内的页面数 */
+  size: number;
+  /** 社区内边数（无向投影） */
+  internalEdges: number;
+  /** 社区是否为稀疏社区（内聚度低） */
+  sparse: boolean;
+  /** 社区成员 pageId 列表 */
+  members: string[];
 };
 
 /** finding 列表查询结果 */

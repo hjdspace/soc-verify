@@ -95,6 +95,7 @@ import { parseWikiSchema, WIKI_PAGE_TYPES } from '../../kb/wiki-schema';
 import { searchWiki } from '../../kb/wiki-search';
 import { getRelatedPages, getWikiGraphSnapshot } from '../../kb/wiki-graph';
 import { runStructuralLint } from '../../kb/structural-lint';
+import { runGraphInsights } from '../../kb/graph-insights';
 import {
   mergeFindings,
   listFindings,
@@ -149,6 +150,7 @@ import type {
   WikiFindingFilter,
   WikiFindingKind,
   WikiFindingStatus,
+  WikiGraphInsightResult,
 } from '@shared/kb-types';
 
 // ── Result 联合类型（供 tRPC 输出推导） ─────────────────────────
@@ -1877,7 +1879,7 @@ export const kbRouter = t.router({
         }
       }
       if (typeof r.kind === 'string') {
-        const validKinds: WikiFindingKind[] = ['orphan', 'no-outlinks', 'broken-link'];
+        const validKinds: WikiFindingKind[] = ['orphan', 'no-outlinks', 'broken-link', 'bridge-node', 'sparse-community'];
         if (validKinds.includes(r.kind as WikiFindingKind)) {
           filter.kind = r.kind as WikiFindingKind;
         }
@@ -1887,6 +1889,26 @@ export const kbRouter = t.router({
     .query(async ({ input }): Promise<WikiFindingListResult> => {
       const kbPath = await getWikiMountedKbPath();
       return listFindings(kbPath, input);
+    }),
+
+  // ─── kb.graphInsights（issue 26，spec §9） ────────────────
+  //
+  // 运行图启发式洞察：检测桥接节点与稀疏社区，生成 informational findings。
+  // 洞察 findings 接入同一 finding-store，不阻断发布。
+  // 文案明确标注为启发式建议，桥接节点可为健康枢纽。
+
+  graphInsights: t.procedure
+    .input((_raw): Record<string, never> => {
+      return {};
+    })
+    .mutation(async (): Promise<WikiGraphInsightResult> => {
+      const kbPath = await getWikiMountedKbPath();
+      const result = await runGraphInsights(kbPath);
+      if (!result.ok) return result;
+
+      // 合并入持久存储（与结构 lint findings 共享同一存储）
+      await mergeFindings(kbPath, result.findings, result.ranAt);
+      return result;
     }),
 
   // ─── kb.lintUpdateFinding（issue 25，spec §9） ──────────────
