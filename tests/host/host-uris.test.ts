@@ -62,7 +62,7 @@ describe('HostUriRouter', () => {
     expect(result.error).toContain('No handler registered');
   });
 
-  it('case:// read returns data', async () => {
+  it('case:// read 是占位引用：如实返回不可用（不伪造证据成功）', async () => {
     const router = new HostUriRouter();
     const result = await router.handleUriRequest({
       type: 'host_uri_request',
@@ -70,9 +70,9 @@ describe('HostUriRouter', () => {
       operation: 'read',
       url: 'case://cpu/test_basic',
     });
-    expect(result.isError).toBeFalsy();
-    expect(result.content).toBeDefined();
-    expect(result.contentType).toBe('application/json');
+    expect(result.isError).toBe(true);
+    expect(result.error).toContain('placeholder');
+    expect(result.error).toContain('unavailable');
   });
 
   it('case:// write is rejected (read-only)', async () => {
@@ -88,7 +88,7 @@ describe('HostUriRouter', () => {
     expect(result.error).toContain('read-only');
   });
 
-  it('log:// read returns empty content', async () => {
+  it('log:// read 是占位引用：如实返回不可用（不返回虚假空证据）', async () => {
     const router = new HostUriRouter();
     const result = await router.handleUriRequest({
       type: 'host_uri_request',
@@ -96,10 +96,12 @@ describe('HostUriRouter', () => {
       operation: 'read',
       url: 'log://run123',
     });
-    expect(result.isError).toBeFalsy();
+    expect(result.isError).toBe(true);
+    expect(result.error).toContain('placeholder');
+    expect(result.error).toContain('unavailable');
   });
 
-  it('cov:// read returns JSON', async () => {
+  it('cov:// 无 CoverageManager 时如实返回 unavailable（不返回空 JSON 假成功）', async () => {
     const router = new HostUriRouter();
     const result = await router.handleUriRequest({
       type: 'host_uri_request',
@@ -107,8 +109,8 @@ describe('HostUriRouter', () => {
       operation: 'read',
       url: 'cov://cpu',
     });
-    expect(result.isError).toBeFalsy();
-    expect(result.contentType).toBe('application/json');
+    expect(result.isError).toBe(true);
+    expect(result.error).toContain('unavailable');
   });
 
   it('handler errors are caught and returned as error results', async () => {

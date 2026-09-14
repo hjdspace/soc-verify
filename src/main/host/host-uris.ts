@@ -35,20 +35,47 @@ export class HostUriRouter {
   }
 
   private registerDefaults(): void {
-    this.register('case', 'Verification case data (read-only)', false, true, async (req) => {
-      if (req.operation === 'write') return fail('case:// is read-only');
-      return ok(JSON.stringify({ case: req.url, data: null }), 'application/json');
-    });
+    // 占位 scheme（spec §2：log:///case:// 仅保存引用与所属项目，
+    // 本期没有真实数据服务）。按「显式标注 URI 能力」要求：
+    // 注册以保留引用语义，但读取如实返回 unavailable —— 绝不返回
+    // 空文本/空对象伪装成证据成功（issue 15 验收）。
+    const placeholderError = (scheme: string, url: string): string =>
+      `${scheme}:// is a placeholder reference (${url}). This version stores the reference and its project only — there is no ${scheme} data service, so the referenced evidence is unavailable. Treat this citation as unverifiable instead of assuming empty data means nothing happened.`;
 
-    this.register('log', 'Simulation log data (read-only)', false, true, async (req) => {
-      if (req.operation === 'write') return fail('log:// is read-only');
-      return ok('', 'text/plain');
-    });
+    this.register(
+      'case',
+      'Verification case reference (placeholder: reference storage only — no case data service; reads return unavailable)',
+      false,
+      true,
+      async (req) => {
+        if (req.operation === 'write') return fail('case:// is read-only');
+        return fail(placeholderError('case', req.url));
+      },
+    );
 
-    this.register('cov', 'Coverage data (read-only)', false, true, async (req) => {
-      if (req.operation === 'write') return fail('cov:// is read-only');
-      // 向后兼容：CoverageManager 未注入时返回空 JSON
-      if (!this.coverageManager) return ok('{}', 'application/json');
+    this.register(
+      'log',
+      'Simulation log reference (placeholder: reference storage only — no log data service; reads return unavailable)',
+      false,
+      true,
+      async (req) => {
+        if (req.operation === 'write') return fail('log:// is read-only');
+        return fail(placeholderError('log', req.url));
+      },
+    );
+
+    this.register(
+      'cov',
+      'Coverage data (read-only). Available only while a coverage session with collected data is attached; otherwise reads return an explicit unavailable error',
+      false,
+      true,
+      async (req) => {
+        if (req.operation === 'write') return fail('cov:// is read-only');
+        // 可用性如实显示：CoverageManager 未注入（无覆盖率会话）时
+        // 明确报 unavailable，不返回空 JSON 假成功
+        if (!this.coverageManager) {
+          return fail('cov:// service is unavailable: no coverage session is attached to this conversation. Collect coverage data first, then retry.');
+        }
 
       // 解析 URI: cov://<sessionId>[/<module>[/uncovered]]（module 为点号层级路径，如 cov://sid/tb_top.chip_top）
       const rest = req.url.slice('cov://'.length);

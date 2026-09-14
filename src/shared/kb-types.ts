@@ -1091,4 +1091,110 @@ export type WikiSearchOutcome =
   | { ok: true; result: WikiSearchResponse }
   | { ok: false; error: WikiSearchError };
 
+// ── 只读证据读取（spec §2/§8，issue 15）────────────────────────
+
+/** 读取对象：wiki = 已发布知识页；parsed = 来源机械全文；asset = 原图 */
+export type WikiReadKind = 'wiki' | 'parsed' | 'asset';
+
+/** 读取查询：全部从身份解析（kind/id/revision），不接受任意路径 */
+export type WikiReadQuery = {
+  kind: WikiReadKind;
+  /** wiki = pageId（类型路径+文件名）；parsed/asset = sourceId */
+  id: string;
+  /** parsed/asset：来源修订（SourceRef.sourceRevision）；缺省 = 当前 */
+  revision?: string;
+  /** parsed：定位历史转换快照（SourceRef.parsedHash） */
+  parsedHash?: string;
+  /** asset：资产身份（图像字节 SHA256，内容寻址） */
+  assetId?: string;
+  /** 分页起始行（1-based，缺省 1） */
+  startLine?: number;
+  /** 单页字符预算（缺省 2 万，上限 5 万；超长行独占一页如实返回） */
+  maxChars?: number;
+};
+
+/** wiki/parsed 共有的分页字段。各页按 next 顺序以 '\n' 拼接还原全文 */
+export type WikiReadTextPageBase = {
+  id: string;
+  kbId: string;
+  /** 库内相对路径（wiki/<...>.md 或 raw/parsed|revisions/...），仅展示 */
+  relativePath: string;
+  /** 运行时绝对路径（由当前挂载根解析，仅展示，不是读取入口） */
+  absolutePath: string;
+  /** 全文内容 SHA256（parsed = manifest parsedHash / 快照 hash） */
+  hash: string;
+  totalLines: number;
+  totalChars: number;
+  startLine: number;
+  endLine: number;
+  /** 下一页 startLine；null = 已到末尾 */
+  next: number | null;
+  /** 本页正文（不含页尾换行；与下一页之间以 '\n' 拼接） */
+  content: string;
+};
+
+/** kind=wiki：已发布知识页 */
+export type WikiReadWikiPage = WikiReadTextPageBase & {
+  kind: 'wiki';
+  title?: string;
+  pageType?: WikiPageType;
+};
+
+/** kind=parsed：来源机械全文（当前或历史快照） */
+export type WikiReadParsedPage = WikiReadTextPageBase & {
+  kind: 'parsed';
+  revision: string;
+  isHistorical: boolean;
+};
+
+export type WikiReadTextPage = WikiReadWikiPage | WikiReadParsedPage;
+
+/** asset 的读取结果：原图字节（base64）+ 记录元数据，不分页 */
+export type WikiReadAsset = {
+  kind: 'asset';
+  id: string;
+  kbId: string;
+  assetId: string;
+  /** 全文内容 hash = assetId（内容寻址） */
+  hash: string;
+  revision: string;
+  relativePath: string;
+  absolutePath: string;
+  mimeType: string;
+  ext: string;
+  sizeBytes: number;
+  /** 图像字节 base64 */
+  dataBase64: string;
+  /** 1-based PDF 页码（来源不提供时为 null） */
+  page: number | null;
+  /** 提取方式：object = 位图对象 / page-render = 整页渲染 */
+  method: 'object' | 'page-render';
+};
+
+export type WikiReadResult = WikiReadTextPage | WikiReadAsset;
+
+export type WikiReadErrorCode =
+  | 'invalidKind'        // kind 不是 wiki/parsed/asset
+  | 'emptyId'            // id 为空
+  | 'invalidInput'       // 参数组合非法（wiki 带 revision、startLine < 1 等）
+  | 'notWikiLayout'      // 挂载库不是 wiki 布局
+  | 'readGateBlocked'    // 未恢复事务期间读取暂停
+  | 'catalogFailed'      // schema.md 不可读/路由表无法解析
+  | 'unknownPage'        // pageId 不在已发布页目录
+  | 'invalidTarget'      // 目标存在但不是可读取的已发布页（聚合页 index/overview/log）
+  | 'sourceNotFound'     // sourceId 不在 manifest
+  | 'noParsed'           // 来源从未成功转换，无全文可读
+  | 'snapshotNotFound'   // 修订/parsedHash 无对应快照或多快照未指定 hash
+  | 'assetNotFound'      // assetId 不在资产清单或字节缺失
+  | 'outsideRoot'        // realpath 逃逸出库根
+  | 'outOfRange'         // startLine 超过总行数（不编造空页）
+  | 'manifestCorrupted'  // manifest 不可读
+  | 'ioError';           // 文件读取失败
+
+export type WikiReadError = { code: WikiReadErrorCode; message: string };
+
+export type WikiReadOutcome =
+  | { ok: true; page: WikiReadResult }
+  | { ok: false; error: WikiReadError };
+
 

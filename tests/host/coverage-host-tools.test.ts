@@ -466,8 +466,8 @@ describe('get_coverage Host Tool (ADR 0009 摘要优先)', () => {
       expect(hostTools.hasTool('get_coverage_uncovered')).toBe(true);
       expect(hostTools.hasTool('get_coverage_grade')).toBe(true);
       expect(hostTools.hasTool('get_coverage_csv')).toBe(true);
-      // 共 24 个工具（20 默认 + 4 覆盖率分析）
-      expect(hostTools.getToolNames()).toHaveLength(24);
+      // 共 25 个工具（21 默认 + 4 覆盖率分析）
+      expect(hostTools.getToolNames()).toHaveLength(25);
     } finally {
       cleanup();
     }
@@ -679,7 +679,7 @@ describe('cov:// URI scheme (ADR 0009 分层 URI)', () => {
     }
   });
 
-  it('CoverageManager 未注入时返回空 JSON（向后兼容）', async () => {
+  it('CoverageManager 未注入时返回显式 unavailable 错误（不返回空 JSON 伪装证据成功，issue 15）', async () => {
     const router = new HostUriRouter();
     const result = await router.handleUriRequest({
       type: 'host_uri_request',
@@ -688,9 +688,8 @@ describe('cov:// URI scheme (ADR 0009 分层 URI)', () => {
       url: 'cov://session_1',
     });
 
-    expect(result.isError).toBeFalsy();
-    expect(result.contentType).toBe('application/json');
-    expect(result.content).toBe('{}');
+    expect(result.isError).toBe(true);
+    expect(result.error).toContain('unavailable');
   });
 
   it('深层模块路径 cov://<sessionId>/cpu_core.u_alu 返回叶子模块', async () => {

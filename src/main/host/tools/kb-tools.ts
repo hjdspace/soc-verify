@@ -1,5 +1,5 @@
 /**
- * KB Host Tools — doc_to_markdown + kb_doc_read/grep/outline + kb_search。
+ * KB Host Tools — doc_to_markdown + kb_doc_read/grep/outline + kb_search + kb_read。
  *
  * 把文档能力暴露给 AI Agent：
  *  - doc_to_markdown(path)：按需转换任意支持格式文档。
@@ -12,6 +12,9 @@
  *  - kb_search(query)：跨挂载知识库检索，先匹配 index.md 条目（标题/摘要/关键词），
  *    再对 docs/ Markdown 全文匹配，返回文档路径（相对 + 绝对）、摘要与命中片段，
  *    支持按分类过滤。中文按 bigram 匹配（单字低权重兜底）。
+ *  - kb_read(kind, id, ...)：wiki 布局只读证据读取（issue 15，spec §8）——
+ *    按 pageId/sourceId/revision/assetId 身份解析（无任意路径输入），
+ *    分页返回 hash/行号/next，历史引用与原图可开，失败给结构化错误。
  *
  * 工具描述写清适用场景与参数格式，Agent 能自主决策何时调用。
  *
@@ -23,6 +26,7 @@ import { existsSync } from 'node:fs';
 import { convertDocumentToMarkdownString } from '../../kb/converter';
 import { searchKb } from '../../kb/searcher';
 import { searchWiki } from '../../kb/wiki-search';
+import { readWikiEvidence } from '../../kb/wiki-read';
 import { kbRegistry } from '../../kb/registry';
 import {
   cacheDocMarkdown,
@@ -444,6 +448,122 @@ export function createKbTools(ctx: ToolContext): HostToolEntry[] {
             matchedBy: r.matchedBy,
           })),
         }));
+      },
+    ),
+
+    // ─── kb_read（issue 15，spec §8）────────────────────────
+
+    defineTool(
+      'kb_read',
+      'Read evidence from the mounted LLM Wiki knowledge base by identity (no arbitrary file paths). Three kinds: kind="wiki" reads a published knowledge page by its page id (e.g. "concepts/axi-outstanding" — the stable id returned by kb_search); kind="parsed" reads the mechanical full-text of an imported source by its sourceId, optionally at a historical revision: pass revision + parsedHash from the page\'s sourceRefs to open the exact old evidence a page cited; kind="asset" returns the original image bytes for an assetId (image SHA256 from the asset list). Text kinds are paginated: returns the full-text hash, total lines/chars, startLine, endLine, the page content, and "next" (the startLine of the next page, null when done). Pages are exact slices of the original — concatenate pages in order with "\\n" between them to reproduce the full text with zero loss or duplication. Oversized single lines occupy one page and are returned at their true length (never truncated). A startLine beyond the document is rejected with a structured outOfRange error — unknown pages are never fabricated. Unknown ids, unknown revisions, invalid assetIds, cross-library references and expired citations all return structured errors — nothing is made up. For kind="asset" the result carries an image block plus a metadata text block (page number, extraction method). The mounted library is re-checked on every call; reads are refused while an unfinished publish transaction blocks the read gate. doc_to_markdown/kb_doc_* remain the tools for ad-hoc documents NOT in the knowledge base — kb_read never ingests anything.',
+      {
+        type: 'object',
+        properties: {
+          kind: {
+            type: 'string',
+            enum: ['wiki', 'parsed', 'asset'],
+            description: 'What to read: wiki = published knowledge page (id = pageId); parsed = source full-text (id = sourceId); asset = original image (id = sourceId, also pass assetId).',
+          },
+          id: {
+            type: 'string',
+            description: 'Stable identity: pageId for kind=wiki (from kb_search results), sourceId for kind=parsed/asset (64-hex SHA256, from kb_search sourceRefs).',
+          },
+          revision: {
+            type: 'string',
+            description: 'kind=parsed/asset only: source revision (64-hex) from a page\'s sourceRefs.sourceRevision. Omit for the current revision. Old cited evidence stays readable at its cited revision.',
+          },
+          parsedHash: {
+            type: 'string',
+            description: 'kind=parsed only: parsed snapshot hash (64-hex) from sourceRefs.parsedHash to locate the exact historical full-text; omit for the current full-text.',
+          },
+          assetId: {
+            type: 'string',
+            description: 'kind=asset only: asset content hash (64-hex) identifying the image bytes.',
+          },
+          startLine: {
+            type: 'number',
+            description: '1-based line to start reading from (default 1). Set this to the previous page\'s "next" value to read the following page. A value beyond the document is rejected with a structured outOfRange error.',
+          },
+          maxChars: {
+            type: 'number',
+            description: 'Character budget for this page (default 20000, capped at 50000). Pages contain whole lines; an oversized single line occupies one page at its true length.',
+          },
+        },
+        required: ['kind', 'id'],
+        additionalProperties: false,
+      },
+      async (args) => {
+        // 手工收窄：schema 已约束 enum/number，但 Agent 实参运行时仍可能越界
+        const rawKind = typeof args.kind === 'string' ? args.kind : '';
+        if (rawKind !== 'wiki' && rawKind !== 'parsed' && rawKind !== 'asset') {
+          return TEXT(JSON.stringify({ error: `kind 必须是 wiki/parsed/asset: ${rawKind || '(missing)'}`, code: 'invalidKind' }));
+        }
+        const kind = rawKind;
+        const id = typeof args.id === 'string' ? args.id : '';
+        if (!id.trim()) {
+          return TEXT(JSON.stringify({ error: 'id is required', code: 'emptyId' }));
+        }
+
+        const startLine = typeof args.startLine === 'number' ? args.startLine : undefined;
+        const maxChars = typeof args.maxChars === 'number' ? args.maxChars : undefined;
+
+        // 动态核对当前挂载：切库后旧提示不是跨库读取授权（与 kb_search 一致）
+        const mounted = await getMountedKb(ctx.cwd);
+        if (!mounted) {
+          return TEXT(JSON.stringify({
+            error: 'No knowledge base mounted. Mount a knowledge base first.',
+            code: 'notMounted',
+          }));
+        }
+        // 旧布局挂载：kb_read 只服务 wiki 布局；旧库继续用 docId 工具（issue 28 退役）
+        if (mounted.format !== 'wiki') {
+          return TEXT(JSON.stringify({
+            error: 'The mounted knowledge base is not in the LLM Wiki layout. kb_read only supports wiki-layout libraries; use doc_to_markdown / kb_doc_* for legacy libraries.',
+            code: 'notWikiLayout',
+          }));
+        }
+
+        const outcome = await readWikiEvidence(mounted.path, {
+          kind,
+          id,
+          ...(typeof args.revision === 'string' && args.revision.trim() ? { revision: args.revision.trim() } : {}),
+          ...(typeof args.parsedHash === 'string' && args.parsedHash.trim() ? { parsedHash: args.parsedHash.trim() } : {}),
+          ...(typeof args.assetId === 'string' && args.assetId.trim() ? { assetId: args.assetId.trim() } : {}),
+          ...(startLine !== undefined ? { startLine } : {}),
+          ...(maxChars !== undefined ? { maxChars } : {}),
+        });
+
+        if (!outcome.ok) {
+          return TEXT(JSON.stringify({ error: outcome.error.message, code: outcome.error.code }));
+        }
+
+        const page = outcome.page;
+        // asset：图像内容块 + 元数据文本块（视觉模型直接读图）
+        if (page.kind === 'asset') {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  kind: page.kind,
+                  id: page.id,
+                  kbId: page.kbId,
+                  assetId: page.assetId,
+                  hash: page.hash,
+                  revision: page.revision,
+                  relativePath: page.relativePath,
+                  mimeType: page.mimeType,
+                  sizeBytes: page.sizeBytes,
+                  page: page.page,
+                  method: page.method,
+                }),
+              },
+              { type: 'image', data: page.dataBase64, mimeType: page.mimeType },
+            ],
+          };
+        }
+
+        return TEXT(JSON.stringify(page));
       },
     ),
   ];

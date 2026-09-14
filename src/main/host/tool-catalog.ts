@@ -75,7 +75,14 @@ export const HOST_TOOL_GROUPS: HostToolGroup[] = [
   {
     id: 'knowledge-base',
     label: '知识库',
-    tools: [{ name: 'kb_search', label: '知识库检索' }],
+    tools: [
+      { name: 'kb_read', label: '知识库证据读取' },
+      { name: 'kb_search', label: '知识库检索' },
+      // docId 工具（大文档转换缓存回读；doc_to_markdown 登记在文档处理组）
+      { name: 'kb_doc_read', label: '大文档分块回读' },
+      { name: 'kb_doc_grep', label: '大文档关键词定位' },
+      { name: 'kb_doc_outline', label: '大文档大纲' },
+    ],
   },
 ];
 

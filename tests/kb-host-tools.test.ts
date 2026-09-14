@@ -126,6 +126,7 @@ vi.mock('../src/main/document/editor-registry', () => ({
 // ─── Imports (after mocks) ──────────────────────────────────
 
 import { HostToolsRegistry } from '../src/main/host/host-tools';
+import { HOST_TOOL_NAMES } from '../src/main/host/tool-catalog';
 import { searchKb } from '../src/main/kb/searcher';
 import { buildKbContext, injectKbContext } from '../src/main/kb/context-injector';
 import { initWikiLayout, writeWikiManifest, wikiLayout } from '../src/main/kb/wiki-layout';
@@ -140,10 +141,11 @@ function parseResult(result: unknown): Record<string, unknown> {
 // ─── 测试 ────────────────────────────────────────────────────
 
 describe('KB Host Tools — 注册', () => {
-  it('注册 doc_to_markdown 和 kb_search 两个工具', () => {
+  it('注册 doc_to_markdown / kb_search / kb_read（issue 15）', () => {
     const registry = new HostToolsRegistry();
     expect(registry.hasTool('doc_to_markdown')).toBe(true);
     expect(registry.hasTool('kb_search')).toBe(true);
+    expect(registry.hasTool('kb_read')).toBe(true);
   });
 
   it('工具定义包含正确的参数 schema', () => {
@@ -165,6 +167,31 @@ describe('KB Host Tools — 注册', () => {
     expect(searchDef!.parameters).toHaveProperty('properties.tag');
     expect(searchDef!.parameters).toHaveProperty('properties.kind');
     expect((searchDef!.parameters as Record<string, unknown[]>).required).toContain('query');
+
+    // issue 15：kb_read 只读证据读取，按 kind/id 解析，无 absolutePath 输入
+    const readDef = defs.find((d) => d.name === 'kb_read');
+    expect(readDef).toBeDefined();
+    expect(readDef!.parameters).toHaveProperty('properties.kind');
+    expect(readDef!.parameters).toHaveProperty('properties.id');
+    expect(readDef!.parameters).toHaveProperty('properties.revision');
+    expect(readDef!.parameters).toHaveProperty('properties.parsedHash');
+    expect(readDef!.parameters).toHaveProperty('properties.assetId');
+    expect(readDef!.parameters).toHaveProperty('properties.startLine');
+    expect(readDef!.parameters).toHaveProperty('properties.maxChars');
+    expect((readDef!.parameters as Record<string, unknown[]>).required).toContain('kind');
+    expect((readDef!.parameters as Record<string, unknown[]>).required).toContain('id');
+    // 不接受任意绝对路径输入：参数表里没有 path/absolutePath
+    const readProps = (readDef!.parameters as { properties: Record<string, unknown> }).properties;
+    expect(readProps).not.toHaveProperty('path');
+    expect(readProps).not.toHaveProperty('absolutePath');
+  });
+
+  it('工具目录登记 kb_read / kb_search / docId 工具（issue 15）', () => {
+    expect(HOST_TOOL_NAMES).toContain('kb_read');
+    expect(HOST_TOOL_NAMES).toContain('kb_search');
+    expect(HOST_TOOL_NAMES).toContain('kb_doc_read');
+    expect(HOST_TOOL_NAMES).toContain('kb_doc_grep');
+    expect(HOST_TOOL_NAMES).toContain('kb_doc_outline');
   });
 });
 
@@ -1329,5 +1356,205 @@ describe('buildKbContext — wiki 布局注入', () => {
   it('空库（无已发布页也无来源）：不注入', async () => {
     const result = await buildKbContext(projectDir);
     expect(result.contextText).toBe('');
+  });
+});
+
+// ─── kb_read — 只读证据读取（issue 15，spec §8）──────────────
+
+describe('kb_read — wiki 布局', () => {
+  let kbPath: string;
+  // 资产/来源身份是内容 hash：sourceId 必须是 64 位 hex
+  const SID = 'aa'.repeat(32);
+
+  const writePage = (rel: string, content: string): void => {
+    const abs = join(kbPath, 'wiki', rel);
+    mkdirSync(abs.replace(/[\\/][^\\/]*$/, ''), { recursive: true });
+    writeFileSync(abs, content, 'utf-8');
+  };
+
+  const page = (type: string, title: string, body = ''): string => [
+    '---',
+    `type: ${type}`,
+    `title: "${title}"`,
+    `summary: ${title}的摘要。`,
+    'keywords: [测试]',
+    'tags: [单测]',
+    'sources: []',
+    'created: "2026-09-13T00:00:00Z"',
+    'updated: "2026-09-13T00:00:00Z"',
+    '---',
+    '',
+    `# ${title}`,
+    '',
+    body,
+  ].join('\n');
+
+  const sourceRecord = (over: Record<string, unknown>): Record<string, unknown> => ({
+    sourcePath: 'spec/dds.pdf',
+    sourceId: SID,
+    ext: '.pdf',
+    size: 100,
+    currentRevision: 'a'.repeat(64),
+    parsedRevision: 'a'.repeat(64),
+    parsedHash: 'p1'.padEnd(64, '0'),
+    engine: 'anydoc',
+    engineFingerprint: 'fp',
+    status: 'ready',
+    assetCount: 1,
+    importedAt: '2026-09-13T00:00:00Z',
+    updatedAt: '2026-09-13T00:00:00Z',
+    ...over,
+  });
+
+  const writeManifest = async (sources: Record<string, unknown>): Promise<void> => {
+    await writeWikiManifest(kbPath, {
+      manifestVersion: 1, format: 'wiki', kbId: 'kb-read-tool', name: 'Read Tool',
+      createdAt: '2026-09-13T00:00:00Z', updatedAt: '2026-09-13T00:00:00Z',
+      sources: sources as unknown as WikiKbManifest['sources'],
+    } as unknown as WikiKbManifest);
+  };
+
+  const writeAssetFixture = (): void => {
+    const rev = 'a'.repeat(64);
+    const assetId = '1'.repeat(64);
+    const dir = join(wikiLayout(kbPath).rawAssetsDir, SID, rev);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `${assetId}.png`), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    writeFileSync(join(dir, 'pdf-assets.json'), JSON.stringify({
+      manifestVersion: 1, sourceId: SID, revision: rev, parsedHash: null,
+      extractor: { runtime: 'pdfjs', version: '1' },
+      assets: [{ assetId, ext: 'png', page: 2, method: 'object', width: 8, height: 8 }],
+      pages: [], stats: {}, extractions: [], textLayer: true,
+      createdAt: '2026-09-13T00:00:00Z', updatedAt: '2026-09-13T00:00:00Z',
+    }), 'utf-8');
+  };
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    kbPath = join(tmpDir, `wikikb-read-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+    await initWikiLayout(kbPath, { kbId: 'kb-read-tool', name: 'Read Tool' });
+
+    writePage('concepts/dds.md', page('concept', 'DDS 原理', '第一段。\n\n第二段。'));
+
+    // 真实系统 sources 以 sourceId 为 key（source-import.ts），id 查询按 key 命中
+    await writeManifest({ [SID]: sourceRecord({}) });
+    const parsedPath = join(wikiLayout(kbPath).rawParsedDir, 'spec', 'dds.pdf.md');
+    mkdirSync(parsedPath.replace(/[\\/][^\\/]*$/, ''), { recursive: true });
+    writeFileSync(parsedPath, '来源全文：DDS 直接频率合成。\n第二行。\n', 'utf-8');
+    writeAssetFixture();
+
+    statusMock.mockResolvedValue({
+      mounted: { kbId: 'kb-read-tool', mountedAt: Date.now(), name: 'Read Tool', path: kbPath, format: 'wiki', state: 'active' },
+      health: { hasSources: true, hasDocs: false, hasIndex: false },
+      wikiHealth: null,
+    });
+  });
+
+  afterEach(() => {
+    rmSync(kbPath, { recursive: true, force: true });
+  });
+
+  it('kind=wiki：按 pageId 分页读取，返回 hash/行号/next', async () => {
+    const registry = new HostToolsRegistry(undefined, tmpDir);
+    const parsed = parseResult(await registry.handleToolCall({
+      type: 'host_tool_call', id: 'r1', toolCallId: 'tr1', toolName: 'kb_read',
+      arguments: { kind: 'wiki', id: 'concepts/dds', maxChars: 30 },
+    }));
+
+    expect(parsed.kind).toBe('wiki');
+    expect(parsed.kbId).toBe('kb-read-tool');
+    expect(parsed.title).toBe('DDS 原理');
+    expect(parsed.startLine).toBe(1);
+    expect(parsed.next).toBeGreaterThan(1);
+    expect(typeof parsed.hash).toBe('string');
+  });
+
+  it('kind=parsed：读来源全文；按 next 翻页拼接不丢失', async () => {
+    const registry = new HostToolsRegistry(undefined, tmpDir);
+    const first = parseResult(await registry.handleToolCall({
+      type: 'host_tool_call', id: 'r2', toolCallId: 'tr2', toolName: 'kb_read',
+      arguments: { kind: 'parsed', id: SID, maxChars: 12 },
+    }));
+    expect(first.kind).toBe('parsed');
+    expect(first.hash).toBe('p1'.padEnd(64, '0'));
+    expect(first.isHistorical).toBe(false);
+
+    const second = parseResult(await registry.handleToolCall({
+      type: 'host_tool_call', id: 'r3', toolCallId: 'tr3', toolName: 'kb_read',
+      arguments: { kind: 'parsed', id: SID, startLine: first.next, maxChars: 500 },
+    }));
+    expect(first.content).not.toContain('第二行');
+    expect(second.content).toContain('第二行');
+  });
+
+  it('kind=asset：返回 image 内容块 + 元数据文本块', async () => {
+    const registry = new HostToolsRegistry(undefined, tmpDir);
+    const result = await registry.handleToolCall({
+      type: 'host_tool_call', id: 'r4', toolCallId: 'tr4', toolName: 'kb_read',
+      arguments: { kind: 'asset', id: SID, assetId: '1'.repeat(64) },
+    });
+
+    const content = (result as { content: Array<{ type: string; text?: string; data?: string; mimeType?: string }> }).content;
+    const textBlock = content.find((c) => c.type === 'text');
+    const imageBlock = content.find((c) => c.type === 'image');
+    expect(textBlock).toBeDefined();
+    expect(imageBlock).toBeDefined();
+    expect(imageBlock!.mimeType).toBe('image/png');
+
+    const meta = JSON.parse(textBlock!.text!) as Record<string, unknown>;
+    expect(meta.kind).toBe('asset');
+    expect(meta.assetId).toBe('1'.repeat(64));
+    expect(meta.page).toBe(2);
+    expect(meta.method).toBe('object');
+  });
+
+  it('未挂载库返回 notMounted', async () => {
+    statusMock.mockResolvedValue({
+      mounted: null,
+      health: { hasSources: false, hasDocs: false, hasIndex: false },
+      wikiHealth: null,
+    });
+    const registry = new HostToolsRegistry(undefined, tmpDir);
+    const parsed = parseResult(await registry.handleToolCall({
+      type: 'host_tool_call', id: 'r5', toolCallId: 'tr5', toolName: 'kb_read',
+      arguments: { kind: 'wiki', id: 'concepts/dds' },
+    }));
+    expect(parsed.code).toBe('notMounted');
+  });
+
+  it('legacy 布局挂载返回 notWikiLayout（旧布局走 docId 工具）', async () => {
+    statusMock.mockResolvedValue({
+      mounted: { kbId: 'kb-legacy', mountedAt: Date.now(), name: 'Legacy', path: kbPath, format: 'legacy', state: 'ok' },
+      health: { hasSources: true, hasDocs: true, hasIndex: true },
+      wikiHealth: null,
+    });
+    const registry = new HostToolsRegistry(undefined, tmpDir);
+    const parsed = parseResult(await registry.handleToolCall({
+      type: 'host_tool_call', id: 'r6', toolCallId: 'tr6', toolName: 'kb_read',
+      arguments: { kind: 'wiki', id: 'concepts/dds' },
+    }));
+    expect(parsed.code).toBe('notWikiLayout');
+  });
+
+  it('越界与未知引用返回结构化错误（不编造）', async () => {
+    const registry = new HostToolsRegistry(undefined, tmpDir);
+
+    const over = parseResult(await registry.handleToolCall({
+      type: 'host_tool_call', id: 'r7', toolCallId: 'tr7', toolName: 'kb_read',
+      arguments: { kind: 'parsed', id: SID, startLine: 999 },
+    }));
+    expect(over.code).toBe('outOfRange');
+
+    const ghost = parseResult(await registry.handleToolCall({
+      type: 'host_tool_call', id: 'r8', toolCallId: 'tr8', toolName: 'kb_read',
+      arguments: { kind: 'wiki', id: 'concepts/ghost' },
+    }));
+    expect(ghost.code).toBe('unknownPage');
+
+    const badKind = parseResult(await registry.handleToolCall({
+      type: 'host_tool_call', id: 'r9', toolCallId: 'tr9', toolName: 'kb_read',
+      arguments: { kind: 'log', id: 'x' },
+    }));
+    expect(badKind.code).toBe('invalidKind');
   });
 });
