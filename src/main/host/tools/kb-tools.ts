@@ -407,6 +407,7 @@ export function createKbTools(ctx: ToolContext): HostToolEntry[] {
             mode: r.mode,
             kbId: r.kbId,
             coverage: r.coverage,
+            graphExpansion: r.graphExpansion ?? null,
             total: r.hits.length,
             results: r.hits.map((h) => ({
               kind: h.kind,
@@ -424,6 +425,7 @@ export function createKbTools(ctx: ToolContext): HostToolEntry[] {
               stale: h.stale,
               sourceRevision: h.sourceRevision ?? null,
               score: h.score,
+              graphRelatedTo: h.graphRelatedTo ?? null,
             })),
           }));
         }

@@ -93,6 +93,7 @@ import {
 } from '../../kb/wiki-rules';
 import { parseWikiSchema, WIKI_PAGE_TYPES } from '../../kb/wiki-schema';
 import { searchWiki } from '../../kb/wiki-search';
+import { getRelatedPages, getWikiGraphSnapshot } from '../../kb/wiki-graph';
 import { WIKI_PAGE_TEMPLATES } from '../../kb/wiki-page';
 import {
   listChangeSets,
@@ -128,6 +129,7 @@ import type {
   WikiPublishResult,
   WikiQueueErrorCode,
   WikiQueueSnapshot,
+  WikiRelatedResult,
   WikiSearchOptions,
   WikiSearchOutcome,
   WikiSourceRevisionInfo,
@@ -1447,6 +1449,63 @@ export const kbRouter = t.router({
     .query(async ({ input }): Promise<WikiSearchOutcome> => {
       const kbPath = await getWikiMountedKbPath();
       return searchWiki(kbPath, input);
+    }),
+
+  // ─── kb.wikiRelated（issue 23） ────────────────────────────
+  //
+  // 查询指定页面的相关页面（spec §9 Relatedness 四信号）。
+  // UI 相关页面面板消费此接口。
+
+  wikiRelated: t.procedure
+    .input((raw): { pageId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.pageId !== 'string' || r.pageId.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'pageId is required' });
+      }
+      return { pageId: r.pageId.trim() };
+    })
+    .query(async ({ input }): Promise<WikiRelatedResult> => {
+      const kbPath = await getWikiMountedKbPath();
+      return getRelatedPages(kbPath, input.pageId);
+    }),
+
+  // ─── kb.wikiGraph（issue 23） ──────────────────────────────
+  //
+  // 获取知识图谱快照（spec §9）。用于图可视化。
+  // 返回节点邻接列表与断链信息，布局在 renderer worker 中运行。
+
+  wikiGraph: t.procedure
+    .input((_raw): Record<string, never> => {
+      return {};
+    })
+    .query(async () => {
+      const kbPath = await getWikiMountedKbPath();
+      const result = await getWikiGraphSnapshot(kbPath);
+      if (!result.ok) {
+        return {
+          ok: false as const,
+          code: result.code,
+          message: result.message,
+        };
+      }
+      const { snapshot, rebuilding } = result;
+      // 序列化 Map 为数组（tRPC 不能直接传 Map）
+      const nodes = Array.from(snapshot.nodes.values()).map((n) => ({
+        pageId: n.pageId,
+        title: n.title,
+        type: n.type,
+        outlinks: n.outlinks,
+        inlinks: n.inlinks,
+      }));
+      return {
+        ok: true as const,
+        kbId: snapshot.kbId,
+        revision: snapshot.revision,
+        rebuilding,
+        nodes,
+        edges: snapshot.edges,
+        brokenLinks: snapshot.brokenLinks,
+      };
     }),
 
   // ─── kb.wikiRules（issue 04） ──────────────────────────────

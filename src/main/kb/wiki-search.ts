@@ -27,7 +27,10 @@ import { join } from 'node:path';
 import { assertReadGateOpen, WikiReadGateError } from './read-gate';
 import { readWikiManifest, wikiLayout } from './wiki-layout';
 import { scanWikiCatalog } from './wiki-catalog';
+import { getWikiGraphSnapshot, getOneHopNeighbors } from './wiki-graph';
 import type {
+  WikiGraphExpansionInfo,
+  WikiGraphRelatedTo,
   WikiSearchError,
   WikiSearchHit,
   WikiSearchOptions,
@@ -233,18 +236,156 @@ export async function searchWiki(
     return `${a.kind}:${a.id}`.localeCompare(`${b.kind}:${b.id}`);
   });
 
+  const baseHits = ranked.slice(0, topK);
+
+  // ── 图一跳扩展（spec §8.3-4）──────────────────────────────────
+  // 从初筛前 min(topK,10) 个 Wiki Page 沿入/出链接一跳扩展。
+  // 图名额 = ceil(topK × (0.30 - 0.15 × min(vectorPageHits,topK)/topK))，
+  // 限制为 1..topK-1，topK<2 时为 0；没有图候选时归还名额。
+  // 无向量时 vectorPageHits=0，稀疏/无候选归还名额，不减少可用基础结果。
+  // 图 revision 落后时只返回关键词并标 rebuilding，不使用过时边。
+  let graphExpansion: WikiGraphExpansionInfo | null = null;
+  let finalHits = baseHits;
+
+  if (topK < 2) {
+    // topK < 2 → 图名额为 0，不扩展
+    graphExpansion = { rebuilding: false, quota: 0, expanded: 0 };
+  } else if (baseHits.length > 0) {
+    const graphResult = await getWikiGraphSnapshot(kbPath);
+    if (!graphResult.ok) {
+      // 图构建失败 → 不扩展，不影响基础搜索
+      graphExpansion = { rebuilding: true, quota: 0, expanded: 0 };
+    } else if (graphResult.rebuilding) {
+      // 图 revision 落后 → 标 rebuilding，不使用过时边
+      graphExpansion = { rebuilding: true, quota: 0, expanded: 0 };
+    } else {
+      const { snapshot } = graphResult;
+      const vectorPageHits = 0; // 本期无向量，vectorPageHits=0
+      const graphQuota = computeGraphQuota(topK, vectorPageHits);
+
+      if (graphQuota > 0) {
+        // seed = 基础结果中前 min(topK,10) 个 wiki 命中
+        const seedCount = Math.min(topK, 10);
+        const seeds = baseHits
+          .filter((h) => h.kind === 'wiki')
+          .slice(0, seedCount);
+
+        // 已在基础结果中的 pageId 集合
+        const existingIds = new Set(baseHits.map((h) => `${h.kind}:${h.id}`));
+
+        // 图候选分数：各 seed 1/(seedRank+1) 之和
+        const graphCandidates = new Map<string, {
+          pageId: string;
+          score: number;
+          seedPageId: string;
+          seedRank: number;
+        }>();
+
+        for (let rank = 0; rank < seeds.length; rank++) {
+          const seed = seeds[rank];
+          const seedPageId = seed.id; // wiki hit 的 id = pageId
+          const seedContribution = 1 / (rank + 1);
+          const neighbors = getOneHopNeighbors(snapshot, seedPageId);
+
+          for (const neighborId of neighbors) {
+            const key = `wiki:${neighborId}`;
+            if (existingIds.has(key)) continue; // 已在基础结果中
+            const existing = graphCandidates.get(key);
+            if (existing) {
+              existing.score += seedContribution;
+            } else {
+              graphCandidates.set(key, {
+                pageId: neighborId,
+                score: seedContribution,
+                seedPageId,
+                seedRank: rank,
+              });
+            }
+          }
+        }
+
+        // 按分数降序、同分按 pageId 稳定排序
+        const sortedGraphCandidates = Array.from(graphCandidates.values()).sort((a, b) => {
+          if (b.score !== a.score) return b.score - a.score;
+          return a.pageId.localeCompare(b.pageId);
+        });
+
+        // 取 graphQuota 个图补召回
+        const expanded: WikiSearchHit[] = [];
+        for (const candidate of sortedGraphCandidates) {
+          if (expanded.length >= graphQuota) break;
+          // 从 catalog 获取页面信息构建 hit
+          const page = catalog.pages.find((p) => p.pageId === candidate.pageId);
+          if (!page || !page.parse.ok) continue;
+
+          const fm = page.parse.frontmatter;
+          const graphRelatedTo: WikiGraphRelatedTo = {
+            seedPageId: candidate.seedPageId,
+            seedRank: candidate.seedRank,
+            relation: 'one-hop',
+          };
+
+          expanded.push({
+            kind: 'wiki',
+            id: page.pageId,
+            relativePath: page.relPath.replace(/\\/g, '/'),
+            absolutePath: join(layout.kbPath, page.relPath),
+            title: fm.title,
+            snippet: null, // 图补召回不做正文片段
+            pageType: page.type,
+            tags: fm.tags,
+            keywords: fm.keywords,
+            sourceRefs: fm.sources,
+            stale: isStale(fm.sources, manifestSources),
+            score: candidate.score,
+            graphRelatedTo,
+          });
+        }
+
+        // 图补召回附在基础结果后
+        finalHits = [...baseHits, ...expanded];
+        graphExpansion = {
+          rebuilding: false,
+          quota: graphQuota,
+          expanded: expanded.length,
+        };
+      } else {
+        // graphQuota = 0 → 不扩展
+        graphExpansion = { rebuilding: false, quota: 0, expanded: 0 };
+      }
+    }
+  } else {
+    // baseHits 为空 → 无 seed 可扩展
+    graphExpansion = { rebuilding: false, quota: 0, expanded: 0 };
+  }
+
   return {
     ok: true,
     result: {
-      mode: 'keyword',
+      mode: graphExpansion && graphExpansion.expanded > 0 ? 'keyword+graph' : 'keyword',
       kbId: manifest.manifest.kbId,
       coverage: {
         wikiPages: wantWiki ? catalog.pages.filter((p) => p.parse.ok).length : 0,
         parsedSources: parsedCount,
       },
-      hits: ranked.slice(0, topK),
+      hits: finalHits,
+      graphExpansion,
     },
   };
+}
+
+/**
+ * 计算图扩展名额（spec §8.3）。
+ *
+ * 名额 = ceil(topK × (0.30 - 0.15 × min(vectorPageHits,topK)/topK))
+ * 限制为 1..topK-1；topK<2 时为 0。
+ * 无向量时 vectorPageHits=0 → 系数 = 0.30，名额 = ceil(topK × 0.30)。
+ */
+function computeGraphQuota(topK: number, vectorPageHits: number): number {
+  if (topK < 2) return 0;
+  const ratio = Math.min(vectorPageHits, topK) / topK;
+  const raw = Math.ceil(topK * (0.30 - 0.15 * ratio));
+  return Math.min(topK - 1, Math.max(1, raw));
 }
 
 /** topK 限制：默认 20，范围 1–50 */

@@ -1065,10 +1065,12 @@ export type WikiSearchHit = {
   sourceRevision?: string;
   /** 排序值（越高越相关），不是正确率 */
   score: number;
+  /** 图扩展补召回标记（仅图扩展搜索时存在；不存在 = 基础结果） */
+  graphRelatedTo?: WikiGraphRelatedTo;
 };
 
-/** 检索模式：本期仅关键词；向量/图由 issue 22/23/24 在同一契约上扩展 */
-export type WikiSearchMode = 'keyword';
+/** 检索模式：keyword = 关键词；keyword+graph = 关键词 + 图一跳扩展 */
+export type WikiSearchMode = 'keyword' | 'keyword+graph';
 
 export type WikiSearchResponse = {
   mode: WikiSearchMode;
@@ -1076,6 +1078,8 @@ export type WikiSearchResponse = {
   /** 索引覆盖状态（参与排名的候选数） */
   coverage: { wikiPages: number; parsedSources: number };
   hits: WikiSearchHit[];
+  /** 图扩展信息（mode=keyword 时为 null） */
+  graphExpansion?: WikiGraphExpansionInfo | null;
 };
 
 export type WikiSearchErrorCode =
@@ -1102,6 +1106,117 @@ export type WikiSearchOptions = {
 export type WikiSearchOutcome =
   | { ok: true; result: WikiSearchResponse }
   | { ok: false; error: WikiSearchError };
+
+// ── 知识图谱与关联检索（spec §8/§9，issue 23）────────────────────
+
+/** 图有向边：source → target（保留引用方向） */
+export type WikiGraphEdge = {
+  /** 发出链接的 pageId */
+  source: string;
+  /** 被链接的 pageId（已解析） */
+  target: string;
+  /** 链接在 source 页中的出现信息 */
+  alias?: string;
+  heading?: string;
+};
+
+/** 图节点：已发布知识页（聚合页/raw 不作为知识节点，spec §9） */
+export type WikiGraphNode = {
+  pageId: string;
+  title: string;
+  type: WikiPageType;
+  /** 出链 pageId 集合（去重） */
+  outlinks: string[];
+  /** 入链 pageId 集合（去重） */
+  inlinks: string[];
+  /** 页面关键词（用于共享关键词信号） */
+  keywords: string[];
+  /** 页面来源引用（用于共享来源信号） */
+  sources: WikiSourceRef[];
+};
+
+/** 断链信息：指向不存在或歧义目标的链接 */
+export type WikiBrokenLink = {
+  /** 发出链接的 pageId */
+  source: string;
+  /** 原始 target 文本 */
+  target: string;
+  /** unresolved = 目标不存在；ambiguous = 多个候选 */
+  status: 'unresolved' | 'ambiguous';
+  /** ambiguous 时的候选列表 */
+  candidates?: string[];
+};
+
+/**
+ * 图快照——按 kbId + publishedRevision 隔离（spec §9）。
+ *
+ * 变更后失效且不使用旧边推导新页；图 revision 落后时搜索只返回关键词
+ * 并标 rebuilding。
+ */
+export type WikiGraphSnapshot = {
+  kbId: string;
+  /** 构建时的已发布 revision（manifest.publish.revision；无 publish 记录时为 0） */
+  revision: number;
+  /** pageId → 节点 */
+  nodes: Map<string, WikiGraphNode>;
+  /** 所有有效有向边（source → target） */
+  edges: WikiGraphEdge[];
+  /** 断链/歧义链接 */
+  brokenLinks: WikiBrokenLink[];
+};
+
+/** Relatedness 信号（spec §9 初始四信号；SoC 类型亲和为中性） */
+export type WikiRelatednessSignal =
+  | 'sharedSources'   // 共享来源（同 sourceId 且兼容修订）
+  | 'sharedKeywords'  // 共享关键词
+  | 'linkNeighbor'    // 图邻居（入/出链一跳）
+  | 'typeAffinity';   // 类型亲和（本期中性，恒 0 分）
+
+/** 相关页面条目（UI 相关页面面板用） */
+export type WikiRelatedPage = {
+  pageId: string;
+  title: string;
+  type: WikiPageType;
+  /** 综合相关度分数（越高越相关），不是语义置信度 */
+  score: number;
+  /** 触发的信号列表 */
+  signals: WikiRelatednessSignal[];
+  /** 各信号的具体贡献说明（UI 理由展示） */
+  reasons: string[];
+};
+
+/** 相关页面查询结果 */
+export type WikiRelatedResult =
+  | {
+      ok: true;
+      kbId: string;
+      revision: number;
+      pageId: string;
+      related: WikiRelatedPage[];
+      /** 断链/歧义可见信息（UI 展示） */
+      brokenLinks: WikiBrokenLink[];
+    }
+  | { ok: false; code: 'unknownPage' | 'catalogFailed' | 'readGateBlocked'; message: string };
+
+/** 图扩展搜索附加信息 */
+export type WikiGraphExpansionInfo = {
+  /** 图 revision 是否落后于 manifest publish revision */
+  rebuilding: boolean;
+  /** 图扩展名额（0 = 未扩展） */
+  quota: number;
+  /** 实际图补召回数 */
+  expanded: number;
+};
+
+/** 图扩展搜索结果中每个 hit 的图来源标记 */
+export type WikiGraphRelatedTo = {
+  /** 触发此 hit 的 seed pageId */
+  seedPageId: string;
+  /** seed 在基础结果中的排名（0-based） */
+  seedRank: number;
+  /** 关系说明（一跳邻居） */
+  relation: 'one-hop';
+};
 
 // ── 只读证据读取（spec §2/§8，issue 15）────────────────────────
 
