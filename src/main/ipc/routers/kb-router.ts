@@ -94,6 +94,12 @@ import {
 import { parseWikiSchema, WIKI_PAGE_TYPES } from '../../kb/wiki-schema';
 import { searchWiki } from '../../kb/wiki-search';
 import { getRelatedPages, getWikiGraphSnapshot } from '../../kb/wiki-graph';
+import { runStructuralLint } from '../../kb/structural-lint';
+import {
+  mergeFindings,
+  listFindings,
+  updateFindingStatus,
+} from '../../kb/finding-store';
 import { WIKI_PAGE_TEMPLATES } from '../../kb/wiki-page';
 import {
   listChangeSets,
@@ -136,6 +142,13 @@ import type {
   WikiSourceSummary,
   WikiIngestTask,
   WikiVisionInterpretation,
+  WikiLintRunResult,
+  WikiFindingListResult,
+  WikiFindingUpdateResult,
+  WikiFindingAction,
+  WikiFindingFilter,
+  WikiFindingKind,
+  WikiFindingStatus,
 } from '@shared/kb-types';
 
 // ── Result 联合类型（供 tRPC 输出推导） ─────────────────────────
@@ -1827,5 +1840,73 @@ export const kbRouter = t.router({
         };
       }
       return previewDeleteKb(entry.path);
+    }),
+
+  // ─── kb.lintRun（issue 25，spec §9） ────────────────────────
+  //
+  // 运行结构检查（orphan/no-outlinks/broken-link）。
+  // 扫描结果合并入 .kb/findings/ 持久存储，保留 ignored/resolved 状态。
+  // 大库可取消（signal），取消后返回部分结果。
+
+  lintRun: t.procedure
+    .input((_raw): Record<string, never> => {
+      return {};
+    })
+    .mutation(async (): Promise<WikiLintRunResult> => {
+      const kbPath = await getWikiMountedKbPath();
+      const result = await runStructuralLint(kbPath);
+      if (!result.ok) return result;
+
+      // 合并入持久存储
+      await mergeFindings(kbPath, result.findings, result.ranAt);
+      return result;
+    }),
+
+  // ─── kb.lintFindings（issue 25，spec §9） ───────────────────
+  //
+  // 列出知识待办，可选按状态/kind 过滤。
+
+  lintFindings: t.procedure
+    .input((raw): WikiFindingFilter => {
+      const r = raw as Record<string, unknown>;
+      const filter: WikiFindingFilter = {};
+      if (typeof r.status === 'string') {
+        const validStatuses: WikiFindingStatus[] = ['open', 'ignored', 'resolved'];
+        if (validStatuses.includes(r.status as WikiFindingStatus)) {
+          filter.status = r.status as WikiFindingStatus;
+        }
+      }
+      if (typeof r.kind === 'string') {
+        const validKinds: WikiFindingKind[] = ['orphan', 'no-outlinks', 'broken-link'];
+        if (validKinds.includes(r.kind as WikiFindingKind)) {
+          filter.kind = r.kind as WikiFindingKind;
+        }
+      }
+      return filter;
+    })
+    .query(async ({ input }): Promise<WikiFindingListResult> => {
+      const kbPath = await getWikiMountedKbPath();
+      return listFindings(kbPath, input);
+    }),
+
+  // ─── kb.lintUpdateFinding（issue 25，spec §9） ──────────────
+  //
+  // 更新单个 finding 的处置状态（ignore/unignore/resolve/reopen）。
+
+  lintUpdateFinding: t.procedure
+    .input((raw): { findingId: string; action: WikiFindingAction } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.findingId !== 'string' || r.findingId.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'findingId is required' });
+      }
+      const validActions: WikiFindingAction[] = ['ignore', 'unignore', 'resolve', 'reopen'];
+      if (typeof r.action !== 'string' || !validActions.includes(r.action as WikiFindingAction)) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'action must be one of: ignore, unignore, resolve, reopen' });
+      }
+      return { findingId: r.findingId.trim(), action: r.action as WikiFindingAction };
+    })
+    .mutation(async ({ input }): Promise<WikiFindingUpdateResult> => {
+      const kbPath = await getWikiMountedKbPath();
+      return updateFindingStatus(kbPath, input.findingId, input.action);
     }),
 });

@@ -1521,5 +1521,91 @@ export type VectorIndexErrorStatus = {
   at: string;
 };
 
+// ── 结构 Lint 与知识待办（spec §9，issue 25）──────────────────────
+
+/** 结构 finding 的规则类型（决定稳定身份） */
+export type WikiFindingKind = 'orphan' | 'no-outlinks' | 'broken-link';
+
+/** finding 的用户处置状态 */
+export type WikiFindingStatus = 'open' | 'ignored' | 'resolved';
+
+/**
+ * 结构 finding——从图快照推导出的知识待办。
+ *
+ * 稳定身份由 `kind + pageIds + evidenceRefs` 产生（`findingId` 为其 hash），
+ * 证据 hash 控制是否仍适用；重复扫描保留 ignored/resolved，证据改变可重开。
+ *
+ * spec §9：知识待办字段至少为
+ * `findingId/kbId/kind/pageIds/evidenceRefs/evidenceHashes/status/createdAt/updatedAt`。
+ */
+export type WikiStructuralFinding = {
+  /** 稳定身份：sha256(kind + pageIds.join(',') + evidenceRefs.join(',')) 取前 16 字节 hex */
+  findingId: string;
+  /** 归属库身份 */
+  kbId: string;
+  /** 规则类型 */
+  kind: WikiFindingKind;
+  /** 涉及的页面 pageId 列表（orphan/no-outlinks 为单元素，broken-link 为 [source]） */
+  pageIds: string[];
+  /** 证据位置：页面路径、断链 target 等 */
+  evidenceRefs: string[];
+  /** 证据 hash：各页面内容/链接结构的 hash，控制是否仍适用 */
+  evidenceHashes: string[];
+  /** 用户处置状态 */
+  status: WikiFindingStatus;
+  /** 首次发现时间（ISO） */
+  createdAt: string;
+  /** 最后更新时间（ISO） */
+  updatedAt: string;
+};
+
+/** lint 扫描的覆盖信息 */
+export type WikiLintCoverage = {
+  /** 已检查的页面数 */
+  checkedPages: number;
+  /** 总页面数 */
+  totalPages: number;
+  /** 检查范围描述 */
+  scope: string;
+  /** 未覆盖部分说明（空数组 = 全覆盖） */
+  uncovered: string[];
+};
+
+/** lint 扫描结果 */
+export type WikiLintRunResult =
+  | {
+      ok: true;
+      kbId: string;
+      revision: number;
+      findings: WikiStructuralFinding[];
+      coverage: WikiLintCoverage;
+      /** 扫描时间（ISO） */
+      ranAt: string;
+      /** 是否被取消（部分结果仍返回） */
+      canceled: boolean;
+    }
+  | { ok: false; code: 'catalogFailed' | 'readGateBlocked'; message: string };
+
+/** finding 更新动作 */
+export type WikiFindingAction = 'ignore' | 'unignore' | 'resolve' | 'reopen';
+
+/** finding 更新结果 */
+export type WikiFindingUpdateResult =
+  | { ok: true; finding: WikiStructuralFinding }
+  | { ok: false; code: 'findingNotFound'; message: string };
+
+/** finding 列表查询过滤 */
+export type WikiFindingFilter = {
+  /** 按状态过滤（缺省返回全部） */
+  status?: WikiFindingStatus;
+  /** 按规则类型过滤 */
+  kind?: WikiFindingKind;
+};
+
+/** finding 列表查询结果 */
+export type WikiFindingListResult =
+  | { ok: true; findings: WikiStructuralFinding[] }
+  | { ok: false; code: 'readGateBlocked' | 'ioError'; message: string };
+
 
 
