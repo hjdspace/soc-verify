@@ -571,6 +571,11 @@ function SummaryLine({ stats, textLayer }: { stats: PdfAssetStats; textLayer: bo
       <span>页 {stats.processedPages}/{stats.totalPages}</span>
       <span>失败 {stats.failedPages}</span>
       <span>跳过 {stats.skippedPages}</span>
+      {stats.renderCandidates.length > 0 && (
+        <span title="含图判定不可靠（无位图证据）的页数——这些页已整页渲染兜底，可人工核对">
+          待核对 {stats.renderCandidates.length} 页
+        </span>
+      )}
       {stats.renderRemaining.length > 0 && <span>待渲染 {stats.renderRemaining.length} 页</span>}
       <span
         className={cn(

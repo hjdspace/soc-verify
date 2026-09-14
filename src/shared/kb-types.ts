@@ -277,12 +277,23 @@ export type WikiSourceRecord = {
   updatedAt: string;
 };
 
+/** PDF 资产提取错误码（主进程 pdf-asset-store 的 PdfAssetStoreErrorCode 同集） */
+export type WikiPdfAssetErrorCode =
+  | 'sourceNotFound'
+  | 'notPdf'
+  | 'originalHashMismatch'
+  | 'malformed'
+  | 'password'
+  | 'runtimeUnavailable'
+  | 'aborted'
+  | 'io';
+
 /** PDF 图像资产提取状态（WikiSourceRecord.pdfAssets） */
 export type WikiPdfAssetsStatus = {
   status: 'ready' | 'failed';
   /** 提取到的资产记录数（位图对象 + 页面渲染，含同图多次出现的位置记录） */
   assetCount: number;
-  errorCode?: string;
+  errorCode?: WikiPdfAssetErrorCode;
   errorMessage?: string;
   updatedAt: string;
 };

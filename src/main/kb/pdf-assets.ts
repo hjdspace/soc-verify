@@ -23,9 +23,8 @@
  * @see docs/prd/knowledge-base-llm-wiki-spec.md §3、§11
  */
 
-import { createHash } from 'node:crypto';
-import {
-  loadPdfRuntime,
+import { sha256Hex } from './hash';
+import { loadPdfRuntime,
   PdfRuntimeUnavailableError,
   type PdfCanvasContextLike,
   type PdfDocumentProxy,
@@ -165,10 +164,6 @@ export type PdfAssetOptions = {
 };
 
 // ── 小工具 ──────────────────────────────────────────────────────
-
-function sha256Hex(bytes: Uint8Array): string {
-  return createHash('sha256').update(Buffer.from(bytes)).digest('hex');
-}
 
 /** 2×3 仿射矩阵 [a b c d e f]（PDF 约定） */
 type Matrix = [number, number, number, number, number, number];
@@ -435,7 +430,6 @@ function normalizeError(err: unknown): { code: PdfAssetErrorCode; message: strin
   if (name === 'InvalidPDFException' || name === 'MissingPDFException') {
     return { code: 'malformed', message: `PDF 结构损坏或不是 PDF: ${message}` };
   }
-  if (name === 'PdfRuntimeUnavailableError') return { code: 'runtimeUnavailable', message };
   if (name === 'UnexpectedResponseException' || name === 'ResponseException') {
     return { code: 'io', message: `PDF 数据读取失败: ${message}` };
   }

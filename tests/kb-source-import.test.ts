@@ -50,10 +50,9 @@ import {
   listWikiSources,
   readWikiParsed,
   listSourceRevisions,
-  resolveWikiOriginalPath,
   type SourceImportOutcome,
 } from '../src/main/kb/source-import';
-import { readWikiManifest, writeWikiManifest, initWikiLayout } from '../src/main/kb/wiki-layout';
+import { readWikiManifest, writeWikiManifest, initWikiLayout, resolveWikiOriginalPath } from '../src/main/kb/wiki-layout';
 import { sourceIdFor } from '../src/main/kb/source-identity';
 
 const mockToDocument = vi.mocked(toDocument);

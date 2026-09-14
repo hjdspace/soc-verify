@@ -184,8 +184,38 @@ describe('pdf-asset-store 内容寻址落盘', () => {
     expect(bitmapsOnly.manifest.extractions.length).toBeLessThan(withRender.manifest.extractions.length);
   });
 
-  it('同一来源两个修订的资产互不覆盖', async () => {
-    const v1 = await importPdf('manual.pdf', mixedPdfFixture());
+  it('续跑合并：pages 按页号并集、统计重算，已完成页证据不丢失', async () => {
+    const bytes = buildPdf(Array.from({ length: 5 }, () => ({ vector: true })));
+    const { sourceId } = await importPdf('manual.pdf', bytes);
+
+    // 导入管线已按默认参数（batchSize 50）自动提取过：全部页有探针、全部页已渲染
+    const base = await readPdfAssetManifest(kbPath, sourceId);
+    expect(base).not.toBeNull();
+    expect(base!.stats.renderRendered).toEqual([1, 2, 3, 4, 5]);
+
+    // 续跑：donePages 跳过 1/2（本次不产出其探针），渲染 [3,4,5]（batchSize 2 → 3/4）
+    const second = await extractAndStorePdfAssets(kbPath, sourceId, {
+      render: [3, 4, 5],
+      donePages: [1, 2],
+      batchSize: 2,
+    });
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+
+    // 页级探针是并集（1/2 的证据保留），而非被本次运行覆盖成只剩 [3,4,5]
+    expect(second.manifest.pages.map((p) => p.page)).toEqual([1, 2, 3, 4, 5]);
+    expect(second.manifest.stats.totalPages).toBe(5);
+    expect(second.manifest.stats.processedPages).toBe(5);
+    // 渲染覆盖累计并集；renderRemaining 是本次可操作的「继续下一批」输入
+    expect(second.manifest.stats.renderRendered).toEqual([1, 2, 3, 4, 5]);
+    expect(second.manifest.stats.renderRemaining).toEqual([5]);
+    expect(second.manifest.stats.failedPages).toBe(0);
+    // 单次运行历史仍逐次保留（extractions[1] 的 stats 只反映第二次运行）
+    expect(second.manifest.extractions).toHaveLength(2);
+    expect(second.manifest.extractions[1]!.stats.processedPages).toBe(3);
+  });
+
+  it('同一来源两个修订的资产互不覆盖', async () => {    const v1 = await importPdf('manual.pdf', mixedPdfFixture());
     const first = await extractAndStorePdfAssets(kbPath, v1.sourceId, { render: 'none' });
     expect(first.ok).toBe(true);
 

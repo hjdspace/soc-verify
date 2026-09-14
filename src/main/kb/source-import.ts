@@ -27,8 +27,8 @@
 
 import { basename, dirname, extname, join } from 'node:path';
 import { copyFile, mkdir, readdir, readFile, stat } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
 import { writeFileAtomic } from './atomic-commit';
+import { sha256Hex } from './hash';
 import {
   readWikiManifest,
   wikiLayout,
@@ -83,12 +83,6 @@ export type ReadWikiParsedQuery = {
   parsedHash?: string;
 };
 
-export type ResolveOriginalQuery = {
-  sourceId: string;
-  /** 缺省 = 当前原件；指定历史修订时从 revisions 区解析 */
-  revision?: string;
-};
-
 /** 结构化错误（router 映射为 TRPCError；调用方可按 code 分支） */
 export class WikiSourceError extends Error {
   constructor(
@@ -133,10 +127,6 @@ export type ConvertControl = {
 };
 
 // ── 工具 ────────────────────────────────────────────────────────
-
-function sha256Hex(bytes: Buffer): string {
-  return createHash('sha256').update(bytes).digest('hex');
-}
 
 /** 文本直通引擎指纹（文本管线无引擎版本概念，常量即可） */
 const TEXT_FINGERPRINT = 'text:v1';
@@ -886,39 +876,6 @@ export async function listSourceRevisions(kbPath: string, sourceId: string): Pro
   return [...byRevision.values()].sort((a, b) =>
     a.isCurrent === b.isCurrent ? a.revision.localeCompare(b.revision) : a.isCurrent ? -1 : 1,
   );
-}
-
-/**
- * 从身份解析原件绝对路径（预览/导出用，不接受任意路径）。
- * 未知来源或盘上文件缺失返回 null。
- */
-export async function resolveWikiOriginalPath(kbPath: string, query: ResolveOriginalQuery): Promise<string | null> {
-  const layout = wikiLayout(kbPath);
-  const read = await readWikiManifest(kbPath);
-  if (!read.ok) return null;
-  const rec = read.manifest.sources?.[query.sourceId];
-  if (!rec) return null;
-
-  if (!query.revision || query.revision === rec.currentRevision) {
-    return fileOrNull(join(layout.rawSourcesDir, ...rec.sourcePath.split('/')));
-  }
-  const revDir = join(layout.rawRevisionsDir, rec.sourceId, query.revision);
-  try {
-    const entries = await readdir(revDir, { withFileTypes: true });
-    const original = entries.find((e) => e.isFile() && e.name !== 'assets.json');
-    return original ? join(revDir, original.name) : null;
-  } catch {
-    return null;
-  }
-}
-
-async function fileOrNull(abs: string): Promise<string | null> {
-  try {
-    const s = await stat(abs);
-    return s.isFile() ? abs : null;
-  } catch {
-    return null;
-  }
 }
 
 // ── 能力清单 ────────────────────────────────────────────────────

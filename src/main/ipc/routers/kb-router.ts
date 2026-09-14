@@ -67,12 +67,12 @@ import {
   listSourceRevisions,
   listWikiSources,
   readWikiParsed,
-  resolveWikiOriginalPath,
   WikiSourceError,
   type SourceConvertOutcome,
   type SourceImportInput,
   type SourceImportOutcome,
 } from '../../kb/source-import';
+import { resolveWikiOriginalPath } from '../../kb/wiki-layout';
 import { wikiIngestQueue } from '../../kb/wiki-queue';
 import {
   extractAndStorePdfAssets,
@@ -986,10 +986,10 @@ export const kbRouter = t.router({
     .input((raw): { sourceId: string; revision: string; assetId: string } => {
       const r = (raw ?? {}) as Record<string, unknown>;
       if (typeof r.revision !== 'string' || r.revision.trim().length === 0) {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'revision is required' });
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'revision 为必填项' });
       }
       if (typeof r.assetId !== 'string' || r.assetId.trim().length === 0) {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'assetId is required' });
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'assetId 为必填项' });
       }
       return {
         sourceId: parseSourceIdInput(raw).sourceId,

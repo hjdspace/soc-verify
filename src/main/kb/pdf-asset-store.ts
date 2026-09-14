@@ -16,13 +16,19 @@
  * @see docs/prd/knowledge-base-llm-wiki-spec.md §1、§3
  */
 
-import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readdir, readFile, stat } from 'node:fs/promises';
+import { mkdir, readFile, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { writeFileAtomic } from './atomic-commit';
-import { readWikiManifest, wikiLayout, type WikiLayoutPaths } from './wiki-layout';
+import { sha256Hex } from './hash';
+import {
+  readWikiManifest,
+  resolveWikiOriginalPath,
+  wikiLayout,
+  type WikiLayoutPaths,
+} from './wiki-layout';
 import { extractPdfAssets, type PdfAssetExtraction, type PdfAssetOptions, type PdfAssetRecord } from './pdf-assets';
+import type { WikiPdfAssetErrorCode } from '@shared/kb-types';
 
 // ── 类型 ────────────────────────────────────────────────────────
 
@@ -79,16 +85,7 @@ export type PdfAssetStoreResult = {
   manifest: PdfAssetManifest;
 };
 
-export type PdfAssetStoreErrorCode =
-  | 'sourceNotFound'
-  | 'notPdf'
-  | 'originalHashMismatch'
-  | 'malformed'
-  | 'password'
-  | 'runtimeUnavailable'
-  /** 提取被取消（AbortSignal）：不落任何资产，调用方按「中止」而非「失败」处理 */
-  | 'aborted'
-  | 'io';
+export type PdfAssetStoreErrorCode = WikiPdfAssetErrorCode;
 
 export type PdfAssetStoreExtractResult =
   | ({ ok: true } & PdfAssetStoreResult)
@@ -119,6 +116,63 @@ function recordKey(r: PdfAssetRecord): string {
   return [r.assetId, r.page, r.method, JSON.stringify(r.rect ?? null), JSON.stringify(r.render ?? null)].join('|');
 }
 
+/**
+ * 合并逐页探针与统计（续跑不丢证据，spec §3「用户可选页或继续下一批」）。
+ *
+ * `extractPdfAssets` 的每次运行只产出本次处理页的 pages/stats；若直接整体
+ * 覆盖，「继续渲染剩余页」后 manifest.pages 会丢失已完成页的 kind/坐标/
+ * uncertain 证据。合并规则：
+ *  - pages：按页号并集（同页以最新一次为准——重跑覆盖旧探针）；
+ *  - failures：新失败 + 旧失败中「本次既未成功处理也未再失败」的页；
+ *  - renderCandidates/renderRendered：并集（累计覆盖）；
+ *  - bitmapAssets/renderAssets/textPages：按合并后的 records/pages 重算；
+ *  - renderRemaining/batchLimitReached/skipped/cancelled：取本次（可操作的
+ *    「继续下一批」输入与单次运行信息）；totalPages 取最大。
+ */
+function mergeExtractionState(
+  existing: PdfAssetManifest,
+  extraction: PdfAssetExtraction,
+  mergedRecords: PdfAssetRecord[],
+): { pages: PdfAssetExtraction['pages']; stats: PdfAssetExtraction['stats'] } {
+  const pages = new Map<number, PdfAssetExtraction['pages'][number]>();
+  for (const probe of existing.pages) pages.set(probe.page, probe);
+  for (const probe of extraction.pages) pages.set(probe.page, probe);
+  const mergedPages = [...pages.values()].sort((a, b) => a.page - b.page);
+
+  const processedThisRun = new Set(extraction.pages.map((p) => p.page));
+  const failedThisRun = new Set(extraction.stats.failures.map((f) => f.page));
+  const failures = [...extraction.stats.failures];
+  for (const prev of existing.stats.failures) {
+    if (!processedThisRun.has(prev.page) && !failedThisRun.has(prev.page)) failures.push(prev);
+  }
+
+  const bitmapAssets = mergedRecords.filter((r) => r.method === 'object').length;
+  const renderAssets = mergedRecords.filter((r) => r.method === 'page-render').length;
+
+  const merged: PdfAssetExtraction['stats'] = {
+    totalPages: Math.max(existing.stats.totalPages, extraction.stats.totalPages),
+    // 完整处理过的页 = 有探针的页（donePages 跳过页保留前次探针）
+    processedPages: mergedPages.length,
+    failedPages: new Set(failures.map((f) => f.page)).size,
+    skippedPages: extraction.stats.skippedPages,
+    failures,
+    skipped: extraction.stats.skipped,
+    bitmapAssets,
+    renderAssets,
+    renderCandidates: [...new Set([...existing.stats.renderCandidates, ...extraction.stats.renderCandidates])].sort(
+      (a, b) => a - b,
+    ),
+    renderRendered: [...new Set([...existing.stats.renderRendered, ...extraction.stats.renderRendered])].sort(
+      (a, b) => a - b,
+    ),
+    renderRemaining: extraction.stats.renderRemaining,
+    batchLimitReached: extraction.stats.batchLimitReached,
+    textPages: mergedPages.filter((p) => p.textChars > 0).length,
+    cancelled: extraction.stats.cancelled,
+  };
+  return { pages: mergedPages, stats: merged };
+}
+
 // ── 写入 ────────────────────────────────────────────────────────
 
 /** 内容寻址写字节：已存在则跳过（同字节只写一份） */
@@ -137,9 +191,9 @@ async function writeBlobs(dir: string, extraction: PdfAssetExtraction): Promise<
 /**
  * 持久化一次提取结果（合并进既有清单）。
  *
- * 合并语义：`assets`/`pages`/`stats` 反映「最近一次提取」的覆盖情况，
- * 但记录与字节是**并集**——旧参数产出的资产引用不会被新参数覆写；
- * `extractions` 逐次追加，保留每次参数与统计。
+ * 合并语义：记录与字节是**并集**——旧参数产出的资产引用不会被新参数覆写；
+ * `pages` 按页号并集、`stats` 按合并状态重算（续跑不丢已完成页的探针证据，
+ * 详见 mergeExtractionState）；`extractions` 逐次追加，保留每次参数与统计。
  */
 export async function storePdfAssets(
   kbPath: string,
@@ -156,6 +210,14 @@ export async function storePdfAssets(
   for (const record of existing?.assets ?? []) merged.set(recordKey(record), record);
   const before = merged.size;
   for (const record of input.extraction.records) merged.set(recordKey(record), record);
+  const mergedRecords = [...merged.values()].sort(
+    (a, b) => a.page - b.page || a.method.localeCompare(b.method) || a.file.localeCompare(b.file),
+  );
+
+  // 续跑不丢证据：pages 按页号并集、统计按合并状态重算（extractions 保留单次历史）
+  const { pages, stats } = existing
+    ? mergeExtractionState(existing, input.extraction, mergedRecords)
+    : { pages: input.extraction.pages, stats: input.extraction.stats };
 
   const manifest: PdfAssetManifest = {
     manifestVersion: 1,
@@ -163,16 +225,14 @@ export async function storePdfAssets(
     revision: input.revision,
     parsedHash: input.parsedHash ?? existing?.parsedHash ?? null,
     extractor: { runtime: input.extractor.runtime ?? 'unknown', version: input.extractor.version },
-    assets: [...merged.values()].sort(
-      (a, b) => a.page - b.page || a.method.localeCompare(b.method) || a.file.localeCompare(b.file),
-    ),
-    pages: input.extraction.pages,
-    stats: input.extraction.stats,
+    assets: mergedRecords,
+    pages,
+    stats,
     extractions: [
       ...(existing?.extractions ?? []),
       { options: input.options, at: now, stats: input.extraction.stats },
     ],
-    textLayer: input.extraction.stats.textPages > 0,
+    textLayer: stats.textPages > 0,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
   };
@@ -238,33 +298,6 @@ export async function resolvePdfAssetFile(
 
 // ── 提取 + 持久化（导入/队列入口） ──────────────────────────────
 
-/** 从身份解析原件绝对路径（当前修订或历史修订区），不产生副作用 */
-async function resolveOriginalFile(
-  kbPath: string,
-  layout: WikiLayoutPaths,
-  sourcePath: string,
-  revision: string,
-  isCurrent: boolean,
-): Promise<string | null> {
-  if (isCurrent) {
-    const abs = join(layout.rawSourcesDir, ...sourcePath.split('/'));
-    return existsSync(abs) ? abs : null;
-  }
-  const sidDir = layout.rawRevisionsDir;
-  const read = await readWikiManifest(kbPath);
-  if (!read.ok) return null;
-  const rec = Object.values(read.manifest.sources ?? {}).find((s) => s.sourcePath === sourcePath);
-  if (!rec) return null;
-  const dir = join(sidDir, rec.sourceId, revision);
-  try {
-    const entries = await readdir(dir, { withFileTypes: true });
-    const original = entries.find((e) => e.isFile() && e.name !== 'assets.json');
-    return original ? join(dir, original.name) : null;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * 提取 PDF 资产的完整入口：读原件 → 提图/渲染 → 内容寻址落盘。
  *
@@ -291,10 +324,9 @@ export async function extractAndStorePdfAssets(
     };
   }
 
-  const layout = wikiLayout(kbPath);
   const revision = options.revision ?? rec.currentRevision;
-  const isCurrent = revision === rec.currentRevision;
-  const original = await resolveOriginalFile(kbPath, layout, rec.sourcePath, revision, isCurrent);
+  // 原件解析复用 wiki-layout 的单一实现（当前修订 → raw/sources，历史 → revisions 区）
+  const original = await resolveWikiOriginalPath(kbPath, { sourceId, revision });
   if (!original) {
     return {
       ok: false,
@@ -308,7 +340,7 @@ export async function extractAndStorePdfAssets(
   } catch (err) {
     return { ok: false, error: { code: 'io', message: `读取原件失败: ${String(err)}` } };
   }
-  if (createHash('sha256').update(bytes).digest('hex') !== revision) {
+  if (sha256Hex(bytes) !== revision) {
     return {
       ok: false,
       error: {

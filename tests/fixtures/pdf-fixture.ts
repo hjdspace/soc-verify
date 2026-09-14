@@ -100,15 +100,11 @@ export function buildPdf(pages: PdfPageSpec[]): Buffer {
   // 页对象
   pages.forEach((spec, i) => {
     const [w, h] = spec.size ?? [200, 200];
-    const xobjEntries = pages
-      .flatMap(() => [])
-      .concat();
     const names = pageImageNames[i]!;
     const xobj =
       names.length > 0
         ? ` /XObject << ${names.map((n, k) => `/${n} ${imageObjByKey.get(imageKey(spec.images![k]!))!.objNum} 0 R`).join(' ')} >>`
         : '';
-    void xobjEntries;
     objects[pageObjNums[i]!] =
       `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${w} ${h}] ` +
       `/Resources << /Font << /F1 ${fontObjNum} 0 R >>${xobj} >> /Contents ${contentObjNums[i]!} 0 R >>`;
