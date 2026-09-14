@@ -1240,6 +1240,54 @@ export type WikiGraphRelatedTo = {
   relation: 'one-hop';
 };
 
+// ── 图可视化视图模型（spec §9，issue 26）──────────────────────────
+//
+// 主进程图快照是唯一输入：`kb.wikiGraph` 把 `WikiGraphSnapshot` 投影为
+// 可序列化结构（Map 不能走 tRPC）。renderer 只持有这份快照和用户操作，
+// 不重新扫盘建第二张图（spec §9/§10）。
+
+/**
+ * 渲染端图节点。
+ *
+ * `keywords` 供关键词过滤使用（spec §9「大图先过滤和按需展开」）；
+ * `inlinks`/`outlinks` 供邻接列表（WebGL 不可用降级）与节点详情使用。
+ */
+export type WikiGraphViewNode = {
+  pageId: string;
+  title: string;
+  type: WikiPageType;
+  /** 出链 pageId（去重） */
+  outlinks: string[];
+  /** 入链 pageId（去重） */
+  inlinks: string[];
+  /** 页面关键词（可为空） */
+  keywords: string[];
+};
+
+/** 渲染端图边（保留引用方向 source → target） */
+export type WikiGraphViewEdge = {
+  source: string;
+  target: string;
+};
+
+/** 图可视化数据（`kb.wikiGraph` 成功结果） */
+export type WikiGraphViewOk = {
+  ok: true;
+  kbId: string;
+  /** 与 manifest publish.revision 对齐；切库/重开图不得串 revision */
+  revision: number;
+  /** 图是否落后于当前发布 revision */
+  rebuilding: boolean;
+  nodes: WikiGraphViewNode[];
+  edges: WikiGraphViewEdge[];
+  brokenLinks: WikiBrokenLink[];
+};
+
+/** 图可视化数据读取结果 */
+export type WikiGraphViewResult =
+  | WikiGraphViewOk
+  | { ok: false; code: 'catalogFailed' | 'readGateBlocked'; message: string };
+
 // ── 只读证据读取（spec §2/§8，issue 15）────────────────────────
 
 /** 读取对象：wiki = 已发布知识页；parsed = 来源机械全文；asset = 原图 */

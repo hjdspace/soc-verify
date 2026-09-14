@@ -71,6 +71,11 @@ export default tseslint.config(
     }
   },
   {
+    // 图视图冒烟的 preload 运行在渲染进程内（浏览器环境 + Node 预加载能力）
+    files: ['scripts/kb-graph-smoke/preload.cjs'],
+    languageOptions: { globals: { ...globals.browser, ...globals.node } }
+  },
+  {
     // Plugin files are CommonJS modules loaded at runtime
     files: ['plugins/**/*'],
     languageOptions: { globals: { ...globals.node } },

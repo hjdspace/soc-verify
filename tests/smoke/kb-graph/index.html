@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>KB Graph Smoke Harness</title>
+    <!--
+      与应用 src/renderer/index.html 完全一致的 CSP：冒烟要证明「图视图在真实
+      CSP 下可用」，因此这里不能放宽（尤其不能加 worker-src blob: 之类的旁路）。
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: local-resource:; font-src 'self' local-resource:;"
+    />
+  </head>
+  <body>
+    <!--
+      #root 的高度/背景由 globals.css 提供（与应用同源样式）；
+      这里只补一个 flex 列容器，等价于应用里 AppShell 提供给视图的宿主。
+    -->
+    <div id="root" style="display: flex; flex-direction: column"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>

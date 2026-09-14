@@ -11,16 +11,17 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { BookOpen, FileWarning, ScrollText, Search, ShieldAlert, X } from 'lucide-react';
+import { BookOpen, FileWarning, Network, ScrollText, Search, ShieldAlert, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { cn } from '@renderer/lib/utils';
 import { trpc } from '@renderer/lib/trpc';
 import { useKbWikiStore } from '@renderer/stores/kb-wiki';
 import { wikiLinksToDisplayMarkdown, parseWikilinkHref } from '@renderer/lib/wiki-links';
+import { KbWikiGraph } from './KbWikiGraph';
 import type { WikiPageType, WikiSearchHit } from '@shared/kb-types';
 
 export function KbWikiTab() {
-  const [section, setSection] = useState<'pages' | 'rules' | 'search'>('pages');
+  const [section, setSection] = useState<'pages' | 'graph' | 'rules' | 'search'>('pages');
   const loadCatalog = useKbWikiStore((s) => s.loadCatalog);
   const reset = useKbWikiStore((s) => s.reset);
   const openPage = useKbWikiStore((s) => s.openPage);
@@ -32,6 +33,12 @@ export function KbWikiTab() {
 
   /** 检索结果中的 wiki 命中 → 切到知识页区并打开该页 */
   const openWikiHit = (pageId: string): void => {
+    setSection('pages');
+    void openPage(pageId);
+  };
+
+  /** 图节点跳转 → 切到知识页区并打开该页（spec §9「点击线索聚焦关联页面」） */
+  const openGraphPage = (pageId: string): void => {
     setSection('pages');
     void openPage(pageId);
   };
@@ -66,6 +73,19 @@ export function KbWikiTab() {
           检索
         </button>
         <button
+          onClick={() => setSection('graph')}
+          className={cn(
+            'flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors',
+            section === 'graph'
+              ? 'bg-primary/10 text-primary'
+              : 'text-muted-foreground hover:text-foreground',
+          )}
+          data-testid="kb-wiki-graph-tab"
+        >
+          <Network className="h-3.5 w-3.5" />
+          知识图谱
+        </button>
+        <button
           onClick={() => setSection('rules')}
           className={cn(
             'flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors',
@@ -84,7 +104,15 @@ export function KbWikiTab() {
         </span>
       </div>
 
-      {section === 'pages' ? <PageBrowser /> : section === 'search' ? <SearchPanel onOpenWikiPage={openWikiHit} /> : <RulesEditor />}
+      {section === 'pages' ? (
+        <PageBrowser />
+      ) : section === 'graph' ? (
+        <KbWikiGraph onOpenPage={openGraphPage} />
+      ) : section === 'search' ? (
+        <SearchPanel onOpenWikiPage={openWikiHit} />
+      ) : (
+        <RulesEditor />
+      )}
     </div>
   );
 }

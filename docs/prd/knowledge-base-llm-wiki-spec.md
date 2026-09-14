@@ -375,6 +375,8 @@ Agent 注入保留现有 8000 字符作为明确硬上限（包含工具说明�
 
 图 UI 初选 sigma/graphology/ForceAtlas2/Louvain；纯数据由主进程返回，布局在 worker 中运行，切库/卸载时终止。WebGL 不可用仍提供页面与邻接列表。大图先过滤和按需展开；ECharts 与 sigma 的性能取舍以本项目实测为准。（R11、R12、R14、R16。）
 
+**2026-09-14 实测选型裁决**：维持 sigma + graphology + ForceAtlas2（精确版本与兼容结论见 [ADR 0034 §10](../adr/0034-llm-wiki-knowledge-base.md)）；社区划分不引入 Louvain 到 renderer——它由主进程图洞察拥有，渲染端只消费社区统计，避免出现第二个拥有者。
+
 ### 10. 模块接入、退役与实施顺序
 
 采用最少拥有者，不按每个小功能建类：布局/身份；转换/图像资产；模型适配与编译；队列/发布/历史；页面目录/聚合/链接；检索/向量；Lint。主进程拥有文件与凭证，preload 只桥接，renderer 只持有快照与用户操作。CPU/大量文件扫描和 PDF 渲染置于可取消 worker/子进程，不在 renderer 或主事件循环同步阻塞。
@@ -414,7 +416,7 @@ Agent 注入保留现有 8000 字符作为明确硬上限（包含工具说明�
 | PDF 图片/矢量图 | 文字+位图+矢量时序图 fixture，页码与原图对应，页面渲染效果、内存/取消、打包后的本地 worker | 重新评估提取/渲染适配，不能宣布图片支持完成 |
 | 视觉/编译适配 | 已支持的各协议假流测试，配置模型的真实图片输入 smoke、超时/拒绝/usage/无图能力反馈 | 明确不支持的能力，保留 blocked，不偷偷按文字继续 |
 | 路径与事务 | Windows junction/保留名/ADS、只读文件/磁盘写失败/每步崩溃的真临时目录故障注入 | 阻止发布切片进入可用状态 |
-| sigma/CSP/worker | 打包后 WebGL 布局、点选、卸载释放；无 WebGL 时列表可用；资源无 CDN | 调整渲染方案，不改变知识与检索契约 |
+| sigma/CSP/worker | 打包后 WebGL 布局、点选、卸载释放；无 WebGL 时列表可用；资源无 CDN。**2026-09-14 已执行**：钉死 `sigma@3.0.3` + `graphology@0.26.0` + `graphology-layout-forceatlas2@0.10.1`；实测 Electron 43 下 WebGL2 可用、**`file://` 下的 module worker 可用**（决定布局可放 worker）、harness 与产品 CSP 逐字节一致的条件下零远程请求；1000 页/9987 边首个可交互画面 284–340 ms；卸载后 worker 1/1 终止、WebGL 上下文 5/5 释放。证据与硬约束见 [ADR 0034 §10「图渲染选型实测」](../adr/0034-llm-wiki-knowledge-base.md)。未覆盖：安装包内 `app.asar` 复述（归 issue 30） | 调整渲染方案，不改变知识与检索契约 |
 | 嵌入能力 | 正确区分未配置/401/404模型不存在/429/网络失败，维度变更及同维度换模型 | 显式状态降级，端点恢复可重建；不永久缓存瞬时故障 |
 
 依赖均精确版本 + lockfile。参考仓库 package.json 的 `^` 范围不是本项目安装指令；Node N-API/ABI、平台可用性和许可证以所选包实际证据为准。

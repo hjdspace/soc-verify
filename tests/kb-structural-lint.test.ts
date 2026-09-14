@@ -19,8 +19,7 @@ import {
   runStructuralLint,
 } from '../src/main/kb/structural-lint';
 import { buildWikiGraphSnapshot, invalidateGraphSnapshot } from '../src/main/kb/wiki-graph';
-import { initWikiLayout, writeWikiManifest } from '../src/main/kb/wiki-layout';
-import type { WikiKbManifest } from '../src/main/kb/wiki-layout';
+import { initWikiLayout } from '../src/main/kb/wiki-layout';
 import type { WikiGraphSnapshot } from '@shared/kb-types';
 
 let kbPath: string;
@@ -63,22 +62,6 @@ function writeWikiPage(rel: string, content: string): void {
   writeFileSync(abs, content, 'utf-8');
 }
 
-async function writePublishRevision(revision: number): Promise<void> {
-  const manifest: WikiKbManifest = {
-    manifestVersion: 1,
-    format: 'wiki',
-    kbId: 'kb-lint',
-    name: '结构检查测试库',
-    createdAt: '2026-09-13T00:00:00Z',
-    updatedAt: '2026-09-13T00:00:00Z',
-    publish: {
-      revision,
-      commitId: `commit-${revision}`,
-      at: '2026-09-13T00:00:00Z',
-    },
-  };
-  await writeWikiManifest(kbPath, manifest);
-}
 
 async function getSnapshot(): Promise<WikiGraphSnapshot> {
   const res = await buildWikiGraphSnapshot(kbPath);

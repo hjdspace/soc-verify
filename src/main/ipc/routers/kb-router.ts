@@ -151,6 +151,7 @@ import type {
   WikiFindingKind,
   WikiFindingStatus,
   WikiGraphInsightResult,
+  WikiGraphViewResult,
 } from '@shared/kb-types';
 
 // ── Result 联合类型（供 tRPC 输出推导） ─────────────────────────
@@ -1484,16 +1485,17 @@ export const kbRouter = t.router({
       return getRelatedPages(kbPath, input.pageId);
     }),
 
-  // ─── kb.wikiGraph（issue 23） ──────────────────────────────
+  // ─── kb.wikiGraph（issue 23；视图模型 issue 26） ────────────
   //
   // 获取知识图谱快照（spec §9）。用于图可视化。
   // 返回节点邻接列表与断链信息，布局在 renderer worker 中运行。
+  // `keywords` 供渲染端关键词过滤（spec §9「大图先过滤」）。
 
   wikiGraph: t.procedure
     .input((_raw): Record<string, never> => {
       return {};
     })
-    .query(async () => {
+    .query(async (): Promise<WikiGraphViewResult> => {
       const kbPath = await getWikiMountedKbPath();
       const result = await getWikiGraphSnapshot(kbPath);
       if (!result.ok) {
@@ -1511,6 +1513,7 @@ export const kbRouter = t.router({
         type: n.type,
         outlinks: n.outlinks,
         inlinks: n.inlinks,
+        keywords: n.keywords,
       }));
       return {
         ok: true as const,

@@ -1,0 +1,12 @@
+/*
+ * 冒烟 harness 样式入口。
+ *
+ * 直接用产品样式表（src/renderer/src/styles/globals.css），保证冒烟看到的是
+ * 真实主题变量与 Tailwind 工具类，而不是「长得差不多」的另一套样式。
+ *
+ * @source 是必需的：Tailwind v4 的自动源码探测以 vite root 为界，而 harness
+ * 的 root 是 tests/smoke/kb-graph（不在 src 下），不显式声明就会生成一份
+ * 不含任何产品工具类的 CSS —— 实测后果是画布容器高度为 0，点选/拖拽无法验证。
+ */
+@import '../../../src/renderer/src/styles/globals.css';
+@source '../../../src/renderer/src';

@@ -178,6 +178,47 @@ Wiki Layer 的 `[[wikilink]]` 引用关系被抽取为**知识图谱**（节点 
 
 **可视化采用力导向图**（sigma.js + graphology + ForceAtlas2 + Louvain，与 llm_wiki 同源），支持按社区着色、拖拽探索、节点点击跳转页面。注意这与 Dashboard 已有的 ECharts 是两套图形栈——ECharts 服务统计图表，sigma.js 服务 WebGL 大规模网络渲染，分工明确，不做统一。
 
+#### 图渲染选型实测（2026-09-14，issue 26）
+
+图 UI 的技术前提是「sigma 在这种 Electron + CSP + file:// 的组合下真的能跑」。参考仓库是 Tauri + 另一套 React 版本，**不能用同版本推定**，因此按 spec §11 的口径做了实测。
+
+**选定并钉死的精确版本**（全部 devDependencies：渲染进程由 vite 打包，不进打包后的 node_modules）：
+
+| 包 | 版本 | 许可证 | 角色 |
+| --- | --- | --- | --- |
+| `sigma` | **3.0.3** | MIT | WebGL 画布 |
+| `graphology` | **0.26.0** | MIT | 图数据结构 |
+| `graphology-layout-forceatlas2` | **0.10.1** | MIT | 力导向布局 |
+| `graphology-types` | **0.24.8** | MIT | 仅类型（peer 要求 ≥0.24） |
+
+**不引入的两个依赖**：`@react-sigma/core`（把画布生命周期交给 React 包装层，与「切库/卸载必须显式 terminate worker 并释放 WebGL 上下文」的要求相反，且多一层 React peer 兼容面）；`graphology-communities-louvain`（社区划分由主进程图洞察拥有，renderer 只消费 `WikiCommunitySummary`，重复实现会形成第二个拥有者）。
+
+**兼容结论（实测，非推定）**：
+
+| 项 | 实测结果 | 证据 |
+| --- | --- | --- |
+| Electron / Chromium | `v43.1.0`，Electron 内置 Node 24.18.0 | `electron.exe --version` |
+| WebGL | `WebGL 2.0 (OpenGL ES 3.0 Chromium)`，ANGLE D3D11，Intel Arc | 冒烟读取 `gl.getParameter` + `WEBGL_debug_renderer_info` |
+| **`file://` 下的 module worker** | **可用**（worker 内再 `import` 兄弟模块也成功）。生产 `loadFile` 加载渲染进程，这一条决定了能不能把布局放进 worker | worker-probe（`.scratch/llm-wiki/spikes/26-graph/worker-probe`）与冒烟 |
+| 产品 CSP 下的 worker | 可用。harness 的 CSP 与 `src/renderer/index.html` **逐字节一致**并在冒烟里断言 | 冒烟 check「harness 使用与产品一致的 CSP」 |
+| 无 CDN | 全部请求仅 `file://`；worker 脚本 URL 为本地 chunk 路径；无 CSP 拦截日志 | 冒烟拦截 `webRequest` 并断言 |
+| 首个可交互画面 | 8 页 fixture **228–530 ms**；1000 页 / 9987 边 **284–340 ms**（issue 30 门禁 ≤3 s） | 冒烟指标 `metrics.firstFrameMs` |
+| 卸载释放 | worker `created 1 / terminated 1`；WebGL 上下文 `created 5 / lost 5` | 冒烟 unmount 阶段断言 |
+
+**资源路径**：布局 worker 被 vite 打成同源本地 chunk（`assets/graph-layout.worker-<hash>.js`，182.5 kB，含 graphology + ForceAtlas2）；sigma（177.4 kB）与 graphology（136.2 kB）为**独立懒加载 chunk**，图视图不进入首屏关键路径。
+
+**实测带出的硬约束（都已修，写在这里避免后人重踩）**：
+
+1. **sigma 默认只注册 `circle` / `point` 两种节点程序**。`nodeReducer` 返回未注册的 `type`（如 `'border'`）会在**渲染时**抛错；而渲染由 React effect 触发，异常会顺着 effect 冒泡把整个视图卸载成空白。因此桥接节点强调只能改 `color` + `highlighted`，且渲染器的每个入口都必须 try/catch 后降级到邻接列表。
+2. **sigma 的鼠标 captor 在拖拽期间会阻止 `mousemove` 继续冒泡**（实测 window 上的 bubble 监听收不到）。节点拖拽的 `mousemove`/`mouseup` 监听必须挂 **capture 阶段**。
+3. **`downNode` 会被重复派发**。若每次都用当前坐标重置起点，「位移超过阈值才算拖拽」永远不成立，拖拽会被静默降级成点选；必须只在第一次记录起点。
+4. **Tailwind v4 的自动源码探测以 vite root 为界**。冒烟 harness 的 root 是 `tests/smoke/kb-graph`，不显式 `@source` 时生成的 CSS **不含任何产品工具类**，后果是画布容器高度为 0、点选与拖拽根本无法验证。
+5. **graphology / ForceAtlas2 只能存在于 worker chunk**。主线程降级路径若静态 import 它们，主 chunk 会背上约 270 kB（实测主 chunk 917 → 737 kB，gzip 158 → 133.7 kB）；降级路径改为动态 import 后二者落到独立 chunk。
+
+**可复现入口**：`npm run smoke:kb-graph`（构建 harness → 在真实 Electron 中跑 `webgl` / `no-webgl` / `large` 三个场景 → 报告写到 `.scratch/llm-wiki/spikes/26-graph/smoke-report.json`）。harness 通过 `--harness=<目录>` 指定加载位置，因此后续发布门禁（issue 30）可以直接把它指向安装包内的资源目录复述，而不需要另写一套。
+
+**未覆盖（明确交接）**：本次实测运行在生产构建产物 + 真实 Electron 运行时（`file://`、同款 CSP），**没有**复述 electron-builder 安装包内 `app.asar` 的加载路径；该复述属于 issue 30 的安装包门禁。
+
 ### 11. 直接替换现有实现，不做兼容与迁移
 
 本次重构直接改写 `src/main/kb/` 的既有实现。**不保留旧代码路径、不引入产品版本分支、不做旧布局兼容**：已注册的旧结构知识库（`sources/` + `docs/` + `index.md`）不再被识别，用户需重新建库并重新上传。

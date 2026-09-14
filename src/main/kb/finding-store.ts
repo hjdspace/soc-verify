@@ -18,8 +18,7 @@
  */
 
 import { join } from 'node:path';
-import { mkdir, readFile, rename, copyFile, readdir } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { mkdir, readFile, copyFile } from 'node:fs/promises';
 import { wikiLayout } from './wiki-layout';
 import { writeFileAtomic } from './atomic-commit';
 import type {
@@ -76,10 +75,6 @@ export async function readFindings(kbPath: string): Promise<WikiFindingListResul
 
   const findings = (data as unknown[]).filter(isValidFinding);
   return { ok: true, findings };
-}
-
-function isValidFindingsArray(data: unknown): data is WikiStructuralFinding[] {
-  return Array.isArray(data) && data.every(isValidFinding);
 }
 
 function isValidFinding(data: unknown): data is WikiStructuralFinding {
