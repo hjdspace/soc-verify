@@ -46,10 +46,11 @@ import { assertReadGateOpen, WikiReadGateError } from './read-gate';
 import { resolveCandidateSet, validateCandidateLinks } from './candidate-set';
 import type { CandidatePage } from './candidate-set';
 import {
-  saveCompileCache,
-  recordRejection,
-  type CompileCacheEntry,
+saveCompileCache,
+recordRejection,
+type CompileCacheEntry,
 } from './compile-cache';
+import { snapshotFilePath, ensureSnapshotDir } from './page-snapshots';
 import {
   buildWikiIndex,
   buildWikiOverview,
@@ -322,8 +323,10 @@ export async function buildPublishPlan(
   }
   const logContent = appendLogEntryIdempotent(logExisting, logEntry, commitId);
 
-  // 页面历史（每页一条，同 commitId 幂等）
+  // 页面历史与快照（每页一条，同 commitId 幂等）
+  // 快照存储发布后正文，供 issue 19 回滚读取历史版本内容
   const historyWrites: Array<{ relPath: string; content: string }> = [];
+  const snapshotWrites: Array<{ relPath: string; content: string }> = [];
   for (const c of candidates) {
     const historyPath = historyFilePath(kbPath, c.pageId);
     const historyExisting = await readTextOrNull(historyPath);
@@ -342,6 +345,12 @@ export async function buildPublishPlan(
       at: now,
     } satisfies WikiPageHistoryEntry);
     historyWrites.push({ relPath: relativeTo(kbPath, historyPath), content: historyContent });
+
+    // 页面快照（issue 19）：保存发布后正文供回滚读取
+    // 快照目录须在原子提交前创建（atomic-commit 只创建目标父目录）
+    await ensureSnapshotDir(kbPath, c.pageId);
+    const snapPath = snapshotFilePath(kbPath, c.pageId, commitId);
+    snapshotWrites.push({ relPath: relativeTo(kbPath, snapPath), content: c.content });
   }
 
   const manifestContent = JSON.stringify({
@@ -365,6 +374,7 @@ export async function buildPublishPlan(
     { relPath: 'wiki/overview.md', content: buildWikiOverview(postCatalog) },
     { relPath: 'wiki/log.md', content: logContent },
     ...historyWrites,
+    ...snapshotWrites,
     { relPath: relativeTo(kbPath, layout.manifestPath), content: manifestContent },
     { relPath: relativeTo(kbPath, join(layout.reviewsDir, `${cs.changeSetId}.json`)), content: reviewContent },
   ];

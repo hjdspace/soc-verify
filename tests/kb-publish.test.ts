@@ -205,6 +205,7 @@ describe('publishChangeSet — 新建页', () => {
     expect(rel).toEqual([
       '.kb/manifest.json',
       `.kb/page-history/concepts__axi.jsonl`,
+      `.kb/page-snapshots/concepts__axi/${built.plan.commitId}.md`,
       `.kb/reviews/${csId}.json`,
       'wiki/concepts/axi.md',
       'wiki/index.md',

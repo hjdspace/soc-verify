@@ -103,6 +103,8 @@ import {
 import { publishChangeSet } from '../../kb/publish';
 import { saveQueryMessages } from '../../kb/save-query';
 import type { SaveQueryOutcome } from '../../kb/save-query';
+import { readPageHistory, createRollbackProposal } from '../../kb/page-rollback';
+import type { RollbackOutcome, ReadHistoryOutcome } from '../../kb/page-rollback';
 import { assertReadGateOpen, WikiReadGateError } from '../../kb/read-gate';
 import type {
   KbRegistration,
@@ -1621,6 +1623,46 @@ export const kbRouter = t.router({
   // 引用给出明确错误。提案经既有 staging → 审阅 → 发布链路成为
   // wiki/queries/<pageId>.md，跳过文件转换/提图阶段。
   // 消息选择 hash + 引用修订去重，重复点击同一选择不创建重复任务。
+
+  // ─── kb.pageHistory（issue 19，spec §6） ─────────────────────
+  //
+  // 读取页面历史条目（旧/新内容 hash、操作类型与来源引用）。
+  // 历史按时间倒序排列，创建前不存在可表达（beforeHash=null）。
+
+  pageHistory: t.procedure
+    .input((raw): { pageId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.pageId !== 'string' || r.pageId.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'pageId is required' });
+      }
+      return { pageId: r.pageId.trim() };
+    })
+    .query(async ({ input }): Promise<ReadHistoryOutcome> => {
+      const kb = await getWikiMountedKb();
+      return readPageHistory(kb.path, input.pageId);
+    }),
+
+  // ─── kb.rollbackPage（issue 19，spec §6） ─────────────────────
+  //
+  // 从页面历史选一版回滚为新提案（origin='fix'），走既有 staging →
+  // 审阅 → 发布链路。不直接覆写：正式页在发布前保持不变。
+  // 保留原来源引用，使证据链可追溯。
+
+  rollbackPage: t.procedure
+    .input((raw): { pageId: string; targetCommitId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.pageId !== 'string' || r.pageId.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'pageId is required' });
+      }
+      if (typeof r.targetCommitId !== 'string' || r.targetCommitId.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'targetCommitId is required' });
+      }
+      return { pageId: r.pageId.trim(), targetCommitId: r.targetCommitId.trim() };
+    })
+    .mutation(async ({ input }): Promise<RollbackOutcome> => {
+      const kb = await getWikiMountedKb();
+      return createRollbackProposal(kb.path, { ...input, kbId: kb.kbId });
+    }),
 
   saveQuery: t.procedure
     .input((raw): {
