@@ -25,6 +25,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "smoke:kb-graph": "node scripts/kb-graph-smoke.mjs",
+    "bench:kb-quality": "node scripts/kb-quality-benchmark.mjs",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck:runner-pi": "tsc --noEmit -p tsconfig.runner-pi.json --composite false",
