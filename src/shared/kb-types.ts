@@ -145,7 +145,8 @@ export type KbErrorCode =
   | 'notMounted'          // 库未挂载到当前项目
   | 'alreadyMounted'      // 库已挂载到当前项目
   | 'structureIncompatible' // 目录结构不兼容
-  | 'deleteNotSupported'  // 删除库尚未支持（issue 01 范围外）；请使用注销
+  | 'deleteNotSupported'     // 删除库不支持（已挂载或目录不可访问）
+  | 'unknownFilesPresent'    // 库目录包含未知文件，拒绝递归删除（issue 20）
   | 'notAvailableForWikiLayout'; // 旧分类读写入口对新布局不可用（能力未就绪）
 
 /** 结构化错误 */
@@ -238,8 +239,12 @@ export type KbDocStatusEvent = {
 
 // ── Wiki 来源（LLM Wiki 新布局，spec §1）────────────────────────
 
-/** wiki 来源转换状态。failed 的错误码/信息持久于 manifest，重开可见 */
-export type WikiSourceStatus = 'ready' | 'converting' | 'failed';
+/**
+ * wiki 来源转换状态。failed 的错误码/信息持久于 manifest，重开可见。
+ * withdrawn = 来源已被用户撤回（issue 20）：原件和旧修订仍保留，
+ * 但来源不再活跃；引用此来源的页面标为待复核。
+ */
+export type WikiSourceStatus = 'ready' | 'converting' | 'failed' | 'withdrawn';
 
 /** manifest 中的来源修订记录（.kb/manifest.json 的 sources 字段） */
 export type WikiSourceRecord = {

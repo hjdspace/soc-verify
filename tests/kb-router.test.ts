@@ -671,16 +671,33 @@ describe('kb-router', () => {
   });
 
   describe('kb.deleteKb', () => {
-    it('删除库尚未支持，明确返回 deleteNotSupported', async () => {
+    it('成功删除已注册且无未知文件的库', async () => {
       const kbDir = makeEmptyDir('del-kb');
       const id = regId(await caller.register({ name: '待删库', path: kbDir }));
 
       const result = await caller.deleteKb({ kbId: id });
-      const err = errOf(result);
-      expect(err.code).toBe('deleteNotSupported');
-      expect(err.message).toContain('注销');
+      expect(result.ok).toBe(true);
 
-      // 登记未被破坏
+      // 库目录被删除
+      expect(existsSync(kbDir)).toBe(false);
+
+      // 登记已移除
+      const list: KbListEntry[] = await caller.list({});
+      expect(list).toHaveLength(0);
+    });
+
+    it('已挂载的库不可直接删除', async () => {
+      const kbDir = makeEmptyDir('del-mounted-kb');
+      const id = regId(await caller.register({ name: '挂载中库', path: kbDir }));
+      await caller.mount({ kbId: id });
+
+      const result = await caller.deleteKb({ kbId: id });
+      const err = errOf(result);
+      expect(err.code).toBe('alreadyMounted');
+      expect(err.message).toContain('卸载');
+
+      // 库和登记仍在
+      expect(existsSync(kbDir)).toBe(true);
       const list: KbListEntry[] = await caller.list({});
       expect(list).toHaveLength(1);
     });

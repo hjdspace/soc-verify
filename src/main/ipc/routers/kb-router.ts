@@ -6,7 +6,7 @@
  *   - kb.register        注册知识库（空目录初始化 wiki 布局 / wiki 目录读取
  *                        库内 kbId；复制库冲突时 asCopy 注册为副本）
  *   - kb.unregister      注销知识库（不删除文件；已挂载的库不可注销）
- *   - kb.deleteKb        删除库（尚未支持，返回 deleteNotSupported）
+ *   - kb.deleteKb        删除库（issue 20：范围预览 + 拒绝未知文件 + 安全删除）
  *   - kb.disposals       旧格式处置记录查询
  *   - kb.dismissDisposal 移除处置记录（不触碰库目录）
  *   - kb.mount           挂载知识库到项目（v1 上限 1；wiki 库挂载时执行事务恢复）
@@ -105,6 +105,12 @@ import { saveQueryMessages } from '../../kb/save-query';
 import type { SaveQueryOutcome } from '../../kb/save-query';
 import { readPageHistory, createRollbackProposal } from '../../kb/page-rollback';
 import type { RollbackOutcome, ReadHistoryOutcome } from '../../kb/page-rollback';
+import {
+  withdrawSource,
+  previewDeleteKb,
+  type WithdrawResult,
+  type DeletePreviewResult,
+} from '../../kb/source-disposal';
 import { assertReadGateOpen, WikiReadGateError } from '../../kb/read-gate';
 import type {
   KbRegistration,
@@ -1705,5 +1711,62 @@ export const kbRouter = t.router({
     .mutation(async ({ input }): Promise<SaveQueryOutcome> => {
       const kb = await getWikiMountedKb();
       return saveQueryMessages(kb.path, { ...input, kbId: kb.kbId });
+    }),
+
+  // ─── kb.withdrawSource（issue 20，spec §1/§10） ──────────────
+  //
+  // 来源撤回：标 withdrawn、计算受影响页面、保留旧证据。
+  // 不删除原件、不级联删知识页。受影响页标为待复核。
+
+  withdrawSource: t.procedure
+    .input((raw): { sourceId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.sourceId !== 'string' || r.sourceId.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'sourceId is required' });
+      }
+      return { sourceId: r.sourceId.trim() };
+    })
+    .mutation(async ({ input }): Promise<WithdrawResult> => {
+      const kb = await getWikiMountedKb();
+      return withdrawSource(kb.path, input.sourceId);
+    }),
+
+  // ─── kb.previewDeleteKb（issue 20，spec §10） ─────────────────
+  //
+  // 删除库范围预览：列出受管资产范围，检测未知文件。
+
+  previewDeleteKb: t.procedure
+    .input((raw): { kbId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.kbId !== 'string' || r.kbId.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'kbId is required' });
+      }
+      return { kbId: r.kbId.trim() };
+    })
+    .query(async ({ input }): Promise<DeletePreviewResult> => {
+      // 从注册表查找库路径
+      const rootPath = activeProject().rootPath;
+      const status = await kbRegistry.status(rootPath);
+      // 先尝试已挂载库
+      if (status.mounted && status.mounted.kbId === input.kbId) {
+        return previewDeleteKb(status.mounted.path);
+      }
+      // 未挂载时从注册表查找路径
+      const entries = await kbRegistry.list(rootPath);
+      const entry = entries.find((e) => e.id === input.kbId);
+      if (!entry) {
+        return {
+          canDelete: false,
+          wikiPageCount: 0,
+          sourceCount: 0,
+          hasPageHistory: false,
+          hasStaging: false,
+          hasTransactions: false,
+          hasVectors: false,
+          hasVision: false,
+          unknownFiles: ['<库未注册或不可访问>'],
+        };
+      }
+      return previewDeleteKb(entry.path);
     }),
 });

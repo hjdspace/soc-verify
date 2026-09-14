@@ -415,14 +415,56 @@ async function unregister(kbId: string, projectRoot: string): Promise<KbResult<v
 /**
  * 删除知识库。
  *
- * issue 01 范围外：删除库需要先展示受管资产/历史范围并拒绝在含未知
- * 文件的目录上递归删除。当前一律拒绝，注销（不删文件）仍可用。
+ * issue 20：从 stub 变为实际实现——先检查目录是否含未知文件，
+ * 拒绝在含未知文件的目录上递归删除；然后从注册表中移除并删除库目录。
+ *
+ * 如果库已挂载，应先由调用方 detach 队列并 unmount；
+ * 此处额外检查并拒绝直接删除已挂载的库。
  */
-async function deleteKb(_kbId: string, _projectRoot: string): Promise<KbResult<void>> {
-  return {
-    ok: false,
-    error: makeError('deleteNotSupported', '删除库功能尚未支持；请使用注销（不删除任何文件）'),
-  };
+async function deleteKb(kbId: string, projectRoot: string): Promise<KbResult<void>> {
+  const existing = await loadRegistry();
+  const entry = existing.find((e) => e.id === kbId);
+  if (!entry) {
+    return { ok: false, error: makeError('notRegistered', '知识库未注册') };
+  }
+
+  // 校验未被当前项目挂载
+  const mounts = await loadMounts(projectRoot);
+  if (mounts.some((m) => m.kbId === kbId)) {
+    return {
+      ok: false,
+      error: makeError('alreadyMounted', '库已挂载到当前项目，请先卸载'),
+    };
+  }
+
+  // 范围预览：检测未知文件
+  const { previewDeleteKb } = await import('./source-disposal');
+  const preview = await previewDeleteKb(entry.path);
+  if (!preview.canDelete) {
+    return {
+      ok: false,
+      error: makeError(
+        'unknownFilesPresent',
+        `库目录包含未知文件，拒绝递归删除: ${preview.unknownFiles.join(', ')}`,
+      ),
+    };
+  }
+
+  // 从注册表移除
+  await saveRegistry(existing.filter((e) => e.id !== kbId));
+
+  // 删除库目录
+  const { rm } = await import('node:fs/promises');
+  try {
+    await rm(entry.path, { recursive: true, force: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // 目录删除失败但注册表已移除——记录但不回滚注册表
+    // （用户可手动删除目录或重新注册处理）
+    console.error(`[kb] 删除库目录失败 (${entry.path}): ${msg}`);
+  }
+
+  return { ok: true, data: undefined };
 }
 
 /** 列出所有已注册的知识库（含格式与可达性状态） */
