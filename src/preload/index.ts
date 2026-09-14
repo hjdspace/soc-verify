@@ -433,30 +433,6 @@ process.once('loaded', async () => {
       return () => ipcRenderer.removeListener('kb:docStatus', handler);
     },
 
-    // ── 知识库深度重建进度事件（Issue #7）────────────────────────
-    // kb:deepReindex —— 主进程推送深度重建进度（processing/completed/failed）
-    onKbDeepReindex: (
-      callback: (data: {
-        phase: 'processing' | 'completed' | 'failed';
-        current?: number;
-        total?: number;
-        message: string;
-        error?: string;
-      }) => void,
-    ) => {
-      const handler = (
-        _event: Electron.IpcRendererEvent,
-        data: {
-          phase: 'processing' | 'completed' | 'failed';
-          current?: number;
-          total?: number;
-          message: string;
-          error?: string;
-        },
-      ) => callback(data);
-      ipcRenderer.on('kb:deepReindex', handler);
-      return () => ipcRenderer.removeListener('kb:deepReindex', handler);
-    },
 
     // ── 知识库导入队列事件（issue 03）────────────────────────
     // kb:task —— 主进程推送队列任务/队列状态事件（带 kbId 与单调 seq；

@@ -5,7 +5,7 @@ import React from 'react';
 
 // ─── Hoisted mock data ──────────────────────────────────────
 
-const { mockKbList, mockKbStatus, mockCategories, mockDocuments } = vi.hoisted(() => {
+const { mockKbList, mockKbStatus, mockKbStatusLegacy, mockCategories, mockDocuments } = vi.hoisted(() => {
   const mockKbList = [
     {
       id: 'kb-1',
@@ -42,6 +42,19 @@ const { mockKbList, mockKbStatus, mockCategories, mockDocuments } = vi.hoisted((
     },
     health: { hasSources: false, hasDocs: false, hasIndex: false },
     wikiHealth: { hasSchema: true, hasPurpose: true, hasManifest: true, hasRaw: true, hasWiki: true },
+  };
+
+  const mockKbStatusLegacy = {
+    mounted: {
+      kbId: 'kb-1',
+      mountedAt: 1700000002000,
+      name: '芯片验证文档库',
+      path: 'D:\\docs\\soc-kb',
+      format: 'legacy' as const,
+      state: 'ok' as const,
+    },
+    health: { hasSources: true, hasDocs: true, hasIndex: true },
+    wikiHealth: null,
   };
 
   const mockCategories = [
@@ -102,7 +115,7 @@ const { mockKbList, mockKbStatus, mockCategories, mockDocuments } = vi.hoisted((
     },
   ];
 
-  return { mockKbList, mockKbStatus, mockCategories, mockDocuments };
+  return { mockKbList, mockKbStatus, mockKbStatusLegacy, mockCategories, mockDocuments };
 });
 
 // ─── Mock tRPC ──────────────────────────────────────────────
@@ -125,7 +138,6 @@ vi.mock('@renderer/lib/trpc', () => ({
       dismissDisposal: { mutate: vi.fn().mockResolvedValue({ ok: true }) },
       index: { mutate: vi.fn().mockResolvedValue({ content: '# 知识库索引\n\n## 协议手册\n\n### AMBA AXI 协议规范 v4.1\n- **路径**: `协议手册/AMBA_AXI_v4.1.md`\n- **摘要**: AXI4 协议规范\n- **关键词**: `AXI` · `总线`\n' }) },
       preview: { query: vi.fn().mockResolvedValue({ content: '# AMBA AXI 协议规范 v4.1\n\nAXI4 通道信号定义。\n\n## Chapter A2' }) },
-      moveCategory: { mutate: vi.fn().mockResolvedValue({ ok: true, newPath: 'D:\\docs\\kb\\docs\\新分类\\test.md' }) },
       pickFiles: { mutate: vi.fn().mockResolvedValue({ canceled: true }) },
     },
     project: {
@@ -180,7 +192,6 @@ beforeEach(() => {
         if (idx >= 0) kbDocStatusCallbacks.splice(idx, 1);
       };
     },
-    onKbDeepReindex: () => () => {},
   };
 });
 
@@ -276,14 +287,14 @@ describe('KbView', () => {
       // Re-set mock default returns (vi.clearAllMocks doesn't clear implementations
       // but unmounted-state's beforeEach may have overridden them)
       const { trpc } = await import('@renderer/lib/trpc');
-      vi.mocked(trpc.kb.status.query).mockResolvedValue(mockKbStatus);
+      vi.mocked(trpc.kb.status.query).mockResolvedValue(mockKbStatusLegacy);
       vi.mocked(trpc.kb.list.query).mockResolvedValue(mockKbList);
       vi.mocked(trpc.kb.categories.query).mockResolvedValue(mockCategories);
       vi.mocked(trpc.kb.documents.query).mockResolvedValue(mockDocuments);
 
       useKbStore.setState({
         kbList: mockKbList,
-        kbStatus: mockKbStatus,
+        kbStatus: mockKbStatusLegacy,
         kbStatusLoading: false,
         categories: mockCategories,
         categoriesLoading: false,
@@ -299,18 +310,21 @@ describe('KbView', () => {
     });
 
     it('renders library path with format', () => {
+      useKbStore.setState({ kbStatus: mockKbStatus });
       render(<KbView />);
 
       expect(screen.getByText(/D:\\docs\\soc-kb · wiki/)).toBeTruthy();
     });
 
     it('renders wiki capability banner for wiki-format mount', () => {
+      useKbStore.setState({ kbStatus: mockKbStatus });
       render(<KbView />);
 
       expect(screen.getByText(/新布局（LLM Wiki）知识库已挂载/)).toBeTruthy();
     });
 
     it('disables upload button for wiki-format mount', () => {
+      useKbStore.setState({ kbStatus: mockKbStatus });
       render(<KbView />);
 
       const uploadButton = screen.getByText('上传文档').closest('button');
@@ -319,6 +333,7 @@ describe('KbView', () => {
     });
 
     it('renders manifest readiness label instead of index for wiki mount', () => {
+      useKbStore.setState({ kbStatus: mockKbStatus });
       render(<KbView />);
 
       expect(screen.getByText('清单')).toBeTruthy();
@@ -733,79 +748,6 @@ describe('KbView', () => {
       });
     });
 
-    // ── 深度重建按钮（Issue #7）──────────────────────────────
-
-    it('renders deep reindex button in index tab', async () => {
-      render(<KbView />);
-
-      await waitFor(() => {
-        expect(screen.getByText('库索引 index.md')).toBeTruthy();
-      });
-      fireEvent.click(screen.getByText('库索引 index.md'));
-
-      await waitFor(() => {
-        expect(screen.getByText('深度重建')).toBeTruthy();
-      });
-    });
-
-    it('shows confirmation dialog when deep reindex button clicked', async () => {
-      render(<KbView />);
-
-      await waitFor(() => {
-        expect(screen.getByText('库索引 index.md')).toBeTruthy();
-      });
-      fireEvent.click(screen.getByText('库索引 index.md'));
-
-      await waitFor(() => {
-        expect(screen.getByText('深度重建')).toBeTruthy();
-      });
-      fireEvent.click(screen.getByText('深度重建'));
-
-      await waitFor(() => {
-        expect(screen.getByText('确认深度重建索引？')).toBeTruthy();
-        expect(screen.getByText('确认重建')).toBeTruthy();
-      });
-    });
-
-    it('closes confirmation dialog on cancel', async () => {
-      render(<KbView />);
-
-      await waitFor(() => {
-        expect(screen.getByText('库索引 index.md')).toBeTruthy();
-      });
-      fireEvent.click(screen.getByText('库索引 index.md'));
-
-      await waitFor(() => {
-        expect(screen.getByText('深度重建')).toBeTruthy();
-      });
-      fireEvent.click(screen.getByText('深度重建'));
-
-      await waitFor(() => {
-        expect(screen.getByText('确认深度重建索引？')).toBeTruthy();
-      });
-      fireEvent.click(screen.getByText('取消'));
-
-      await waitFor(() => {
-        expect(screen.queryByText('确认深度重建索引？')).toBeNull();
-      });
-    });
-
-    it('shows deep reindexing state when in progress', async () => {
-      useKbStore.setState({
-        kbStatus: mockKbStatus,
-        activeTab: 'index',
-        indexContent: '# 知识库索引',
-        deepReindexing: true,
-        deepReindexProgress: { current: 2, total: 5, message: '正在处理第 2/5 篇文档' },
-      });
-
-      render(<KbView />);
-
-      await waitFor(() => {
-        expect(screen.getByText('深度重建中...')).toBeTruthy();
-      });
-    });
-
     // ── 预览 Tab ─────────────────────────────────────────────
 
     it('opens preview when document row is clicked', async () => {
@@ -859,100 +801,6 @@ describe('KbView', () => {
       });
     });
 
-    it('renders move category button in preview sidebar', async () => {
-      useKbStore.setState({
-        previewDocName: 'AMBA AXI 协议规范 v4.1',
-        previewContent: '# Test',
-        activeTab: 'preview',
-        documents: mockDocuments,
-      });
-
-      render(<KbView />);
-
-      await waitFor(() => {
-        expect(screen.getByText('移动分类')).toBeTruthy();
-      });
-    });
-
-    it('shows category list when move category button clicked', async () => {
-      useKbStore.setState({
-        previewDocName: 'AMBA AXI 协议规范 v4.1',
-        previewContent: '# Test',
-        activeTab: 'preview',
-        documents: mockDocuments,
-        categories: mockCategories,
-      });
-
-      render(<KbView />);
-
-      await waitFor(() => {
-        expect(screen.getByText('移动分类')).toBeTruthy();
-      });
-
-      fireEvent.click(screen.getByText('移动分类'));
-
-      await waitFor(() => {
-        // Categories appear in both sidebar tree and move menu
-        const dvtElements = screen.getAllByText('DVT 计划');
-        expect(dvtElements.length).toBeGreaterThanOrEqual(1);
-        const regElements = screen.getAllByText('寄存器手册');
-        expect(regElements.length).toBeGreaterThanOrEqual(1);
-      });
-    });
-
-    it('triggers moveCategory when a category is selected', async () => {
-      useKbStore.setState({
-        previewDocName: 'AMBA AXI 协议规范 v4.1',
-        previewContent: '# Test',
-        activeTab: 'preview',
-        documents: mockDocuments,
-        categories: mockCategories,
-      });
-
-      render(<KbView />);
-
-      await waitFor(() => {
-        expect(screen.getByText('移动分类')).toBeTruthy();
-      });
-
-      fireEvent.click(screen.getByText('移动分类'));
-
-      // Wait for move menu to appear
-      await waitFor(() => {
-        const allDvt = screen.getAllByText('DVT 计划');
-        expect(allDvt.length).toBeGreaterThanOrEqual(2);
-      });
-
-      // Click the DVT in the move menu (the last one, which is in the sidebar info panel)
-      const allDvt = screen.getAllByText('DVT 计划');
-      fireEvent.click(allDvt[allDvt.length - 1]);
-
-      const { trpc } = await import('@renderer/lib/trpc');
-      await waitFor(() => {
-        expect(trpc.kb.moveCategory.mutate).toHaveBeenCalledWith({
-          name: 'AMBA AXI 协议规范 v4.1',
-          category: 'DVT 计划',
-        });
-      });
-    });
-
-    // ── AI 摘要卡 ───────────────────────────────────────────
-
-    it('renders AI summary card when index has entry for doc', async () => {
-      useKbStore.setState({
-        previewDocName: 'AMBA AXI 协议规范 v4.1',
-        previewContent: '# Test',
-        activeTab: 'preview',
-        documents: mockDocuments,
-        indexContent: '# 知识库索引\n\n## 协议手册\n\n### AMBA AXI 协议规范 v4.1\n- **路径**: `协议手册/AMBA AXI 协议规范 v4.1.md`\n- **摘要**: AXI4 协议规范\n- **关键词**: `AXI` · `总线`\n',
-      });
-
-      render(<KbView />);
-
-      await waitFor(() => {
-        expect(screen.getByText('AI 摘要')).toBeTruthy();
-      });
-    });
   });
 });
 

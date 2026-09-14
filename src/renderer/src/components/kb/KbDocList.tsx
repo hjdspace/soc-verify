@@ -12,7 +12,7 @@
  */
 
 import { useCallback, useState } from 'react';
-import { Upload, RotateCcw, Trash2, FileText, AlertCircle, Sparkles, Loader2 } from 'lucide-react';
+import { Upload, RotateCcw, Trash2, FileText, AlertCircle } from 'lucide-react';
 import { useKbStore, type KbDocument } from '@renderer/stores/kb';
 import { cn } from '@renderer/lib/utils';
 
@@ -134,11 +134,9 @@ export function KbDocList() {
   const loading = useKbStore((s) => s.documentsLoading);
   const retryDocument = useKbStore((s) => s.retryDocument);
   const deleteDocument = useKbStore((s) => s.deleteDocument);
-  const reclassifyDocument = useKbStore((s) => s.reclassifyDocument);
   const openPreview = useKbStore((s) => s.openPreview);
   const [dragOver, setDragOver] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
-  const [reclassifying, setReclassifying] = useState<string | null>(null);
 
   // ── 分类筛选 ─────────────────────────────────────────────
   const filteredDocs = selectedCategory
@@ -173,13 +171,6 @@ export function KbDocList() {
   const handleRetry = useCallback((name: string) => {
     void retryDocument(name);
   }, [retryDocument]);
-
-  // ── AI 重新分类 ─────────────────────────────────────────
-  const handleReclassify = useCallback(async (name: string) => {
-    setReclassifying(name);
-    await reclassifyDocument(name);
-    setReclassifying(null);
-  }, [reclassifyDocument]);
 
   // ── 删除（带确认） ───────────────────────────────────────
   const handleDelete = useCallback((name: string) => {
@@ -297,34 +288,6 @@ export function KbDocList() {
                 {/* 行内操作 */}
                 <td className="px-3 py-2">
                   <div className="flex items-center justify-end gap-1">
-                    {doc.status === 'done' && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void handleReclassify(doc.name);
-                        }}
-                        disabled={reclassifying === doc.name}
-                        title={
-                          reclassifying === doc.name
-                            ? 'AI 分析中...'
-                            : doc.aiDegraded
-                              ? 'AI 重新分类并生成摘要（当前未分类，建议重试）'
-                              : 'AI 重新分类并重新生成摘要'
-                        }
-                        className={cn(
-                          'rounded p-1 transition-colors hover:bg-accent disabled:opacity-50',
-                          doc.aiDegraded
-                            ? 'text-warning-foreground hover:text-warning-foreground'
-                            : 'text-muted-foreground hover:text-foreground',
-                        )}
-                      >
-                        {reclassifying === doc.name ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <Sparkles className="h-3.5 w-3.5" />
-                        )}
-                      </button>
-                    )}
                     {doc.status === 'failed' && (
                       <button
                         onClick={(e) => {

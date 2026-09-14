@@ -12,8 +12,7 @@
  *   - kb.mount           挂载知识库到项目（v1 上限 1；wiki 库挂载时执行事务恢复）
  *   - kb.unmount         卸载知识库
  *   - kb.status          当前挂载库 + 健康检查（legacy health + wikiHealth）
- *   - kb.upload / documents / delete / retry / categories / index / preview /
- *     moveCategory / renameCategory / reclassify / deepReindex
+ *   - kb.upload / documents / delete / retry / categories / index / preview
  *                        旧分类读写入口——挂载 wiki 布局库时明确不可用
  *                        （notAvailableForWikiLayout），能力由后继票接入
  *   - kb.importSources / sources / sourceParsed / sourceRevisions /
@@ -39,7 +38,6 @@
 
 import { dialog } from 'electron';
 import { t, TRPCError } from '../router-context';
-import { projectManager } from '../../project/project-manager';
 import { activeProject } from '../../services/project-service';
 import { broadcastToWindows } from '../broadcast';
 import { kbRegistry } from '../../kb/registry';
@@ -52,11 +50,7 @@ import {
   readIndexMd,
   writeIndexMd,
   readMarkdownDoc,
-  moveDocumentCategory,
-  renameCategory,
-  reclassifyDocument,
 } from '../../kb/pipeline';
-import { deepReindex, type DeepReindexEvent } from '../../kb/deep-reindexer';
 import { resolveKbLlmConfig } from '../../kb/llm-config';
 import { kbSettingsManager, ENGINE_IDS, type KbSettings } from '../../kb/kb-settings';
 import { listConvertEngines, type ConvertEngineInfo } from '../../kb/engines';
@@ -373,13 +367,6 @@ function queueErrorResult(err: unknown): { ok: false; error: { code: WikiQueueEr
  */
 function notifyKbStatus(event: KbDocStatusEvent): void {
   broadcastToWindows('kb:docStatus', event);
-}
-
-/**
- * 推送深度重建进度事件到所有窗口。
- */
-function notifyKbDeepReindex(event: DeepReindexEvent): void {
-  broadcastToWindows('kb:deepReindex', event);
 }
 
 export const kbRouter = t.router({
@@ -731,111 +718,6 @@ export const kbRouter = t.router({
       const kbPath = await getLegacyMountedKbPath();
       const content = await readMarkdownDoc(kbPath, input.name);
       return { content };
-    }),
-
-  // ─── kb.moveCategory ────────────────────────────────────────
-
-  moveCategory: t.procedure
-    .input((raw): { name: string; category: string } => {
-      const r = raw as Record<string, unknown>;
-      if (typeof r.name !== 'string' || r.name.trim().length === 0) {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'name is required' });
-      }
-      if (typeof r.category !== 'string' || r.category.trim().length === 0) {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'category is required' });
-      }
-      return { name: r.name.trim(), category: r.category.trim() };
-    })
-    .mutation(async ({ input }): Promise<{ ok: true; newPath: string } | { ok: false; error: { code: string; message: string } }> => {
-      const kbPath = await getLegacyMountedKbPath();
-      const newPath = await moveDocumentCategory(kbPath, input.name, input.category);
-      if (newPath === null) {
-        return { ok: false, error: { code: 'notFound', message: `文档未找到: ${input.name}` } };
-      }
-      return { ok: true, newPath };
-    }),
-
-  // ─── kb.renameCategory ──────────────────────────────────────
-
-  renameCategory: t.procedure
-    .input((raw): { oldName: string; newName: string } => {
-      const r = raw as Record<string, unknown>;
-      if (typeof r.oldName !== 'string' || r.oldName.trim().length === 0) {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'oldName is required' });
-      }
-      if (typeof r.newName !== 'string' || r.newName.trim().length === 0) {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'newName is required' });
-      }
-      return { oldName: r.oldName.trim(), newName: r.newName.trim() };
-    })
-    .mutation(async ({ input }): Promise<{ ok: true } | { ok: false; error: { code: string; message: string } }> => {
-      const kbPath = await getLegacyMountedKbPath();
-      const success = await renameCategory(kbPath, input.oldName, input.newName);
-      if (!success) {
-        return { ok: false, error: { code: 'notFound', message: `分类不存在: ${input.oldName}` } };
-      }
-      return { ok: true };
-    }),
-
-  // ─── kb.reclassify ─────────────────────────────────────────
-  //
-  // AI 重新分类单个文档并重新生成标题/摘要/关键词。
-  // 分类变化时自动移动文件到新分类目录并同步 index.md 路径。
-  // 无 LLM 配置或调用失败时返回明确错误（不降级）。
-
-  reclassify: t.procedure
-    .input((raw): { name: string } => {
-      const r = raw as Record<string, unknown>;
-      if (typeof r.name !== 'string' || r.name.trim().length === 0) {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'name is required' });
-      }
-      return { name: r.name.trim() };
-    })
-    .mutation(async ({ input }): Promise<
-      { ok: true; category: string; title: string; summary: string; keywords: string[]; moved: boolean }
-      | { ok: false; error: { code: string; message: string } }
-    > => {
-      const kbPath = await getLegacyMountedKbPath();
-      const llmConfig = await resolveKbLlmConfig();
-      const result = await reclassifyDocument(kbPath, input.name, llmConfig);
-      if (!result.ok) {
-        return result;
-      }
-      return {
-        ok: true,
-        category: result.entry.category,
-        title: result.entry.title,
-        summary: result.entry.summary,
-        keywords: result.entry.keywords,
-        moved: result.moved,
-      };
-    }),
-
-  // ─── kb.deepReindex ────────────────────────────────────────
-
-  deepReindex: t.procedure
-    .input((_raw): Record<string, never> => {
-      return {};
-    })
-    .mutation(async (): Promise<{ ok: true; sessionId: string; documentCount: number } | { ok: false; error: { code: string; message: string } }> => {
-      const kbPath = await getLegacyMountedKbPath();
-      const rootPath = activeProject().rootPath;
-      const project = projectManager.getProjectByPath(rootPath);
-      if (!project) {
-        return { ok: false, error: { code: 'noProject', message: '未找到活跃项目' } };
-      }
-
-      const result = await deepReindex({
-        kbPath,
-        projectId: project.id,
-        cwd: rootPath,
-        notify: notifyKbDeepReindex,
-      });
-
-      if (result.ok) {
-        return { ok: true, sessionId: result.sessionId, documentCount: result.documentCount };
-      }
-      return { ok: false, error: result.error };
     }),
 
   // ─── kb.getSettings ────────────────────────────────────────

@@ -53,8 +53,6 @@ vi.mock('../src/main/credentials/credential-manager', () => ({
   },
 }));
 
-vi.mock('../src/main/kb/deep-reindexer', () => ({ deepReindex: vi.fn() }));
-
 vi.mock('@firecrawl/anydoc', () => ({
   toDocument: vi.fn(),
   toMarkdownBytes: vi.fn(),

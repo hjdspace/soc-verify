@@ -119,10 +119,6 @@ vi.mock('@renderer/lib/trpc', () => ({
       dismissDisposal: { mutate: vi.fn().mockResolvedValue({ ok: true }) },
       index: { mutate: vi.fn().mockResolvedValue({ content: '# 知识库索引\n\n## 协议手册\n' }) },
       preview: { query: vi.fn().mockResolvedValue({ content: '# 测试文档\n\n内容' }) },
-      moveCategory: { mutate: vi.fn().mockResolvedValue({ ok: true, newPath: 'D:\\docs\\kb\\docs\\新分类\\test.md' }) },
-      renameCategory: { mutate: vi.fn().mockResolvedValue({ ok: true }) },
-      reclassify: { mutate: vi.fn().mockResolvedValue({ ok: true, category: '验证方法', title: '测试文档', summary: '新摘要', keywords: ['UVM'], moved: true }) },
-      deepReindex: { mutate: vi.fn().mockResolvedValue({ ok: true, sessionId: 'temp-session-1', documentCount: 3 }) },
       pickFiles: { mutate: vi.fn().mockResolvedValue({ canceled: true }) },
       getSettings: {
         query: vi.fn().mockResolvedValue({
@@ -191,8 +187,6 @@ function resetKbStore() {
     indexLoading: false,
     indexEditing: false,
     indexSaving: false,
-    deepReindexing: false,
-    deepReindexProgress: null,
     previewDocName: null,
     previewContent: null,
     previewLoading: false,
@@ -397,30 +391,6 @@ describe('KbStore', () => {
       expect(toastMocks.success).not.toHaveBeenCalled();
       expect(toastMocks.warning).toHaveBeenCalled();
       expect(useKbStore.getState().uploading).toBe(false);
-    });
-  });
-
-  // ── AI 重新分类 ─────────────────────────────────────────
-
-  describe('reclassifyDocument', () => {
-    it('calls tRPC reclassify and refreshes', async () => {
-      await useKbStore.getState().reclassifyDocument('AMBA AXI');
-
-      const { trpc } = await import('@renderer/lib/trpc');
-      expect(trpc.kb.reclassify.mutate).toHaveBeenCalledWith({ name: 'AMBA AXI' });
-    });
-
-    it('handles noLlmConfig failure without throwing', async () => {
-      const { trpc } = await import('@renderer/lib/trpc');
-      vi.mocked(trpc.kb.reclassify.mutate).mockResolvedValueOnce({
-        ok: false as const,
-        error: { code: 'noLlmConfig', message: '未配置 LLM 凭证' },
-      });
-
-      const result = await useKbStore.getState().reclassifyDocument('AMBA AXI');
-
-      expect(result).toBe(false);
-      expect(trpc.kb.reclassify.mutate).toHaveBeenCalled();
     });
   });
 
@@ -787,125 +757,6 @@ describe('KbStore', () => {
       await useKbStore.getState().loadPreview('fail');
       expect(useKbStore.getState().previewLoading).toBe(false);
       expect(useKbStore.getState().previewContent).toBeNull();
-    });
-  });
-
-  // ── 移动分类 ─────────────────────────────────────────────
-
-  describe('moveCategory', () => {
-    it('calls tRPC moveCategory and refreshes', async () => {
-      const result = await useKbStore.getState().moveCategory('AMBA AXI', '新分类');
-      expect(result).toBe(true);
-      const { trpc } = await import('@renderer/lib/trpc');
-      expect(trpc.kb.moveCategory.mutate).toHaveBeenCalledWith({ name: 'AMBA AXI', category: '新分类' });
-    });
-
-    it('returns false on failure', async () => {
-      const { trpc } = await import('@renderer/lib/trpc');
-      vi.mocked(trpc.kb.moveCategory.mutate).mockResolvedValueOnce({
-        ok: false as const,
-        error: { code: 'notFound', message: 'Document not found' },
-      });
-      const result = await useKbStore.getState().moveCategory('missing', '分类');
-      expect(result).toBe(false);
-    });
-
-    it('handles network error gracefully', async () => {
-      const { trpc } = await import('@renderer/lib/trpc');
-      vi.mocked(trpc.kb.moveCategory.mutate).mockRejectedValueOnce(new Error('Network error'));
-      const result = await useKbStore.getState().moveCategory('test', '分类');
-      expect(result).toBe(false);
-    });
-  });
-
-  // ── 深度重建（Issue #7）─────────────────────────────────
-
-  describe('deepReindex', () => {
-    it('calls tRPC deepReindex and refreshes on success', async () => {
-      await useKbStore.getState().deepReindex();
-      const { trpc } = await import('@renderer/lib/trpc');
-      expect(trpc.kb.deepReindex.mutate).toHaveBeenCalledWith({});
-      expect(useKbStore.getState().deepReindexing).toBe(false);
-    });
-
-    it('sets deepReindexing flag during operation', async () => {
-      const { trpc } = await import('@renderer/lib/trpc');
-      vi.mocked(trpc.kb.deepReindex.mutate).mockImplementationOnce(
-        () => new Promise((resolve) => setTimeout(() => resolve({ ok: true, sessionId: 'temp', documentCount: 5 }), 50)),
-      );
-      const promise = useKbStore.getState().deepReindex();
-      expect(useKbStore.getState().deepReindexing).toBe(true);
-      await promise;
-      expect(useKbStore.getState().deepReindexing).toBe(false);
-    });
-
-    it('handles failure gracefully', async () => {
-      const { trpc } = await import('@renderer/lib/trpc');
-      vi.mocked(trpc.kb.deepReindex.mutate).mockResolvedValueOnce({
-        ok: false as const,
-        error: { code: 'sessionFailed', message: 'LLM error' },
-      });
-      await useKbStore.getState().deepReindex();
-      expect(useKbStore.getState().deepReindexing).toBe(false);
-    });
-
-    it('handles network error gracefully', async () => {
-      const { trpc } = await import('@renderer/lib/trpc');
-      vi.mocked(trpc.kb.deepReindex.mutate).mockRejectedValueOnce(new Error('Network error'));
-      await useKbStore.getState().deepReindex();
-      expect(useKbStore.getState().deepReindexing).toBe(false);
-    });
-
-    it('prevents duplicate calls when already reindexing', async () => {
-      const { trpc } = await import('@renderer/lib/trpc');
-      vi.mocked(trpc.kb.deepReindex.mutate).mockImplementationOnce(
-        () => new Promise((resolve) => setTimeout(() => resolve({ ok: true, sessionId: 'temp', documentCount: 1 }), 50)),
-      );
-      const firstPromise = useKbStore.getState().deepReindex();
-      // Second call while first is in-flight should be ignored
-      await useKbStore.getState().deepReindex();
-      await firstPromise;
-      expect(trpc.kb.deepReindex.mutate).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  // ── 深度重建进度事件 ───────────────────────────────────────
-
-  describe('handleDeepReindexEvent', () => {
-    it('sets deepReindexing and progress on processing event', () => {
-      useKbStore.getState().handleDeepReindexEvent({
-        phase: 'processing',
-        current: 2,
-        total: 5,
-        message: '正在处理第 2/5 篇文档',
-      });
-      expect(useKbStore.getState().deepReindexing).toBe(true);
-      expect(useKbStore.getState().deepReindexProgress).toEqual({
-        current: 2,
-        total: 5,
-        message: '正在处理第 2/5 篇文档',
-      });
-    });
-
-    it('clears state on completed event', () => {
-      useKbStore.setState({ deepReindexing: true, deepReindexProgress: { current: 5, total: 5, message: '处理中' } });
-      useKbStore.getState().handleDeepReindexEvent({
-        phase: 'completed',
-        message: '深度重建完成',
-      });
-      expect(useKbStore.getState().deepReindexing).toBe(false);
-      expect(useKbStore.getState().deepReindexProgress).toBeNull();
-    });
-
-    it('clears state on failed event', () => {
-      useKbStore.setState({ deepReindexing: true, deepReindexProgress: { current: 2, total: 5, message: '处理中' } });
-      useKbStore.getState().handleDeepReindexEvent({
-        phase: 'failed',
-        message: '重建失败',
-        error: 'sessionFailed',
-      });
-      expect(useKbStore.getState().deepReindexing).toBe(false);
-      expect(useKbStore.getState().deepReindexProgress).toBeNull();
     });
   });
 

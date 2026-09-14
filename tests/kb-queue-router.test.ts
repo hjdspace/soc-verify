@@ -3,7 +3,7 @@
  *
  * 测试缝：tRPC server-side caller（router.createCaller）。
  * mock electron（app.getPath 返回临时目录 + BrowserWindow webContents.send 间谍）、
- * project-service、credential-manager、deep-reindexer、@firecrawl/anydoc。
+ * project-service、credential-manager、@firecrawl/anydoc。
  * .txt 来源走文本直通（不触 anydoc）→ 确定性成功；.docx 来源 mock 拒绝 → 确定性失败。
  *
  * 覆盖场景：
@@ -78,10 +78,6 @@ vi.mock('../src/main/credentials/credential-manager', () => ({
     get: vi.fn().mockResolvedValue(null),
     getDefaultCredential: vi.fn().mockReturnValue(null),
   },
-}));
-
-vi.mock('../src/main/kb/deep-reindexer', () => ({
-  deepReindex: vi.fn(),
 }));
 
 vi.mock('@firecrawl/anydoc', () => ({

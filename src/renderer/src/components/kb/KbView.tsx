@@ -31,7 +31,6 @@ export function KbView() {
   const loadCategories = useKbStore((s) => s.loadCategories);
   const loadDocuments = useKbStore((s) => s.loadDocuments);
   const handleDocStatusEvent = useKbStore((s) => s.handleDocStatusEvent);
-  const handleDeepReindexEvent = useKbStore((s) => s.handleDeepReindexEvent);
   const kbModalOpen = useKbStore((s) => s.kbModalOpen);
   const activeTab = useKbStore((s) => s.activeTab);
   const setActiveTab = useKbStore((s) => s.setActiveTab);
@@ -69,15 +68,6 @@ export function KbView() {
     });
     return unlisten;
   }, [handleDocStatusEvent]);
-
-  // ─── 订阅 kb:deepReindex 事件（Issue #7）─────────────────
-  useEffect(() => {
-    if (!window.eventBridge) return;
-    const unlisten = window.eventBridge.onKbDeepReindex((event) => {
-      handleDeepReindexEvent(event);
-    });
-    return unlisten;
-  }, [handleDeepReindexEvent]);
 
   const handleRefresh = useCallback(() => {
     void loadKbStatus();
@@ -120,8 +110,8 @@ export function KbView() {
 
       {/* ── 主体：分类树 + 内容区 ────────────────────────── */}
       <div className="flex flex-1 overflow-hidden">
-        {/* 分类树面板 */}
-        <KbCategoryTree />
+        {/* 分类树面板 — wiki 布局不显示旧分类树 */}
+        {kbStatus?.mounted?.format !== 'wiki' && <KbCategoryTree />}
 
         {/* 内容区 */}
         <div className="flex flex-1 flex-col overflow-hidden">
@@ -139,30 +129,34 @@ export function KbView() {
               <List className="h-3.5 w-3.5" />
               文档列表
             </button>
-            <button
-              onClick={() => setActiveTab('index')}
-              className={cn(
-                'flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium transition-colors',
-                activeTab === 'index'
-                  ? 'border-primary text-primary'
-                  : 'border-transparent text-muted-foreground hover:text-foreground',
-              )}
-            >
-              <Map className="h-3.5 w-3.5" />
-              库索引 index.md
-            </button>
-            <button
-              onClick={() => setActiveTab('preview')}
-              className={cn(
-                'flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium transition-colors',
-                activeTab === 'preview'
-                  ? 'border-primary text-primary'
-                  : 'border-transparent text-muted-foreground hover:text-foreground',
-              )}
-            >
-              <Eye className="h-3.5 w-3.5" />
-              文档预览
-            </button>
+            {kbStatus?.mounted?.format !== 'wiki' && (
+              <button
+                onClick={() => setActiveTab('index')}
+                className={cn(
+                  'flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium transition-colors',
+                  activeTab === 'index'
+                    ? 'border-primary text-primary'
+                    : 'border-transparent text-muted-foreground hover:text-foreground',
+                )}
+              >
+                <Map className="h-3.5 w-3.5" />
+                库索引 index.md
+              </button>
+            )}
+            {kbStatus?.mounted?.format !== 'wiki' && (
+              <button
+                onClick={() => setActiveTab('preview')}
+                className={cn(
+                  'flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium transition-colors',
+                  activeTab === 'preview'
+                    ? 'border-primary text-primary'
+                    : 'border-transparent text-muted-foreground hover:text-foreground',
+                )}
+              >
+                <Eye className="h-3.5 w-3.5" />
+                文档预览
+              </button>
+            )}
             {kbStatus?.mounted?.format === 'wiki' && (
               <button
                 onClick={() => setActiveTab('wiki')}

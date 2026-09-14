@@ -104,10 +104,6 @@ interface KbStoreState {
   indexEditing: boolean;
   indexSaving: boolean;
 
-  // ── 深度重建状态（Issue #7）─────────────────────────────────
-  deepReindexing: boolean;
-  deepReindexProgress: { current: number; total: number; message: string } | null;
-
   // ── 预览 Tab 状态 ───────────────────────────────────────
   previewDocName: string | null;
   previewContent: string | null;
@@ -136,18 +132,6 @@ interface KbStoreState {
   saveIndex: (content: string) => Promise<void>;
   setIndexEditing: (editing: boolean) => void;
   loadPreview: (docName: string) => Promise<void>;
-  moveCategory: (docName: string, category: string) => Promise<boolean>;
-  renameCategory: (oldName: string, newName: string) => Promise<boolean>;
-  reclassifyDocument: (name: string) => Promise<boolean>;
-  // ── 深度重建（Issue #7）─────────────────────────────────
-  deepReindex: () => Promise<void>;
-  handleDeepReindexEvent: (event: {
-    phase: 'processing' | 'completed' | 'failed';
-    current?: number;
-    total?: number;
-    message: string;
-    error?: string;
-  }) => void;
 
   // ── 知识库设置（引擎 + AI 模型）────────────────────────
   kbSettings: KbSettings | null;
@@ -180,8 +164,6 @@ export const useKbStore = create<KbStoreState>((set, get) => ({
   indexLoading: false,
   indexEditing: false,
   indexSaving: false,
-  deepReindexing: false,
-  deepReindexProgress: null,
   previewDocName: null,
   previewContent: null,
   previewLoading: false,
@@ -579,127 +561,6 @@ export const useKbStore = create<KbStoreState>((set, get) => ({
         '加载文档预览失败',
         err instanceof Error ? err.message : String(err),
       );
-    }
-  },
-
-  // ── 移动分类 ─────────────────────────────────────────────
-  moveCategory: async (docName, category) => {
-    try {
-      const result = await trpc.kb.moveCategory.mutate({ name: docName, category });
-      if (result.ok) {
-        useToastStore.getState().success(`已移动到「${category}」`);
-        await get().refreshAll();
-        return true;
-      }
-      useToastStore.getState().error(
-        `移动分类失败`,
-        result.ok === false ? `${result.error.code}: ${result.error.message}` : '',
-      );
-      return false;
-    } catch (err) {
-      useToastStore.getState().error(
-        '移动分类失败',
-        err instanceof Error ? err.message : String(err),
-      );
-      return false;
-    }
-  },
-
-  // ── 重命名分类 ─────────────────────────────────────────────
-  renameCategory: async (oldName, newName) => {
-    try {
-      const result = await trpc.kb.renameCategory.mutate({ oldName, newName });
-      if (result.ok) {
-        useToastStore.getState().success(`已重命名为「${newName}」`);
-        await get().refreshAll();
-        await get().loadIndex();
-        return true;
-      }
-      useToastStore.getState().error(
-        '重命名分类失败',
-        result.ok === false ? `${result.error.code}: ${result.error.message}` : '',
-      );
-      return false;
-    } catch (err) {
-      useToastStore.getState().error(
-        '重命名分类失败',
-        err instanceof Error ? err.message : String(err),
-      );
-      return false;
-    }
-  },
-
-  // ── AI 重新分类/摘要 ─────────────────────────────────────
-  reclassifyDocument: async (name) => {
-    try {
-      const result = await trpc.kb.reclassify.mutate({ name });
-      if (result.ok) {
-        useToastStore.getState().success(
-          `已重新分类到「${result.category}」`,
-          result.moved ? '文档已移动到新分类目录' : '分类未变化，摘要与关键词已更新',
-        );
-        await get().refreshAll();
-        await get().loadIndex();
-        return true;
-      }
-      useToastStore.getState().error(
-        `AI 重新分类失败: ${name}`,
-        result.ok === false ? result.error.message : '',
-      );
-      return false;
-    } catch (err) {
-      useToastStore.getState().error(
-        `AI 重新分类失败: ${name}`,
-        err instanceof Error ? err.message : String(err),
-      );
-      return false;
-    }
-  },
-
-  // ── 深度重建（Issue #7）─────────────────────────────────
-  deepReindex: async () => {
-    if (get().deepReindexing) return; // 防止重复触发
-    set({ deepReindexing: true, deepReindexProgress: null });
-    try {
-      const result = await trpc.kb.deepReindex.mutate({});
-      if (result.ok) {
-        useToastStore.getState().success(
-          `深度重建完成（${result.documentCount} 篇文档）`,
-        );
-        // 刷新索引内容
-        await get().loadIndex();
-        await get().refreshAll();
-      } else {
-        useToastStore.getState().error(
-          '深度重建失败',
-          result.ok === false ? `${result.error.code}: ${result.error.message}` : '',
-        );
-      }
-    } catch (err) {
-      useToastStore.getState().error(
-        '深度重建失败',
-        err instanceof Error ? err.message : String(err),
-      );
-    } finally {
-      set({ deepReindexing: false, deepReindexProgress: null });
-    }
-  },
-
-  // ── 处理深度重建进度事件（kb:deepReindex）────────────────────
-  handleDeepReindexEvent: (event) => {
-    if (event.phase === 'processing') {
-      set({
-        deepReindexing: true,
-        deepReindexProgress: {
-          current: event.current ?? 0,
-          total: event.total ?? 0,
-          message: event.message,
-        },
-      });
-    } else if (event.phase === 'completed') {
-      set({ deepReindexing: false, deepReindexProgress: null });
-    } else if (event.phase === 'failed') {
-      set({ deepReindexing: false, deepReindexProgress: null });
     }
   },
 

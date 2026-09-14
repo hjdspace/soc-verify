@@ -175,16 +175,6 @@ export interface EventBridgeAPI {
       category?: string;
     }) => void,
   ) => () => void;
-  // 知识库深度重建进度事件（Issue #7）
-  onKbDeepReindex: (
-    callback: (data: {
-      phase: 'processing' | 'completed' | 'failed';
-      current?: number;
-      total?: number;
-      message: string;
-      error?: string;
-    }) => void,
-  ) => () => void;
   // 知识库导入队列事件（issue 03）：任务/队列状态推送（带 kbId 与单调 seq）
   onKbTask: (callback: (data: WikiTaskEvent) => void) => () => void;
   // 全局错误事件（主进程 uncaughtException / unhandledRejection）

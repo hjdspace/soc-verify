@@ -83,11 +83,6 @@ vi.mock('../src/main/credentials/credential-manager', () => ({
   },
 }));
 
-// Mock deep-reindexer（router 顶层导入）
-vi.mock('../src/main/kb/deep-reindexer', () => ({
-  deepReindex: vi.fn(),
-}));
-
 // Mock @firecrawl/anydoc：pipeline 依赖链加载需要，守卫测试不会触达
 vi.mock('@firecrawl/anydoc', () => ({
   toDocument: vi.fn(),
@@ -858,13 +853,6 @@ describe('kb-router', () => {
       await expect(caller.preview({ name: 'x' })).rejects.toThrow('新布局');
       await expect(caller.delete({ name: 'x' })).rejects.toThrow('新布局');
       await expect(caller.retry({ name: 'x' })).rejects.toThrow('新布局');
-    });
-
-    it('wiki 挂载时 moveCategory / renameCategory / reclassify / deepReindex 被拒绝', async () => {
-      await expect(caller.moveCategory({ name: 'x', category: 'y' })).rejects.toThrow('新布局');
-      await expect(caller.renameCategory({ oldName: 'a', newName: 'b' })).rejects.toThrow('新布局');
-      await expect(caller.reclassify({ name: 'x' })).rejects.toThrow('新布局');
-      await expect(caller.deepReindex({})).rejects.toThrow('新布局');
     });
 
     it('守卫错误码为 notAvailableForWikiLayout 语义（消息明确指向停用入口）', async () => {
