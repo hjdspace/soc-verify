@@ -1,20 +1,18 @@
 /**
- * Text Chunker — Markdown 分块（spec §8/§10，issue 21）。
+ * Text Chunker — Markdown 分块（spec §8/§10，issue 21/22）。
  *
  * 参考 R10 (text-chunker.ts) 的设计原则但不直接复制：
  *  - 标题面包屑：每个块携带从顶层到当前 heading 的路径
  *  - 去 frontmatter：frontmatter 不参与分块
  *  - 代码块/表格为原子块：不按字符切分
- *  - oversized 原子块按 hard limit 切分（不标原全文成功）
+ *  - oversized 原子块保留全文不截短，标记 oversize=true（issue 22：不静默截短成功）
  *  - CRLF 归一化、Unicode 安全、overlap
+ *  - 原文偏移：每个块记录在 body 中的 start/end 字符偏移（issue 22）
  *
  * @see docs/prd/knowledge-base-llm-wiki-spec.md §8
  */
 
-import type { EmbeddingChunk } from '@shared/kb-types';
-
-/** hard limit：单个块最大字符数（防止发送超大 payload 给嵌入提供商） */
-const MAX_CHUNK_CHARS = 32_000;
+import type { ChunkCoverageReport, EmbeddingChunk } from '@shared/kb-types';
 
 /** 判断行是否是围栏代码块标记 */
 function fenceMarker(line: string): { marker: string; width: number } | null {
@@ -68,10 +66,10 @@ function isTableSeparator(line: string): boolean {
   return /^[\s-]+$/.test(cleaned) && cleaned.includes('-');
 }
 
-/** 提取并去除 frontmatter */
-function stripFrontmatter(content: string): string {
+/** 提取并去除 frontmatter，返回 {body, bodyStart} */
+function stripFrontmatter(content: string): { body: string; bodyStart: number } {
   const normalized = content.replace(/\r\n/g, '\n');
-  if (!normalized.startsWith('---\n')) return normalized;
+  if (!normalized.startsWith('---\n')) return { body: normalized, bodyStart: 0 };
 
   // 从第 4 个字符开始查找关闭的 ---
   const rest = normalized.slice(4);
@@ -80,12 +78,15 @@ function stripFrontmatter(content: string): string {
     if (line.trim() === '---') {
       // 找到关闭 fence
       const after = rest.slice(pos + line.length + 1); // +1 for \n
-      return after.startsWith('\n') ? after.slice(1) : after;
+      const body = after.startsWith('\n') ? after.slice(1) : after;
+      // bodyStart = offset of body in normalized
+      const bodyStart = 4 + pos + line.length + 1 + (after.startsWith('\n') ? 1 : 0);
+      return { body, bodyStart };
     }
     pos += line.length + 1; // +1 for \n
   }
   // 没找到关闭 — 不是有效 frontmatter，返回原文
-  return normalized;
+  return { body: normalized, bodyStart: 0 };
 }
 
 /** 按字符数切分长文本，带 overlap */
@@ -120,28 +121,78 @@ function splitWithOverlap(text: string, targetChars: number, overlapChars: numbe
   return chunks;
 }
 
+/** chunkMarkdown 返回类型 */
+export type ChunkMarkdownResult = {
+  chunks: EmbeddingChunk[];
+  coverage?: ChunkCoverageReport;
+};
+
+/** chunkMarkdown 选项 */
+export type ChunkMarkdownOptions = {
+  /** 返回覆盖报告 */
+  reportCoverage?: boolean;
+};
+
 /**
  * 将 Markdown 内容分块。
+ *
+ * 不带 options 时返回 EmbeddingChunk[]（向后兼容）。
+ * 带 { reportCoverage: true } 时返回 { chunks, coverage }。
  *
  * @param content Markdown 全文（可含 frontmatter）
  * @param targetChars 每块目标字符数
  * @param overlapChars 块间重叠字符数
- * @returns 分块结果数组（含 index、text、headingPath）
  */
 export function chunkMarkdown(
   content: string,
   targetChars: number,
   overlapChars: number,
-): EmbeddingChunk[] {
-  const body = stripFrontmatter(content);
-  if (!body.trim()) return [];
+): EmbeddingChunk[];
+export function chunkMarkdown(
+  content: string,
+  targetChars: number,
+  overlapChars: number,
+  options: { reportCoverage: true },
+): ChunkMarkdownResult;
+export function chunkMarkdown(
+  content: string,
+  targetChars: number,
+  overlapChars: number,
+  options?: ChunkMarkdownOptions,
+): EmbeddingChunk[] | ChunkMarkdownResult;
+export function chunkMarkdown(
+  content: string,
+  targetChars: number,
+  overlapChars: number,
+  options?: ChunkMarkdownOptions,
+): EmbeddingChunk[] | ChunkMarkdownResult {
+  const { body } = stripFrontmatter(content);
+  if (!body.trim()) {
+    if (options?.reportCoverage) {
+      return {
+        chunks: [],
+        coverage: { totalChunks: 0, coveredChunks: 0, skippedChunks: 0, skipReasons: [] },
+      };
+    }
+    return [];
+  }
 
   const lines = body.split('\n');
   const chunks: EmbeddingChunk[] = [];
+  const skipReasons: string[] = [];
+
+  // Track the character offset of the start of each line in the body
+  const lineOffsets: number[] = [];
+  let charPos = 0;
+  for (const line of lines) {
+    lineOffsets.push(charPos);
+    charPos += line.length + 1; // +1 for \n
+  }
 
   const headingStack: Array<{ level: number; title: string }> = [];
   let headingPath = '';
   let section = '';
+  let sectionStartOffset = 0;
   let openFence: { marker: string; width: number } | null = null;
 
   function flushSection(): void {
@@ -155,18 +206,41 @@ export function chunkMarkdown(
     const pieces = splitPreservingAtomicBlocks(text, targetChars, overlapChars);
     for (const piece of pieces) {
       if (piece.trim()) {
+        // Calculate offset of this piece within the body
+        // piece is a substring of section (which is built from lines)
+        // We need to find the piece's position in the body
+        const pieceTrimmed = piece.trim();
+        const pieceStartInSection = text.indexOf(pieceTrimmed);
+        const pieceStartInBody = sectionStartOffset + pieceStartInSection;
+        const pieceEndInBody = pieceStartInBody + pieceTrimmed.length;
+
+        const isOversize = pieceTrimmed.length > targetChars;
+
         chunks.push({
           index: chunks.length,
-          text: piece.trim(),
+          text: pieceTrimmed,
           headingPath,
+          start: pieceStartInBody,
+          end: pieceEndInBody,
+          ...(isOversize ? { oversize: true } : {}),
         });
+
+        if (isOversize) {
+          skipReasons.push(
+            `Chunk ${chunks.length - 1}: oversized atomic block (${pieceTrimmed.length} chars > ${targetChars} target)`,
+          );
+        }
       }
     }
     section = '';
   }
 
+  section = '';
+  sectionStartOffset = 0;
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    const lineOffset = lineOffsets[i];
 
     // 围栏代码块检测
     const fence = fenceMarker(line);
@@ -176,6 +250,7 @@ export function chunkMarkdown(
         flushSection();
         openFence = fence;
         section = line;
+        sectionStartOffset = lineOffset;
         continue;
       } else if (openFence.marker === fence.marker && fence.width >= openFence.width) {
         // 关闭代码块
@@ -216,17 +291,38 @@ export function chunkMarkdown(
       // 确保当前 section 刷掉非表格内容
       if (section.trim() && !isTableRow(section.split('\n').pop() ?? '')) {
         flushSection();
+        sectionStartOffset = lineOffset;
+      }
+      if (!section) {
+        sectionStartOffset = lineOffset;
       }
       section += (section ? '\n' : '') + line;
       continue;
     }
 
     // 普通行
+    if (!section) {
+      sectionStartOffset = lineOffset;
+    }
     section += (section ? '\n' : '') + line;
   }
 
   // 刷新最后的 section
   flushSection();
+
+  if (options?.reportCoverage) {
+    const coveredChunks = chunks.filter((c) => !c.oversize).length;
+    const skippedChunks = chunks.filter((c) => c.oversize).length;
+    return {
+      chunks,
+      coverage: {
+        totalChunks: chunks.length,
+        coveredChunks,
+        skippedChunks,
+        skipReasons,
+      },
+    };
+  }
 
   return chunks;
 }
@@ -234,6 +330,7 @@ export function chunkMarkdown(
 /**
  * 在 section 内按原子块（代码块/表格）切分。
  * 非原子文本按 targetChars + overlapChars 切分。
+ * 超大原子块（> targetChars）保留全文不截短（issue 22）。
  */
 function splitPreservingAtomicBlocks(
   text: string,
@@ -268,6 +365,7 @@ function splitPreservingAtomicBlocks(
         i++;
       }
       const block = lines.slice(start, i).join('\n');
+      // issue 22: 超大原子块保留全文不截短
       pushAtomicChunk(chunks, block, targetChars, overlapChars);
       continue;
     }
@@ -280,6 +378,7 @@ function splitPreservingAtomicBlocks(
         i++;
       }
       const block = lines.slice(start, i).join('\n');
+      // issue 22: 超大原子块保留全文不截短
       pushAtomicChunk(chunks, block, targetChars, overlapChars);
       continue;
     }
@@ -293,18 +392,20 @@ function splitPreservingAtomicBlocks(
   return chunks.filter((c) => c.trim());
 }
 
-/** 原子块推送：在 targetChars 内直接推送；超出则按 targetChars 切分；超过 hard limit 则按 hard limit 切分 */
+/**
+ * 原子块推送（issue 22：超大原子块保留全文不截短）。
+ *
+ * - block ≤ targetChars：直接推送
+ * - block > targetChars：保留全文不截短，标记为 oversize（由调用方处理标记）
+ *   不再像 issue 21 那样按 hard limit 切分
+ */
 function pushAtomicChunk(
   chunks: string[],
   block: string,
-  targetChars: number,
-  overlapChars: number,
+  _targetChars: number,
+  _overlapChars: number,
 ): void {
-  if (block.length <= targetChars) {
-    chunks.push(block);
-  } else {
-    // 原子块超出 targetChars — 切分，但不超过 hard limit
-    const effectiveTarget = Math.min(targetChars, MAX_CHUNK_CHARS);
-    chunks.push(...splitWithOverlap(block, effectiveTarget, overlapChars));
-  }
+  // issue 22: 超大原子块保留全文，不截短
+  // 调用方（flushSection）会根据 piece.length > targetChars 设置 oversize 标记
+  chunks.push(block);
 }

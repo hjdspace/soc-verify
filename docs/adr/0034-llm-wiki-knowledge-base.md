@@ -2,7 +2,7 @@
 
 ## 状态
 
-Accepted（原决策）；2026-09-13 源码复核修订稿，待本轮整体审定。
+Accepted（原决策）；2026-09-13 源码复核修订稿，待本轮整体审定；2026-09-14 向量存储选型经实测**维持 LanceDB Node SDK**（§6），代价与缓解措施记录在 §6「向量存储选型实测」；备选 sqlite-vec 留档待条件触发。
 
 实现规格见 [knowledge-base-llm-wiki-spec.md](../prd/knowledge-base-llm-wiki-spec.md)。
 
@@ -105,11 +105,39 @@ Wiki Compile **不是 Agent 会话**，而是直连 LLM 的流式调用 + 自研
 | 索引导航 | 会话创建时有界注入类型骨架、计数与有限页面清单；不是参与 RRF 的排名列表 |
 | 关键词 | 元数据匹配与正文匹配先合为一个排名，保留中文 bigram 与精确工程符号匹配；涵盖已发布 Wiki Page 与可用 Parsed Markdown |
 | 图扩展 | 解析 `[[wikilink]]` 构建邻接表，对 top 结果做一跳扩展补召回 |
-| 向量 | Node SDK 初选 `@lancedb/lancedb`；参考使用 Rust SDK，需独立验证 Electron；embedding 走用户配置端点 |
+| 向量 | Node SDK 维持 `@lancedb/lancedb`（2026-09-14 实测确认）：单平台原生库 290.7MB 属已接受的已知代价，约 313MB 无用可选依赖必须按 §6 剔除；参考使用 Rust SDK，其尺度结论不可迁移到 Node 预编译产物；embedding 走用户配置端点 |
 
 关键词和向量两路采用 RRF（k=60），然后为 wiki 一跳图邻居预留名额；这是 [search.rs](D:/AI/llm_wiki/src-tauri/src/commands/search.rs:484) 实际机制。不让元数据与正文重复计票。embedding 分块保持表格、代码块完整，超端点上限的原子块保留全文检索并报告向量未覆盖，不悄悄截短冒充完整嵌入。具体排序与返回契约见 spec。
 
 **降级**：嵌入能力不可用时保留关键词 + 图扩展和导航注入，UI 按库/配置提示一次。401/403、模型不存在、限流与网络故障应分别报告，不能全部缓存为“不支持”。原生 SDK 无法加载属于发布 spike 失败，不与正常端点降级混同。
+
+#### 向量存储选型实测（2026-09-14，issue 21）
+
+2026-09-14 对 `@lancedb/lancedb@0.38.0` 与备选 `sqlite-vec@0.1.9` 做了同口径实测（开发/打包 Electron 下的 CRUD、重开、整页替换、asar 路径、能力边界与性能）。**结论：维持 `@lancedb/lancedb`**，接受原生库体积代价，并按下述措施压缩实际影响；备选实测数据留档，供条件触发时复用。
+
+| 项 | `@lancedb/lancedb@0.38.0` | `sqlite-vec@0.1.9` |
+| --- | --- | --- |
+| 平台原生包（win-x64） | **290.7 MB** | **0.28 MB** |
+| 安装包数 | 109 个（其中约 313 MB 是 lancedb 自带向量化用的 transformers/onnxruntime/openai，本项目 embedding 走用户端点、用不到） | 1 个，0 依赖 |
+| ABI 面 | Node addon（N-API 10），需 asarUnpack | **零**：SQLite 扩展，由项目已装的 better-sqlite3 加载 |
+| 发布平台 | 缺 darwin-x64 | 5 个平台全备，含 darwin-x64 |
+| 许可证 | Apache-2.0 | MIT OR Apache |
+| 维护活跃度 | 0.38.0（2026-08-31），持续发版 | 0.1.9（2026-03-31），约 4 个月无发布 |
+| 20k×1024 写入 | 609 ms（32.8k 行/s） | 8.4 s（2.4k 行/s） |
+| 20k×1024 查询 k=20 | 49.8 ms | 76 ms（5k→20ms / 10k→46ms / 20k→96ms，线性） |
+| 索引体积（20k） | 78.3 MB | 81.3 MB |
+
+已接受的代价与强制缓解措施：
+
+1. **约 313 MB 无用可选依赖必须剔除（强制）**：lancedb 的 `optionalDependencies` 带 `@huggingface/transformers` + `onnxruntime-node`/`web` + `openai`（合计约 313 MB），仅供它自带的向量化子路径使用；本项目 embedding 走用户端点，**从不 import `lancedb/embedding/*`**。剔除方式：electron-builder `files` 排除上述三个包。实测 `--omit=optional` + 显式安装平台包可把安装树从 651.6 MB 降到 301.7 MB 且 7/7 功能断言仍全过；但**不能对本项目全局用 `--omit=optional`** —— 项目自身 `optionalDependencies` 里的 `@rollup/rollup-win32-x64-msvc`、`lightningcss-win32-x64-msvc` 是构建必需。
+2. **原生库必须 asarUnpack**：产物是 `node_modules/@lancedb/lancedb-<platform>/*.node`，现有 `asarUnpack: ['**/*.node']` 已覆盖（`dist/win-unpacked` 中 `@firecrawl/anydoc-win32-x64-msvc` 为同构先例）。生效性仍需一次真实 `package:win` 复述。
+3. **不需要 `@electron/rebuild`**：napi-rs 预编译 + N-API 10，实测在 dev Node 22（`NODE_MODULE_VERSION` 127）与 Electron 43 的 Node 24（148）下均可加载，区别于 node-pty/better-sqlite3 的 node-gyp 链。
+4. **darwin-x64 仍是缺口**：npm 上无 `@lancedb/lancedb-darwin-x64@0.38.0`，`optionalDependencies` 也未声明，缺失是静默的（可选依赖不装不报错），而 `electron-builder.yml` 声明了 `mac: dmg`。**发布 macOS Intel 前必须先解决**（或限定 mac 构建为 arm64）。
+5. 体积属**用户侧一次性成本**，不阻塞功能；若后续实测安装包体积不可接受，回到下方备选。
+
+维持 LanceDB 的理由：参考实现同样只用它的基础能力（全仓库无 `create_index`/`IvfPq`/`distance_type`，纯 brute-force `vector_search`、无 ANN 索引），其性能与维护活跃度优势可直接继承；备选 sqlite-vec 虽体积小三个数量级，但为 pre-1.0、约 4 个月无发布，且无 ANN 出路。
+
+**备选留档（触发重估时启用）**：`sqlite-vec@0.1.9` —— `vec0.dll` 0.28 MB、0 依赖、由项目已装的 better-sqlite3 加载（零 ABI 面）、含 darwin-x64、原生事务；代价是写入 2.4k 行/s（LanceDB 32.8k）、查询 76 ms（LanceDB 49.8 ms），且 O(N) 线性无 ANN 出路。**触发条件**：安装包体积被判定不可接受，或必须发布 macOS Intel 而 LanceDB 平台包仍缺失。
 
 ### 7. 审阅：Staging Area + 复用 Review Queue
 
@@ -185,14 +213,14 @@ Wiki Layer 的 `[[wikilink]]` 引用关系被抽取为**知识图谱**（节点 
 - **只保存最新原件**：节省磁盘，但旧知识和页面历史的证据不能还原；用户选择保留被引用修订。
 - **本期仅 PDF 文字或仅提图**：依赖和调用成本较小，但不能利用 SoC 时序/结构图；用户明确选择本期提图与 AI 读图，接受视觉端点和打包验证成本。
 - **向量默认关闭**：配置简单，但语义能力需额外开启；沿用常开与按能力降级，不强制用户为检索成功配置向量。
-- **sqlite-vec 复用 better-sqlite3**：可减少依赖种类；本轮暂保留 LanceDB 初选以对应 chunk 索引机制，不能无实测地声称 sqlite-vec 能力不足。Node SDK spike 失败时回到此替代方案评估。
+- **sqlite-vec 复用 better-sqlite3**：可减少依赖种类；2026-09-14 已与 LanceDB 同口径实测（体积小三个数量级、零 ABI 面、含 darwin-x64、原生事务、实测性能仅常数倍落后），但为 pre-1.0、约 4 个月无发布且无 ANN 出路，**维持 LanceDB 初选**；实测数据留档，触发条件见 §6「向量存储选型实测」。
 - **旧库只读兼容或自动迁移**：减少用户重新导入，但需维护旧知识模型及迁移边界；沿用原 ADR 不迁移、不双轨的决定，保留旧磁盘数据和处置路径，不自动删除原件。
 - **只做图扩展、不做 Lint/图视图**：工作量小，但缺少知识维护入口；保留结构和语义检查及可视化。社区统计只是线索，不保证知识覆盖。
 - **图视图统一到 ECharts**：复用已安装依赖；sigma 初选看重网络交互及 worker 布局。没有本项目基准可证明“数百节点 ECharts 必卡”，应以相同数据的打包实验校准取舍。
 
 ## 后果
 
-- 新增候选依赖为 `@lancedb/lancedb` 和 sigma/graphology 系列；所选精确版本、平台包、asar、N-API 与 React/CSP/worker 兼容性必须经 spike，不把参考仓库 semver 范围当安装命令。
+- 新增候选依赖为 `@lancedb/lancedb`（精确 0.38.0 + lockfile）和 sigma/graphology 系列；所选精确版本、平台包、asar、N-API 与 React/CSP/worker 兼容性必须经 spike，不把参考仓库 semver 范围当安装命令。2026-09-14 已实测确认：napi-rs 预编译、**无需 `@electron/rebuild`**；`*.node` 已被现有 `asarUnpack` 覆盖；单平台原生库 290.7 MB，并带约 313 MB 本项目用不到的可选依赖（transformers/onnxruntime/openai），**必须用 electron-builder `files` 剔除，不得全局 `--omit=optional`**；**darwin-x64 无平台包**，发布 macOS Intel 前须解决。详见 §6「向量存储选型实测」。
 - 图片解读需要额外视觉模型调用，页面渲染需要内存/取消控制。PDF 矢量图处理必须测试，不能以提取出照片替代验收。
 - 来源修订、页面历史与待审阅资料增加磁盘占用；`.kb/` 不是统一可清理缓存目录。
 - 同维度换 embedding 模型也触发索引重建；配置指纹隔离向量空间，重建失败不破坏已发布知识。

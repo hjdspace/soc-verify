@@ -106,15 +106,15 @@ describe('chunkMarkdown', () => {
     expect(chunks.every((c) => c.text.length > 0)).toBe(true);
   });
 
-  it('oversized 代码块按 hard limit 切分', () => {
+  it('oversized 代码块保留全文不截短（issue 22）', () => {
     const longCode = 'x'.repeat(200);
     const input = `# Page\n\n\`\`\`text\n${longCode}\n\`\`\`\n`;
     const chunks = chunkMarkdown(input, 50, 10);
-    // 超长原子块被切分，每个块不超过 hard limit
-    expect(chunks.length).toBeGreaterThan(1);
-    for (const chunk of chunks) {
-      expect(chunk.text.length).toBeLessThanOrEqual(200 + 50); // 允许一些 overlap 余量
-    }
+    // issue 22: 超大原子块保留全文不截短
+    const codeChunk = chunks.find((c) => c.text.includes('```text'));
+    expect(codeChunk).toBeDefined();
+    expect(codeChunk!.text).toContain(longCode);
+    expect(codeChunk!.oversize).toBe(true);
   });
 
   it('长文本按 targetChars 分块并产生 overlap', () => {

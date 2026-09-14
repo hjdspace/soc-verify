@@ -19,6 +19,8 @@ function makeChunks(pageId: string, n: number, dim: number): VectorUpsertChunk[]
     chunkIndex: i,
     chunkText: `${pageId} chunk ${i}`,
     headingPath: `## Heading ${i}`,
+    start: i * 100,
+    end: (i + 1) * 100,
     embedding: Array.from({ length: dim }, (_, j) => (i * 7 + j * 3) % 11 / 10),
   }));
 }

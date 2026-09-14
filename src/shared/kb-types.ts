@@ -1292,6 +1292,12 @@ export type EmbeddingChunk = {
   text: string;
   /** 标题面包屑（`## A > ### B`） */
   headingPath: string;
+  /** 块在 body（去 frontmatter 后）中的起始字符偏移 */
+  start: number;
+  /** 块在 body 中的结束字符偏移（exclusive） */
+  end: number;
+  /** 超大原子块：保留全文不截短，但不参与向量嵌入 */
+  oversize?: boolean;
 };
 
 /** 向量 upsert 输入行 */
@@ -1299,7 +1305,13 @@ export type VectorUpsertChunk = {
   chunkIndex: number;
   chunkText: string;
   headingPath: string;
+  /** 块在 body 中的起始字符偏移（issue 22） */
+  start: number;
+  /** 块在 body 中的结束字符偏移（exclusive） */
+  end: number;
   embedding: number[];
+  /** 来源/页面修订（issue 22：按 revision 替换/过滤） */
+  revision?: string;
 };
 
 /** 向量搜索命中（per-chunk） */
@@ -1311,13 +1323,21 @@ export type VectorSearchHit = {
   headingPath: string;
   /** 1/(1+distance)，越高越相关 */
   score: number;
+  /** 该 chunk 所属的页面/来源修订（issue 22：查询过滤过期 revision） */
+  revision?: string;
+  /** 块在 body 中的起始字符偏移（issue 22） */
+  start?: number;
+  /** 块在 body 中的结束字符偏移（exclusive） */
+  end?: number;
 };
 
 /** 向量搜索结果（per-page 聚合） */
 export type VectorPageResult = {
   id: string;
   score: number;
-  matchedChunks?: Array<{ text: string; headingPath: string; score: number }>;
+  matchedChunks?: Array<{ text: string; headingPath: string; score: number; start?: number; end?: number }>;
+  /** 该页结果的来源/页面修订（issue 22） */
+  revision?: string;
 };
 
 /** 向量索引覆盖状态 */
@@ -1328,6 +1348,40 @@ export type VectorCoverage = {
   chunks: number;
   /** 当前嵌入指纹 hash（未索引时为 null） */
   fingerprintHash: string | null;
+};
+
+/** 分块覆盖报告（issue 22，spec §8/§10） */
+export type ChunkCoverageReport = {
+  /** 总分块数 */
+  totalChunks: number;
+  /** 可被向量覆盖的块数（非 oversize） */
+  coveredChunks: number;
+  /** 超大原子块跳过向量嵌入的块数 */
+  skippedChunks: number;
+  /** 跳过原因列表（每个 skipped chunk 一条） */
+  skipReasons?: string[];
+};
+
+/** 向量索引状态（issue 22，spec §8：索引空间记录配置指纹与实际维度） */
+export type VectorIndexStatus = {
+  /** 当前嵌入指纹 hash */
+  fingerprintHash: string | null;
+  /** 指纹签名摘要（供显示与诊断） */
+  fingerprintSignature?: EmbeddingFingerprint['signature'];
+  /** 实际维度（从已存储向量推断；无数据时为 null） */
+  actualDimensions: number | null;
+  /** 配置预期维度 */
+  expectedDimensions?: number;
+  /** 索引错误状态（按端点/库可见） */
+  errorStatus: VectorIndexErrorStatus | null;
+};
+
+/** 向量索引错误状态 */
+export type VectorIndexErrorStatus = {
+  kind: EmbeddingErrorKind;
+  message: string;
+  /** 记录时间（ISO） */
+  at: string;
 };
 
 

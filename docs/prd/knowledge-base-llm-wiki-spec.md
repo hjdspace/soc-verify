@@ -355,7 +355,7 @@ Query 任务复用队列、预算、staging、审阅、历史和索引；跳过�
 
 嵌入常开但需要独立端点能力：未配置、暂不可用时关键词/图仍可用。先验证模型、向量数量、有限数值与实际维度；配置维度与响应不符报错。指纹包含 endpoint identity、model、维度、距离度量、分块/预处理版本；同维度换模型也必须重建。默认 cosine，同一索引代内禁止混用向量空间。
 
-LanceDB 存 `kbId/kind/id/revision/chunkId/headingPath/start/end/contentHash/embeddingFingerprint/vector`。整页 chunks 准备成功后按 revision 替换，不因某批失败先删除旧索引；旧 revision 的向量不得与当前正文拼接使用，查询过滤 revision，不匹配则靠关键词。全量重建用新代，完成后切换，失败保留旧代；跨模型旧代在切换前也不能用新 query 向量去查。
+LanceDB 存 `kbId/kind/id/revision/chunkId/headingPath/start/end/contentHash/embeddingFingerprint/vector`（逻辑行契约）。引擎于 2026-09-14 实测确认为 `@lancedb/lancedb` Node SDK（见 [ADR 0034 §6](../adr/0034-llm-wiki-knowledge-base.md)）：维度在建表期固定，`revision`、`embeddingFingerprint` 等元数据可按参考实现落旁路文件而不占向量行。整页 chunks 准备成功后按 revision 替换，不因某批失败先删除旧索引；旧 revision 的向量不得与当前正文拼接使用，查询过滤 revision，不匹配则靠关键词。全量重建用新代，完成后切换，失败保留旧代；跨模型旧代在切换前也不能用新 query 向量去查。
 
 Markdown embedding chunk 带标题面包屑，去 frontmatter，保持代码块/表格完整；oversized 原子块不能被截半后仍标原全文成功，可跳过向量并明确覆盖计数，全文仍可检索和分页读取。覆盖 GFM 无外侧竖线表格、缩进/加长围栏、CRLF、Unicode 和原文偏移。不直接复制 R10 的有限正则支持并声称覆盖所有 Markdown。
 
@@ -410,7 +410,7 @@ Agent 注入保留现有 8000 字符作为明确硬上限（包含工具说明�
 
 | Spike | 必须产出的可核验证据 | 不通过时 |
 | --- | --- | --- |
-| LanceDB Node SDK | 精确版本/lockfile、支持的发布平台、开发与打包 Electron 下 CRUD/重开/替换测试，asar/平台包路径 | 停止向量依赖落地，修订 ADR；不以 Rust 上游能跑作证明 |
+| LanceDB Node SDK | 精确版本/lockfile、支持的发布平台、开发与打包 Electron 下 CRUD/重开/替换测试，asar/平台包路径 | 停止向量依赖落地，修订 ADR；不以 Rust 上游能跑作证明。**2026-09-14 已执行**：开发进程四项（CRUD/重开/替换/指纹）在 dev Node 22 与 Electron 43（Node 24）双运行时通过，结论维持 `@lancedb/lancedb@0.38.0`；实测带出三条硬约束——约 313MB 无用可选依赖须用 electron-builder `files` 剔除、单平台原生库 290.7MB、darwin-x64 无平台包。打包进程与真实端点仍待复述 |
 | PDF 图片/矢量图 | 文字+位图+矢量时序图 fixture，页码与原图对应，页面渲染效果、内存/取消、打包后的本地 worker | 重新评估提取/渲染适配，不能宣布图片支持完成 |
 | 视觉/编译适配 | 已支持的各协议假流测试，配置模型的真实图片输入 smoke、超时/拒绝/usage/无图能力反馈 | 明确不支持的能力，保留 blocked，不偷偷按文字继续 |
 | 路径与事务 | Windows junction/保留名/ADS、只读文件/磁盘写失败/每步崩溃的真临时目录故障注入 | 阻止发布切片进入可用状态 |
@@ -483,4 +483,4 @@ Agent 注入保留现有 8000 字符作为明确硬上限（包含工具说明�
 - 参考源码路径、commit、已实现机制与不可照搬的行为统一见 [源码核查](knowledge-base-llm-wiki-source-audit.md)。后续 agent 先读该表，再按符号定位源文件，不依赖旧的 `src/main/omp/` 路径。
 - 原参考仓库许可为 GPL-3.0；借鉴机制不等于直接复制代码、模板或测试已获授权，实际复用另作许可判断。
 - 与本次重构直接相关的现状：index 页“更新索引”入口、图片数量/失败状态、工具目录缺项应随替代切片修复。历史 ADR 编号冲突、其他域 glossary/AGENTS 文档过时不在本次顺手清理范围。
-- 本轮为静态源码核查与设计修订，未执行真实模型调用、PDF 提取新增实现或 LanceDB/sigma 打包 spike。未完成的 spike 是后续实施门禁，不应把本稿标签改成“全部实现已验证”。
+- 本轮为静态源码核查与设计修订，未执行真实模型调用、PDF 提取新增实现或 LanceDB/sigma 打包 spike。未完成的 spike 是后续实施门禁，不应把本稿标签改成“全部实现已验证”。（2026-09-14 补记：LanceDB 的开发进程 CRUD/重开/替换与 ABI 已验证并据此维持选型，打包进程与真实嵌入端点仍待复述；sigma 打包 spike 仍未执行。见 ADR 0034 §6 与 issue 21。）
