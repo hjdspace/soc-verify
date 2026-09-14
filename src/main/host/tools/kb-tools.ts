@@ -22,6 +22,7 @@ import { isAbsolute, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 import { convertDocumentToMarkdownString } from '../../kb/converter';
 import { searchKb } from '../../kb/searcher';
+import { searchWiki } from '../../kb/wiki-search';
 import { kbRegistry } from '../../kb/registry';
 import {
   cacheDocMarkdown,
@@ -34,19 +35,18 @@ import {
   MAX_GREP_MATCHES,
 } from '../../kb/doc-cache';
 import { TEXT, defineTool, type HostToolEntry, type ToolContext } from './shared';
+import type { KbStatus } from '@shared/kb-types';
 
 // ── 辅助函数 ─────────────────────────────────────────────────────
 
 /**
- * 获取当前挂载的知识库路径。
- * projectRoot 为会话工作目录（即项目根目录，与 context-injector 读取
- * .socverify/kb-mounts.json 的路径同源）。
- * 返回 null 表示未挂载知识库。
+ * 获取当前挂载的知识库（含格式）。每次调用都动态查询注册表——
+ * 项目切换/切库后旧挂载信息不再是读取授权。
  */
-async function getMountedKbPath(projectRoot: string): Promise<string | null> {
+async function getMountedKb(projectRoot: string): Promise<KbStatus['mounted']> {
   try {
     const status = await kbRegistry.status(projectRoot);
-    return status.mounted?.path ?? null;
+    return status.mounted;
   } catch {
     return null;
   }
@@ -334,21 +334,31 @@ export function createKbTools(ctx: ToolContext): HostToolEntry[] {
 
     defineTool(
       'kb_search',
-      'Search the mounted knowledge base for documents matching a query. Searches document titles, summaries, keywords (from the index), and full-text content of all Markdown files. Returns a ranked list; the path field of each result is the absolute file path of the document — use it directly with your read tool (relative paths will not resolve because the knowledge base directory usually differs from your working directory). A content snippet is included for full-text matches so you can judge relevance before reading. Use this to find relevant documents in the knowledge base before reading them. If no knowledge base is mounted, returns an error. Results are limited to 20 entries by default.',
+      'Search the mounted knowledge base (LLM Wiki layout) for published knowledge pages and current parsed source full-text. One merged keyword ranking over page metadata (title/summary/keywords/tags) and page/source body text; Chinese queries are matched by adjacent character bigrams (low-weight single chars), and exact tokens like AWLEN, [7:0], 0x10, tRCD are matched as-is. Returns a ranked list of hits: kind (wiki=published page, parsed=source full-text), stable id, library-relative path and runtime absolute path (use absolutePath directly with your read tool), snippet for body matches, page type/tags/source refs, and a stale flag when the page cites an outdated source revision. Optional filters: pageType (one of source/entity/concept/comparison/synthesis/query/pitfall/interface), tag (exact match), kind (wiki or parsed). topK limits results (default 20, max 50). The mounted library is re-checked on every call — results always come from the currently mounted library. If no knowledge base is mounted, returns an error.',
       {
         type: 'object',
         properties: {
           query: {
             type: 'string',
-            description: 'Search query. Supports multi-word queries (space-separated). Chinese queries are matched by adjacent character bigrams with low-weight single characters. Matches document titles, summaries, keywords, and full-text content.',
+            description: 'Search query. Multi-word (space-separated) supported; Chinese matched by bigrams; tokens like [7:0] or 0x10 are matched as-is.',
           },
-          category: {
+          pageType: {
             type: 'string',
-            description: 'Restrict the search to one category (exact category name, e.g. "协议手册"). Omit to search all categories.',
+            enum: ['source', 'entity', 'concept', 'comparison', 'synthesis', 'query', 'pitfall', 'interface'],
+            description: 'Restrict hits to one wiki page type. Omit to search all types.',
           },
-          limit: {
+          tag: {
+            type: 'string',
+            description: 'Restrict wiki hits to pages carrying this exact tag. Omit to search all tags.',
+          },
+          kind: {
+            type: 'string',
+            enum: ['wiki', 'parsed'],
+            description: "Restrict to published pages ('wiki') or source full-text ('parsed'). Omit to search both.",
+          },
+          topK: {
             type: 'number',
-            description: 'Maximum number of results to return (default: 20).',
+            description: 'Maximum number of results to return (default 20, range 1-50).',
           },
         },
         required: ['query'],
@@ -360,15 +370,62 @@ export function createKbTools(ctx: ToolContext): HostToolEntry[] {
           return TEXT(JSON.stringify({ error: 'query is required' }));
         }
 
-        const limit = typeof args.limit === 'number' && args.limit > 0 ? args.limit : undefined;
-        const category = typeof args.category === 'string' && args.category.trim() ? args.category.trim() : undefined;
+        const topK = typeof args.topK === 'number' && args.topK > 0 ? args.topK : undefined;
+        const pageType = typeof args.pageType === 'string' && args.pageType.trim() ? args.pageType.trim() : undefined;
+        const tag = typeof args.tag === 'string' && args.tag.trim() ? args.tag.trim() : undefined;
+        const kind = args.kind === 'wiki' || args.kind === 'parsed' ? args.kind : undefined;
 
-        const kbPath = await getMountedKbPath(ctx.cwd);
-        if (!kbPath) {
-          return TEXT(JSON.stringify({ error: 'No knowledge base mounted. Mount a knowledge base first.' }));
+        // 动态核对当前挂载：项目切换/切库后返回的必然是当前挂载库的数据；
+        // 旧会话系统提示里注入的库信息不是跨库读取授权。
+        const mounted = await getMountedKb(ctx.cwd);
+        if (!mounted) {
+          return TEXT(JSON.stringify({
+            error: 'No knowledge base mounted. Mount a knowledge base first.',
+            code: 'notMounted',
+          }));
         }
 
-        const results = await searchKb(kbPath, query, { limit, category });
+        // wiki 布局 → 统一检索服务（UI 与 Agent 共用同一排序）；
+        // 旧布局（legacy/未声明 format）→ 旧 searcher（issue 28 退役）。
+        if (mounted.format === 'wiki') {
+          const outcome = await searchWiki(mounted.path, {
+            query,
+            ...(topK !== undefined ? { topK } : {}),
+            ...(pageType !== undefined ? { pageType: pageType as Parameters<typeof searchWiki>[1]['pageType'] } : {}),
+            ...(tag !== undefined ? { tag } : {}),
+            ...(kind !== undefined ? { kind } : {}),
+          });
+          if (!outcome.ok) {
+            return TEXT(JSON.stringify({ error: outcome.error.message, code: outcome.error.code }));
+          }
+          const r = outcome.result;
+          return TEXT(JSON.stringify({
+            mode: r.mode,
+            kbId: r.kbId,
+            coverage: r.coverage,
+            total: r.hits.length,
+            results: r.hits.map((h) => ({
+              kind: h.kind,
+              id: h.id,
+              title: h.title,
+              // 绝对路径 — Agent 的 read 工具按会话 cwd 解析相对路径，
+              // 库目录与 cwd 往往不同，相对路径会读到 "Path not found"。
+              path: h.absolutePath,
+              relativePath: h.relativePath,
+              snippet: h.snippet,
+              pageType: h.pageType ?? null,
+              tags: h.tags ?? [],
+              keywords: h.keywords ?? [],
+              sourceRefs: h.sourceRefs ?? [],
+              stale: h.stale,
+              sourceRevision: h.sourceRevision ?? null,
+              score: h.score,
+            })),
+          }));
+        }
+
+        const category = typeof args.category === 'string' && args.category.trim() ? args.category.trim() : undefined;
+        const results = await searchKb(mounted.path, query, { limit: topK, category });
 
         return TEXT(JSON.stringify({
           query,

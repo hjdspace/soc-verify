@@ -1021,14 +1021,6 @@ export type WikiReadGateStatus = {
   /** manifest 损坏、无法自动恢复的事务（现场保留，恢复报告用） */
   corrupt: string[];
 };
-export type WikiReadGateStatus = {
-  /** true = 存在未恢复的 prepared 事务，同库读取/发布暂停 */
-  blocked: boolean;
-  /** 未恢复事务 ID 列表（prepared 状态） */
-  pending: string[];
-  /** manifest 损坏、无法自动恢复的事务（现场保留，恢复报告用） */
-  corrupt: string[];
-};
 
 // ── 统一关键词检索（spec §8，issue 14）──────────────────────────
 

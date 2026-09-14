@@ -128,6 +128,8 @@ vi.mock('../src/main/document/editor-registry', () => ({
 import { HostToolsRegistry } from '../src/main/host/host-tools';
 import { searchKb } from '../src/main/kb/searcher';
 import { buildKbContext, injectKbContext } from '../src/main/kb/context-injector';
+import { initWikiLayout, writeWikiManifest, wikiLayout } from '../src/main/kb/wiki-layout';
+import type { WikiKbManifest } from '../src/main/kb/wiki-layout';
 
 /** 从 AgentToolResult 中提取 JSON 解析后的内容 */
 function parseResult(result: unknown): Record<string, unknown> {
@@ -157,7 +159,11 @@ describe('KB Host Tools — 注册', () => {
     const searchDef = defs.find((d) => d.name === 'kb_search');
     expect(searchDef).toBeDefined();
     expect(searchDef!.parameters).toHaveProperty('properties.query');
-    expect(searchDef!.parameters).toHaveProperty('properties.limit');
+    // issue 14：category/limit 退役，扩展类型/标签/kind/topK 过滤
+    expect(searchDef!.parameters).toHaveProperty('properties.topK');
+    expect(searchDef!.parameters).toHaveProperty('properties.pageType');
+    expect(searchDef!.parameters).toHaveProperty('properties.tag');
+    expect(searchDef!.parameters).toHaveProperty('properties.kind');
     expect((searchDef!.parameters as Record<string, unknown[]>).required).toContain('query');
   });
 });
@@ -1068,5 +1074,260 @@ describe('context-injector', () => {
 
     const result = await injectKbContext(undefined, projectDir);
     expect(result).toBeUndefined();
+  });
+});
+
+// ─── kb_search — wiki 布局（issue 14，统一检索服务）──────────
+
+describe('kb_search — wiki 布局', () => {
+  let kbPath: string;
+  let kbPathB: string;
+
+  const writePage = (root: string, rel: string, content: string): void => {
+    const abs = join(root, 'wiki', rel);
+    mkdirSync(abs.replace(/[\\/][^\\/]*$/, ''), { recursive: true });
+    writeFileSync(abs, content, 'utf-8');
+  };
+
+  const page = (type: string, title: string, body = ''): string => [
+    '---',
+    `type: ${type}`,
+    `title: "${title}"`,
+    `summary: ${title}的摘要。`,
+    'keywords: [测试]',
+    'tags: [单测]',
+    'sources: []',
+    'created: "2026-09-13T00:00:00Z"',
+    'updated: "2026-09-13T00:00:00Z"',
+    '---',
+    '',
+    `# ${title}`,
+    '',
+    body,
+  ].join('\n');
+
+  const sources = (over: Record<string, unknown>): Record<string, unknown> => ({
+    sourcePath: 'spec/dds.pdf',
+    sourceId: 'src-1',
+    ext: '.pdf',
+    size: 100,
+    currentRevision: 'rev-a',
+    parsedRevision: 'rev-a',
+    parsedHash: 'ph',
+    engine: 'anydoc',
+    engineFingerprint: 'fp',
+    status: 'ready',
+    assetCount: 0,
+    ...over,
+  });
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    kbPath = join(tmpDir, `wikikb-a-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+    kbPathB = join(tmpDir, `wikikb-b-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+    await initWikiLayout(kbPath, { kbId: 'kb-wiki-a', name: 'Wiki A' });
+    await initWikiLayout(kbPathB, { kbId: 'kb-wiki-b', name: 'Wiki B' });
+
+    writePage(kbPath, 'concepts/dds.md', page('concept', 'DDS 原理', 'AWLEN 位宽 [7:0]。'));
+    writePage(kbPath, 'pitfalls/dds-p.md', page('pitfall', 'DDS 踩坑'));
+
+    // manifest sources + parsed 全文
+    await writeWikiManifest(kbPath, {
+      manifestVersion: 1, format: 'wiki', kbId: 'kb-wiki-a', name: 'Wiki A',
+      createdAt: '2026-09-13T00:00:00Z', updatedAt: '2026-09-13T00:00:00Z',
+      sources: { 'src-1': sources({}) },
+    } as unknown as WikiKbManifest);
+    const parsedPath = join(wikiLayout(kbPath).rawParsedDir, 'spec', 'dds.pdf.md');
+    mkdirSync(parsedPath.replace(/[\\/][^\\/]*$/, ''), { recursive: true });
+    writeFileSync(parsedPath, '来源全文：DDS 直接频率合成。\n', 'utf-8');
+
+    statusMock.mockResolvedValue({
+      mounted: { kbId: 'kb-wiki-a', mountedAt: Date.now(), name: 'Wiki A', path: kbPath, format: 'wiki', state: 'active' },
+      health: { hasSources: true, hasDocs: false, hasIndex: false },
+      wikiHealth: null,
+    });
+  });
+
+  afterEach(() => {
+    rmSync(kbPath, { recursive: true, force: true });
+    rmSync(kbPathB, { recursive: true, force: true });
+  });
+
+  it('wiki 挂载走统一检索服务：kind、pageType、absolutePath、覆盖状态', async () => {
+    const registry = new HostToolsRegistry(undefined, tmpDir);
+    const result = await registry.handleToolCall({
+      type: 'host_tool_call', id: 'w1', toolCallId: 'tw1', toolName: 'kb_search',
+      arguments: { query: 'DDS', pageType: 'pitfall', kind: 'wiki' },
+    });
+
+    const parsed = parseResult(result);
+    expect(parsed.mode).toBe('keyword');
+    expect(parsed.kbId).toBe('kb-wiki-a');
+    // kind='wiki' 限定检索对象：coverage 只计参与排名的候选，parsedSources=0
+    expect(parsed.coverage).toEqual({ wikiPages: 2, parsedSources: 0 });
+    const results = parsed.results as Array<Record<string, unknown>>;
+    expect(results).toHaveLength(1);
+    expect(results[0].kind).toBe('wiki');
+    expect(results[0].id).toBe('pitfalls/dds-p');
+    expect(results[0].pageType).toBe('pitfall');
+    // path 是运行时绝对路径（Agent 的 read 工具按会话 cwd 解析相对路径会失败）
+    expect(results[0].path).toBe(join(kbPath, 'wiki', 'pitfalls', 'dds-p.md'));
+  });
+
+  it('parsed 命中：kind=parsed、来源修订、relativePath 前缀 raw/parsed', async () => {
+    const registry = new HostToolsRegistry(undefined, tmpDir);
+    const result = await registry.handleToolCall({
+      type: 'host_tool_call', id: 'w2', toolCallId: 'tw2', toolName: 'kb_search',
+      arguments: { query: '直接频率合成', kind: 'parsed' },
+    });
+
+    const parsed = parseResult(result);
+    const results = parsed.results as Array<Record<string, unknown>>;
+    expect(results).toHaveLength(1);
+    expect(results[0].kind).toBe('parsed');
+    expect(results[0].id).toBe('src-1');
+    expect(results[0].relativePath).toBe('raw/parsed/spec/dds.pdf.md');
+    expect(results[0].sourceRevision).toBe('rev-a');
+    expect(results[0].stale).toBe(false);
+    expect(String(results[0].snippet)).toContain('直接频率合成');
+  });
+
+  it('未挂载库返回 notMounted 错误', async () => {
+    statusMock.mockResolvedValue({
+      mounted: null,
+      health: { hasSources: false, hasDocs: false, hasIndex: false },
+      wikiHealth: null,
+    });
+
+    const registry = new HostToolsRegistry(undefined, tmpDir);
+    const result = await registry.handleToolCall({
+      type: 'host_tool_call', id: 'w3', toolCallId: 'tw3', toolName: 'kb_search',
+      arguments: { query: 'DDS' },
+    });
+
+    const parsed = parseResult(result);
+    expect(parsed.code).toBe('notMounted');
+    expect(String(parsed.error)).toContain('No knowledge base mounted');
+  });
+
+  it('切库后动态核对：每次调用都返回当前挂载库的数据（旧注入不是跨库授权）', async () => {
+    writePage(kbPathB, 'concepts/b-page.md', page('concept', 'B 库专属页'));
+
+    const registry = new HostToolsRegistry(undefined, tmpDir);
+    const first = parseResult(await registry.handleToolCall({
+      type: 'host_tool_call', id: 'w4', toolCallId: 'tw4', toolName: 'kb_search',
+      arguments: { query: 'B 库专属' },
+    }));
+    expect((first.results as unknown[]).length).toBe(0); // A 库没有该页
+
+    // 切换挂载到 B 库（同一会话、同一系统提示）
+    statusMock.mockResolvedValue({
+      mounted: { kbId: 'kb-wiki-b', mountedAt: Date.now(), name: 'Wiki B', path: kbPathB, format: 'wiki', state: 'active' },
+      health: { hasSources: false, hasDocs: false, hasIndex: false },
+      wikiHealth: null,
+    });
+
+    const second = parseResult(await registry.handleToolCall({
+      type: 'host_tool_call', id: 'w5', toolCallId: 'tw5', toolName: 'kb_search',
+      arguments: { query: 'B 库专属' },
+    }));
+    const results = second.results as Array<Record<string, unknown>>;
+    expect(results).toHaveLength(1);
+    expect(second.kbId).toBe('kb-wiki-b');
+    expect(results[0].path).toBe(join(kbPathB, 'wiki', 'concepts', 'b-page.md'));
+  });
+});
+
+// ─── buildKbContext — wiki 布局注入（issue 14，spec §8）──────
+
+describe('buildKbContext — wiki 布局注入', () => {
+  let kbPath: string;
+
+  const writePage = (rel: string, content: string): void => {
+    const abs = join(kbPath, 'wiki', rel);
+    mkdirSync(abs.replace(/[\\/][^\\/]*$/, ''), { recursive: true });
+    writeFileSync(abs, content, 'utf-8');
+  };
+
+  const page = (type: string, title: string, summaryLen = 10): string => [
+    '---',
+    `type: ${type}`,
+    `title: "${title}"`,
+    `summary: ${'很长的摘要内容'.repeat(Math.ceil(summaryLen / 6)).slice(0, summaryLen)}`,
+    'keywords: [测试]',
+    'tags: [单测]',
+    'sources: []',
+    'created: "2026-09-13T00:00:00Z"',
+    'updated: "2026-09-13T00:00:00Z"',
+    '---',
+    '',
+    `# ${title}`,
+  ].join('\n');
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    kbPath = join(tmpDir, `wikikb-inject-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+    await initWikiLayout(kbPath, { kbId: 'kb-inject', name: '注入测试库' });
+    statusMock.mockResolvedValue({
+      mounted: { kbId: 'kb-inject', mountedAt: Date.now(), name: '注入测试库', path: kbPath, format: 'wiki', state: 'active' },
+      health: { hasSources: false, hasDocs: false, hasIndex: false },
+      wikiHealth: null,
+    });
+  });
+
+  afterEach(() => {
+    rmSync(kbPath, { recursive: true, force: true });
+  });
+
+  it('有已发布页：类型骨架计数 + 完整条目（pageId + 绝对路径）+ 工具说明，总长 ≤ 8000', async () => {
+    writePage('concepts/dds.md', page('concept', 'DDS 原理'));
+    writePage('entities/ddr.md', page('entity', 'DDR 控制器'));
+
+    const result = await buildKbContext(projectDir);
+    expect(result.truncated).toBe(false);
+    expect(result.contextText.length).toBeLessThanOrEqual(8000);
+    expect(result.contextText).toContain('<kb-index');
+    expect(result.contextText).toContain('kb_search'); // 工具说明计入预算
+    expect(result.contextText).toContain('concept（概念）：1 页');
+    expect(result.contextText).toContain('entity（实体）：1 页');
+    // 条目含 pageId 与运行时绝对路径
+    expect(result.contextText).toContain('（concepts/dds）');
+    expect(result.contextText).toContain(join(kbPath, 'wiki', 'concepts', 'dds.md'));
+  });
+
+  it('页数超预算：整条目不截半、总长恒 ≤ 8000、truncated=true 并提示 kb_search', async () => {
+    // 每条目 ~300 字符 → 60 页必超 8000
+    for (let i = 0; i < 60; i++) {
+      writePage(`concepts/p${String(i).padStart(2, '0')}.md`, page('concept', `页面 ${i}`, 120));
+    }
+
+    const result = await buildKbContext(projectDir);
+    expect(result.truncated).toBe(true);
+    expect(result.contextText.length).toBeLessThanOrEqual(8000);
+    expect(result.contextText).toContain('注入预算已达上限');
+    expect(result.contextText).toContain('kb_search');
+    // 不在半个链接处截断：非空行要么是骨架/提示，要么是完整条目行
+    const entryLines = result.contextText.split('\n').filter((l) => l.startsWith('- ') && l.includes('）: '));
+    expect(entryLines.length).toBeGreaterThan(0);
+    for (const line of entryLines) {
+      expect(line).toMatch(/^- .+（.+）: .+( — .*)?$/); // pageId 与路径完整
+      expect(line.endsWith('）:')).toBe(false); // 路径没被截在中间
+    }
+    expect(result.contextText.endsWith('</kb-index>')).toBe(true);
+  });
+
+  it('仅 raw（无已发布页有来源）：说明未编译来源 + kb_search 检索入口', async () => {
+    writeFileSync(join(kbPath, 'raw', 'sources', 'spec.pdf'), 'PDF bytes', 'utf-8');
+
+    const result = await buildKbContext(projectDir);
+    expect(result.contextText).not.toBe('');
+    expect(result.contextText).toContain('未编译来源');
+    expect(result.contextText).toContain('kb_search');
+    expect(result.contextText).not.toContain('（concepts/'); // 无条目
+  });
+
+  it('空库（无已发布页也无来源）：不注入', async () => {
+    const result = await buildKbContext(projectDir);
+    expect(result.contextText).toBe('');
   });
 });

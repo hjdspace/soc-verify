@@ -91,7 +91,8 @@ import {
   readWikiRules,
   saveWikiRules,
 } from '../../kb/wiki-rules';
-import { parseWikiSchema } from '../../kb/wiki-schema';
+import { parseWikiSchema, WIKI_PAGE_TYPES } from '../../kb/wiki-schema';
+import { searchWiki } from '../../kb/wiki-search';
 import { WIKI_PAGE_TEMPLATES } from '../../kb/wiki-page';
 import {
   listChangeSets,
@@ -112,10 +113,13 @@ import type {
   KbFormat,
 } from '../../kb/types';
 import type {
+  WikiPageType,
   WikiParsedView,
   WikiPublishResult,
   WikiQueueErrorCode,
   WikiQueueSnapshot,
+  WikiSearchOptions,
+  WikiSearchOutcome,
   WikiSourceRevisionInfo,
   WikiSourceSummary,
   WikiIngestTask,
@@ -1393,6 +1397,46 @@ export const kbRouter = t.router({
         });
       }
       return res.page;
+    }),
+
+  // ─── kb.wikiSearch（issue 14） ─────────────────────────────
+  //
+  // 统一关键词检索：已发布 wiki 页 + 当前 parsed 来源全文。
+  // UI 与 kb_search Host Tool 共用同一主进程服务（searchWiki），
+  // 排序逻辑不复制。wiki 挂载 + 读取门禁由 getWikiMountedKbPath 把关。
+
+  wikiSearch: t.procedure
+    .input((raw): WikiSearchOptions => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.query !== 'string' || r.query.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'query is required' });
+      }
+      if (r.topK !== undefined && (typeof r.topK !== 'number' || !Number.isFinite(r.topK))) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'topK must be a number' });
+      }
+      if (
+        r.pageType !== undefined
+        && (typeof r.pageType !== 'string' || !(WIKI_PAGE_TYPES as readonly string[]).includes(r.pageType))
+      ) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: `pageType 必须是固定八类之一: ${String(r.pageType)}` });
+      }
+      if (r.tag !== undefined && (typeof r.tag !== 'string' || r.tag.trim().length === 0)) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'tag must be a non-empty string' });
+      }
+      if (r.kind !== undefined && r.kind !== 'wiki' && r.kind !== 'parsed') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: "kind must be 'wiki' or 'parsed'" });
+      }
+      return {
+        query: r.query,
+        ...(typeof r.topK === 'number' ? { topK: r.topK } : {}),
+        ...(typeof r.pageType === 'string' ? { pageType: r.pageType as WikiPageType } : {}),
+        ...(typeof r.tag === 'string' ? { tag: r.tag.trim() } : {}),
+        ...(r.kind === 'wiki' || r.kind === 'parsed' ? { kind: r.kind } : {}),
+      };
+    })
+    .query(async ({ input }): Promise<WikiSearchOutcome> => {
+      const kbPath = await getWikiMountedKbPath();
+      return searchWiki(kbPath, input);
     }),
 
   // ─── kb.wikiRules（issue 04） ──────────────────────────────

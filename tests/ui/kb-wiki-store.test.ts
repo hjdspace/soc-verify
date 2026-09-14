@@ -68,11 +68,13 @@ const { mockCatalog, mockPage, mockRules } = vi.hoisted(() => ({
 
 // ─── Mock tRPC ──────────────────────────────────────────────
 
-const { wikiCatalogQueryMock, wikiPageMock, saveRulesMock, validateSchemaMock } = vi.hoisted(() => ({
+const { wikiCatalogQueryMock, wikiPageMock, saveRulesMock, validateSchemaMock, wikiSearchMock, sourceParsedMock } = vi.hoisted(() => ({
   wikiCatalogQueryMock: vi.fn(),
   wikiPageMock: vi.fn(),
   saveRulesMock: vi.fn(),
   validateSchemaMock: vi.fn(),
+  wikiSearchMock: vi.fn(),
+  sourceParsedMock: vi.fn(),
 }));
 
 vi.mock('@renderer/lib/trpc', () => ({
@@ -83,6 +85,8 @@ vi.mock('@renderer/lib/trpc', () => ({
       wikiRules: { query: vi.fn().mockResolvedValue(mockRules) },
       saveWikiRules: { mutate: saveRulesMock },
       validateWikiSchema: { mutate: validateSchemaMock },
+      wikiSearch: { query: wikiSearchMock },
+      sourceParsed: { query: sourceParsedMock },
     },
   },
 }));
@@ -259,5 +263,141 @@ describe('写作规则', () => {
     const ok = await useKbWikiStore.getState().saveRules();
     expect(ok).toBe(true);
     expect(saveRulesMock).not.toHaveBeenCalled();
+  });
+});
+
+// ─── 知识检索（issue 14）────────────────────────────────────
+
+const searchOkResponse = {
+  ok: true as const,
+  result: {
+    mode: 'keyword' as const,
+    kbId: 'kb-1',
+    coverage: { wikiPages: 8, parsedSources: 2 },
+    hits: [
+      {
+        kind: 'wiki' as const,
+        id: 'concepts/dds',
+        relativePath: 'wiki/concepts/dds.md',
+        absolutePath: 'D:/kb/wiki/concepts/dds.md',
+        title: 'DDS',
+        snippet: null,
+        pageType: 'concept' as const,
+        tags: ['单测'],
+        keywords: [],
+        sourceRefs: [],
+        stale: false,
+        score: 10,
+      },
+      {
+        kind: 'parsed' as const,
+        id: 'src-1',
+        relativePath: 'raw/parsed/spec/dds.pdf.md',
+        absolutePath: 'D:/kb/raw/parsed/spec/dds.pdf.md',
+        title: 'dds.pdf',
+        snippet: '…DDS…',
+        stale: false,
+        sourceRevision: 'rev-a',
+        score: 1,
+      },
+    ],
+  },
+};
+
+describe('kb-wiki store — runSearch（issue 14 统一检索）', () => {
+  beforeEach(() => {
+    useKbWikiStore.setState({
+      search: {
+        query: '',
+        kindFilter: '',
+        pageTypeFilter: '',
+        tagFilter: '',
+        searching: false,
+        hits: [],
+        coverage: null,
+        errorCode: null,
+        errorMessage: null,
+      },
+    });
+  });
+
+  it('空 query 拦截：提示输入关键词且不发起请求', async () => {
+    useKbWikiStore.setState({
+      search: { ...useKbWikiStore.getState().search, query: '   ' },
+    });
+    await useKbWikiStore.getState().runSearch();
+    expect(useKbWikiStore.getState().search.errorMessage).toBe('请输入检索关键词');
+    expect(wikiSearchMock).not.toHaveBeenCalled();
+  });
+
+  it('成功：hits/coverage 写入；kind/pageType/tag 筛选随请求透传', async () => {
+    wikiSearchMock.mockResolvedValueOnce(searchOkResponse);
+    useKbWikiStore.setState({
+      search: {
+        query: 'DDS',
+        kindFilter: 'wiki',
+        pageTypeFilter: 'concept',
+        tagFilter: '单测',
+        searching: false,
+        hits: [],
+        coverage: null,
+        errorCode: null,
+        errorMessage: null,
+      },
+    });
+
+    await useKbWikiStore.getState().runSearch();
+
+    expect(wikiSearchMock).toHaveBeenCalledWith({
+      query: 'DDS',
+      kind: 'wiki',
+      pageType: 'concept',
+      tag: '单测',
+    });
+    const search = useKbWikiStore.getState().search;
+    expect(search.searching).toBe(false);
+    expect(search.errorCode).toBeNull();
+    expect(search.errorMessage).toBeNull();
+    expect(search.hits).toHaveLength(2);
+    expect(search.coverage).toEqual({ wikiPages: 8, parsedSources: 2 });
+  });
+
+  it('服务返回 ok:false（如门禁暂停）：errorCode/errorMessage 透传，hits 清空', async () => {
+    wikiSearchMock.mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'readGateBlocked', message: '知识库存在未恢复的发布事务' },
+    });
+    useKbWikiStore.setState({
+      search: { ...useKbWikiStore.getState().search, query: 'DDS', hits: searchOkResponse.result.hits },
+    });
+
+    await useKbWikiStore.getState().runSearch();
+
+    const search = useKbWikiStore.getState().search;
+    expect(search.errorCode).toBe('readGateBlocked');
+    expect(search.errorMessage).toContain('未恢复的发布事务');
+    expect(search.hits).toEqual([]);
+    expect(search.coverage).toBeNull();
+  });
+
+  it('请求异常（如未挂载 PRECONDITION_FAILED）：requestFailed', async () => {
+    wikiSearchMock.mockRejectedValueOnce(new Error('当前挂载的不是 wiki 布局知识库'));
+    useKbWikiStore.setState({ search: { ...useKbWikiStore.getState().search, query: 'DDS' } });
+
+    await useKbWikiStore.getState().runSearch();
+
+    const search = useKbWikiStore.getState().search;
+    expect(search.errorCode).toBe('requestFailed');
+    expect(search.errorMessage).toContain('wiki 布局');
+    expect(search.hits).toEqual([]);
+  });
+
+  it('setSearchQuery / setSearchFilters 更新对应字段', () => {
+    useKbWikiStore.getState().setSearchQuery('axi');
+    useKbWikiStore.getState().setSearchFilters({ kindFilter: 'parsed', tagFilter: '时序' });
+    const search = useKbWikiStore.getState().search;
+    expect(search.query).toBe('axi');
+    expect(search.kindFilter).toBe('parsed');
+    expect(search.tagFilter).toBe('时序');
   });
 });

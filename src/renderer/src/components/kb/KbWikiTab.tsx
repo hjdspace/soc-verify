@@ -11,22 +11,30 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { BookOpen, FileWarning, ScrollText, ShieldAlert } from 'lucide-react';
+import { BookOpen, FileWarning, ScrollText, Search, ShieldAlert, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { cn } from '@renderer/lib/utils';
+import { trpc } from '@renderer/lib/trpc';
 import { useKbWikiStore } from '@renderer/stores/kb-wiki';
 import { wikiLinksToDisplayMarkdown, parseWikilinkHref } from '@renderer/lib/wiki-links';
-import type { WikiPageType } from '@shared/kb-types';
+import type { WikiPageType, WikiSearchHit } from '@shared/kb-types';
 
 export function KbWikiTab() {
-  const [section, setSection] = useState<'pages' | 'rules'>('pages');
+  const [section, setSection] = useState<'pages' | 'rules' | 'search'>('pages');
   const loadCatalog = useKbWikiStore((s) => s.loadCatalog);
   const reset = useKbWikiStore((s) => s.reset);
+  const openPage = useKbWikiStore((s) => s.openPage);
 
   useEffect(() => {
     void loadCatalog();
     return () => reset();
   }, [loadCatalog, reset]);
+
+  /** 检索结果中的 wiki 命中 → 切到知识页区并打开该页 */
+  const openWikiHit = (pageId: string): void => {
+    setSection('pages');
+    void openPage(pageId);
+  };
 
   return (
     <div className="flex h-full flex-col overflow-hidden" data-testid="kb-wiki-tab">
@@ -43,6 +51,19 @@ export function KbWikiTab() {
         >
           <BookOpen className="h-3.5 w-3.5" />
           知识页
+        </button>
+        <button
+          onClick={() => setSection('search')}
+          className={cn(
+            'flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors',
+            section === 'search'
+              ? 'bg-primary/10 text-primary'
+              : 'text-muted-foreground hover:text-foreground',
+          )}
+          data-testid="kb-wiki-search-tab"
+        >
+          <Search className="h-3.5 w-3.5" />
+          检索
         </button>
         <button
           onClick={() => setSection('rules')}
@@ -63,7 +84,7 @@ export function KbWikiTab() {
         </span>
       </div>
 
-      {section === 'pages' ? <PageBrowser /> : <RulesEditor />}
+      {section === 'pages' ? <PageBrowser /> : section === 'search' ? <SearchPanel onOpenWikiPage={openWikiHit} /> : <RulesEditor />}
     </div>
   );
 }
@@ -344,6 +365,221 @@ function RulesEditor() {
           {rulesSaving ? '保存中…' : '保存规则'}
         </button>
       </div>
+    </div>
+  );
+}
+
+// ── 知识检索（issue 14）──────────────────────────────────────────
+
+const WIKI_PAGE_TYPE_OPTIONS: readonly WikiPageType[] = [
+  'source', 'entity', 'concept', 'comparison',
+  'synthesis', 'query', 'pitfall', 'interface',
+];
+
+function SearchPanel({ onOpenWikiPage }: { onOpenWikiPage: (pageId: string) => void }): React.JSX.Element {
+  const search = useKbWikiStore((s) => s.search);
+  const setSearchQuery = useKbWikiStore((s) => s.setSearchQuery);
+  const setSearchFilters = useKbWikiStore((s) => s.setSearchFilters);
+  const runSearch = useKbWikiStore((s) => s.runSearch);
+  const catalog = useKbWikiStore((s) => s.catalog);
+
+  /** parsed 命中的全文预览（sourceId → kb.sourceParsed） */
+  const [parsedHit, setParsedHit] = useState<WikiSearchHit | null>(null);
+  const [parsedContent, setParsedContent] = useState<string | null>(null);
+  const [parsedLoading, setParsedLoading] = useState(false);
+  const [parsedError, setParsedError] = useState<string | null>(null);
+
+  // 标签筛选选项：从目录页面的 frontmatter tags 收集
+  const tagOptions = useMemo(() => {
+    if (!catalog) return [];
+    const tags = new Set<string>();
+    for (const p of catalog.pages) {
+      if (p.parse.ok) for (const t of p.parse.frontmatter.tags) tags.add(t);
+    }
+    return Array.from(tags).sort((a, b) => a.localeCompare(b));
+  }, [catalog]);
+
+  const openParsedHit = async (hit: WikiSearchHit): Promise<void> => {
+    setParsedHit(hit);
+    setParsedContent(null);
+    setParsedError(null);
+    setParsedLoading(true);
+    try {
+      const view = await trpc.kb.sourceParsed.query({ sourceId: hit.id });
+      setParsedContent(view.content);
+    } catch (err) {
+      setParsedError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setParsedLoading(false);
+    }
+  };
+
+  const closeParsed = (): void => {
+    setParsedHit(null);
+    setParsedContent(null);
+    setParsedError(null);
+    setParsedLoading(false);
+  };
+
+  return (
+    <div className="relative flex flex-1 flex-col overflow-hidden px-4 py-3" data-testid="kb-wiki-search">
+      {/* 检索栏：关键词 + 类型/标签筛选（与 kb_search 同一主进程服务） */}
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          value={search.query}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void runSearch();
+          }}
+          placeholder="关键词（支持中文 bigram 与 AWLEN / [7:0] / 0x10 等精确符号）"
+          className="h-7 min-w-56 flex-1 rounded border border-border bg-transparent px-2 text-xs outline-none placeholder:text-muted-foreground/60 focus:ring-1 focus:ring-primary/40"
+          data-testid="kb-wiki-search-input"
+        />
+        <select
+          value={search.kindFilter}
+          onChange={(e) => setSearchFilters({ kindFilter: e.target.value as '' | 'wiki' | 'parsed' })}
+          className="h-7 rounded border border-border bg-transparent px-1 text-xs"
+          data-testid="kb-wiki-search-kind"
+        >
+          <option value="">全部对象</option>
+          <option value="wiki">知识页</option>
+          <option value="parsed">来源全文</option>
+        </select>
+        <select
+          value={search.pageTypeFilter}
+          onChange={(e) => setSearchFilters({ pageTypeFilter: e.target.value })}
+          className="h-7 rounded border border-border bg-transparent px-1 text-xs"
+          data-testid="kb-wiki-search-pagetype"
+        >
+          <option value="">全部类型</option>
+          {WIKI_PAGE_TYPE_OPTIONS.map((t) => (
+            <option key={t} value={t}>{t}</option>
+          ))}
+        </select>
+        <select
+          value={search.tagFilter}
+          onChange={(e) => setSearchFilters({ tagFilter: e.target.value })}
+          className="h-7 rounded border border-border bg-transparent px-1 text-xs"
+          data-testid="kb-wiki-search-tag"
+        >
+          <option value="">全部标签</option>
+          {tagOptions.map((t) => (
+            <option key={t} value={t}>{t}</option>
+          ))}
+        </select>
+        <button
+          onClick={() => void runSearch()}
+          disabled={search.searching || search.query.trim() === ''}
+          className="h-7 rounded bg-primary px-3 text-xs font-medium text-primary-foreground transition-opacity disabled:opacity-50"
+          data-testid="kb-wiki-search-run"
+        >
+          {search.searching ? '检索中…' : '检索'}
+        </button>
+      </div>
+
+      {/* 覆盖状态 */}
+      {search.coverage && (
+        <div className="mt-1.5 text-[11px] text-muted-foreground" data-testid="kb-wiki-search-coverage">
+          参与排名：知识页 {search.coverage.wikiPages} 页 · 来源全文 {search.coverage.parsedSources} 份
+          {search.hits.length > 0 ? ` · 命中 ${search.hits.length} 条` : ''}
+        </div>
+      )}
+
+      {/* 错误态（未挂载 / 非 wiki 布局 / 门禁暂停 / 请求失败） */}
+      {search.errorMessage && (
+        <div
+          className="mt-3 flex items-start gap-2 rounded border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive"
+          data-testid="kb-wiki-search-error"
+        >
+          <FileWarning className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>{search.errorMessage}</span>
+        </div>
+      )}
+
+      {/* 结果列表 */}
+      {!search.errorMessage && search.hits.length > 0 && (
+        <div className="mt-2 flex-1 overflow-y-auto" data-testid="kb-wiki-search-results">
+          {search.hits.map((hit) => (
+            <button
+              key={`${hit.kind}:${hit.id}`}
+              onClick={() => {
+                if (hit.kind === 'wiki') onOpenWikiPage(hit.id);
+                else void openParsedHit(hit);
+              }}
+              className="block w-full rounded border border-transparent px-2 py-1.5 text-left transition-colors hover:border-border hover:bg-secondary/50"
+              data-testid={`kb-wiki-search-hit-${hit.kind}-${hit.id}`}
+            >
+              <div className="flex items-center gap-1.5">
+                <span
+                  className={cn(
+                    'rounded px-1 py-0.5 text-[10px] font-medium',
+                    hit.kind === 'wiki'
+                      ? 'bg-primary/10 text-primary'
+                      : 'bg-muted text-muted-foreground',
+                  )}
+                >
+                  {hit.kind === 'wiki' ? '知识页' : '来源全文'}
+                </span>
+                {hit.pageType && <span className="text-[10px] text-muted-foreground">{hit.pageType}</span>}
+                <span className="truncate text-xs font-medium text-foreground">{hit.title}</span>
+                {hit.stale && (
+                  <span className="shrink-0 rounded bg-amber-500/15 px-1 py-0.5 text-[10px] text-amber-600 dark:text-amber-400">
+                    来源已更新
+                  </span>
+                )}
+                {hit.kind === 'parsed' && hit.sourceRevision && (
+                  <span className="shrink-0 text-[10px] text-muted-foreground" title="来源当前修订">
+                    rev {hit.sourceRevision.slice(0, 8)}
+                  </span>
+                )}
+              </div>
+              <div className="mt-0.5 truncate text-[11px] text-muted-foreground" title={hit.absolutePath}>
+                {hit.relativePath}
+              </div>
+              {hit.snippet && (
+                <div className="mt-0.5 line-clamp-2 text-[11px] text-muted-foreground/90">{hit.snippet}</div>
+              )}
+              {(hit.tags?.length ?? 0) > 0 && (
+                <div className="mt-0.5 flex flex-wrap gap-1">
+                  {hit.tags?.map((t) => (
+                    <span key={t} className="rounded bg-secondary px-1 text-[10px] text-secondary-foreground">{t}</span>
+                  ))}
+                </div>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* 空态：检索过但无命中 */}
+      {!search.errorMessage && !search.searching && search.hits.length === 0 && search.coverage && (
+        <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground" data-testid="kb-wiki-search-empty">
+          无匹配结果——试试更短的关键词，或放宽类型/标签筛选
+        </div>
+      )}
+
+      {/* parsed 全文预览（只读浮层） */}
+      {parsedHit && (
+        <div className="absolute inset-0 z-10 flex flex-col bg-background/95 px-4 py-3" data-testid="kb-wiki-parsed-preview">
+          <div className="flex items-center gap-2">
+            <span className="rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground">来源全文</span>
+            <span className="truncate text-xs font-medium text-foreground">{parsedHit.title}</span>
+            {parsedHit.sourceRevision && (
+              <span className="text-[10px] text-muted-foreground">rev {parsedHit.sourceRevision.slice(0, 8)}</span>
+            )}
+            <button
+              onClick={closeParsed}
+              className="ml-auto rounded p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+              data-testid="kb-wiki-parsed-close"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <div className="mt-2 flex-1 overflow-y-auto whitespace-pre-wrap rounded border border-border p-2 text-[11px] leading-relaxed text-foreground">
+            {parsedLoading ? '正在读取全文…' : parsedError ?? parsedContent}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

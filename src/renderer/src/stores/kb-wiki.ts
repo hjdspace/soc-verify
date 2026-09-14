@@ -11,9 +11,12 @@ import { trpc } from '@renderer/lib/trpc';
 import { useToastStore } from './toast';
 import type {
   WikiCatalog,
+  WikiPageType,
   WikiPageView,
   WikiRulesSaveError,
   WikiSchemaIssue,
+  WikiSearchHit,
+  WikiSearchOutcome,
 } from '@shared/kb-types';
 
 /** 规则编辑草稿的即时校验态 */
@@ -22,6 +25,20 @@ export type WikiRulesValidation =
   | { status: 'validating' }
   | { status: 'invalid'; issues: WikiSchemaIssue[] }
   | { status: 'valid' };
+
+/** 知识检索状态（issue 14） */
+export type WikiSearchState = {
+  query: string;
+  kindFilter: '' | 'wiki' | 'parsed';
+  pageTypeFilter: string;
+  tagFilter: string;
+  searching: boolean;
+  /** 最近一次结果（含空态）；error 非空时表示检索失败 */
+  hits: WikiSearchHit[];
+  coverage: { wikiPages: number; parsedSources: number } | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+};
 
 interface KbWikiStoreState {
   // ── 页面目录 ─────────────────────────────────────────────
@@ -43,6 +60,9 @@ interface KbWikiStoreState {
   validation: WikiRulesValidation;
   rulesSaving: boolean;
 
+  // ── 知识检索（issue 14）──────────────────────────────────
+  search: WikiSearchState;
+
   // ── 操作 ─────────────────────────────────────────────────
   loadCatalog: () => Promise<void>;
   openPage: (pageId: string) => Promise<void>;
@@ -51,6 +71,9 @@ interface KbWikiStoreState {
   setSchemaDraft: (raw: string) => void;
   setPurposeDraft: (raw: string) => void;
   saveRules: () => Promise<boolean>;
+  setSearchQuery: (query: string) => void;
+  setSearchFilters: (filters: Partial<Pick<WikiSearchState, 'kindFilter' | 'pageTypeFilter' | 'tagFilter'>>) => void;
+  runSearch: () => Promise<void>;
   reset: () => void;
 }
 
@@ -71,6 +94,18 @@ export const useKbWikiStore = create<KbWikiStoreState>((set, get) => ({
   purposeDraft: null,
   validation: { status: 'idle' },
   rulesSaving: false,
+
+  search: {
+    query: '',
+    kindFilter: '',
+    pageTypeFilter: '',
+    tagFilter: '',
+    searching: false,
+    hits: [],
+    coverage: null,
+    errorCode: null,
+    errorMessage: null,
+  },
 
   loadCatalog: async () => {
     set({ catalogLoading: true, catalogError: null });
@@ -199,6 +234,67 @@ export const useKbWikiStore = create<KbWikiStoreState>((set, get) => ({
     }
   },
 
+  setSearchQuery: (query) => {
+    set({ search: { ...get().search, query } });
+  },
+
+  setSearchFilters: (filters) => {
+    set({ search: { ...get().search, ...filters } });
+  },
+
+  /** 统一关键词检索：tRPC kb.wikiSearch，与 kb_search Host Tool 同一主进程服务 */
+  runSearch: async () => {
+    const { search } = get();
+    const query = search.query.trim();
+    if (!query) {
+      set({ search: { ...search, errorMessage: '请输入检索关键词' } });
+      return;
+    }
+    set({ search: { ...search, searching: true, errorMessage: null, errorCode: null } });
+    try {
+      const res: WikiSearchOutcome = await trpc.kb.wikiSearch.query({
+        query,
+        ...(search.kindFilter !== '' ? { kind: search.kindFilter } : {}),
+        ...(search.pageTypeFilter !== '' ? { pageType: search.pageTypeFilter as WikiPageType } : {}),
+        ...(search.tagFilter !== '' ? { tag: search.tagFilter } : {}),
+      });
+      if (res.ok) {
+        set({
+          search: {
+            ...search,
+            searching: false,
+            hits: res.result.hits,
+            coverage: res.result.coverage,
+            errorCode: null,
+            errorMessage: null,
+          },
+        });
+      } else {
+        set({
+          search: {
+            ...search,
+            searching: false,
+            hits: [],
+            coverage: null,
+            errorCode: res.error.code,
+            errorMessage: res.error.message,
+          },
+        });
+      }
+    } catch (err) {
+      set({
+        search: {
+          ...search,
+          searching: false,
+          hits: [],
+          coverage: null,
+          errorCode: 'requestFailed',
+          errorMessage: err instanceof Error ? err.message : String(err),
+        },
+      });
+    }
+  },
+
   reset: () => {
     if (validationTimer !== null) {
       clearTimeout(validationTimer);
@@ -218,6 +314,17 @@ export const useKbWikiStore = create<KbWikiStoreState>((set, get) => ({
       purposeDraft: null,
       validation: { status: 'idle' },
       rulesSaving: false,
+      search: {
+        query: '',
+        kindFilter: '',
+        pageTypeFilter: '',
+        tagFilter: '',
+        searching: false,
+        hits: [],
+        coverage: null,
+        errorCode: null,
+        errorMessage: null,
+      },
     });
   },
 }));
