@@ -15,22 +15,22 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   requestFix,
+  clearFixChangeSetId,
   type FixLlm,
-} from '../src/main/kb/lint-fixes';
-import { sweepReview } from '../src/main/kb/sweep-reviews';
+} from '@main/kb/lint-fixes';
+import { sweepReview } from '@main/kb/sweep-reviews';
 import {
   mergeFindings,
   readFindings,
   updateFindingStatus,
-} from '../src/main/kb/finding-store';
-import { computeFindingId } from '../src/main/kb/structural-lint';
-import { invalidateGraphSnapshot } from '../src/main/kb/wiki-graph';
-import { initWikiLayout, writeWikiManifest } from '../src/main/kb/wiki-layout';
-import { readChangeSet } from '../src/main/kb/staging';
-import { publishChangeSet } from '../src/main/kb/publish';
-import { writeFileAtomic } from '../src/main/kb/atomic-commit';
-import { wikiLayout } from '../src/main/kb/wiki-layout';
-import { clearFixChangeSetId } from '../src/main/kb/lint-fixes';
+} from '@main/kb/finding-store';
+import { computeFindingId } from '@main/kb/structural-lint';
+import { invalidateGraphSnapshot } from '@main/kb/wiki-graph';
+import { initWikiLayout, writeWikiManifest } from '@main/kb/wiki-layout';
+import { readChangeSet } from '@main/kb/staging';
+import { publishChangeSet } from '@main/kb/publish';
+import { writeFileAtomic } from '@main/kb/atomic-commit';
+import { wikiLayout } from '@main/kb/wiki-layout';
 import type { WikiStructuralFinding, WikiSourceRef, WikiChangeSetReview } from '@shared/kb-types';
 
 let kbPath: string;

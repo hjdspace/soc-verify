@@ -198,6 +198,7 @@ function hashesEqual(a: string[], b: string[]): boolean {
  *  - unignore → status=open
  *  - resolve → status=resolved
  *  - reopen → status=open
+ *  - requestFix → status 不变（保持 open），由 lint-fixes.ts 负责创建变更集后回写 fixChangeSetId
  *
  * finding 不存在时返回 findingNotFound。
  */
@@ -218,6 +219,17 @@ export async function updateFindingStatus(
   const idx = findings.findIndex((f) => f.findingId === findingId);
   if (idx === -1) {
     return { ok: false, code: 'findingNotFound', message: `Finding ${findingId} 不存在` };
+  }
+
+  // requestFix 不改变 status（保持 open），仅标记需要修复
+  if (action === 'requestFix') {
+    const updated: WikiStructuralFinding = {
+      ...findings[idx],
+      updatedAt: timestamp,
+    };
+    findings[idx] = updated;
+    await writeFindings(kbPath, findings);
+    return { ok: true, finding: updated };
   }
 
   const newStatus: WikiFindingStatus = action === 'ignore' ? 'ignored'
@@ -256,4 +268,50 @@ export async function listFindings(
   }
 
   return { ok: true, findings };
+}
+
+// ── finding 字段更新（issue 27）──────────────────────────────────
+
+/**
+ * 更新 finding 的修复关联字段（lint-fixes 和 sweep-reviews 调用）。
+ *
+ * - 设置 fixChangeSetId（修复提案创建后）
+ * - 设置 fixRevision（修复发布后）
+ * - 清除 fixChangeSetId（修复被拒绝/失败后）
+ *
+ * finding 不存在时返回 findingNotFound。
+ */
+export async function updateFindingFixFields(
+  kbPath: string,
+  findingId: string,
+  fields: { fixChangeSetId?: string | null; fixRevision?: number | null },
+  now?: string,
+): Promise<WikiFindingUpdateResult> {
+  const timestamp = now ?? new Date().toISOString();
+
+  const existingResult = await readFindings(kbPath);
+  if (!existingResult.ok) {
+    return { ok: false, code: 'findingNotFound', message: existingResult.message };
+  }
+  const findings = existingResult.findings;
+
+  const idx = findings.findIndex((f) => f.findingId === findingId);
+  if (idx === -1) {
+    return { ok: false, code: 'findingNotFound', message: `Finding ${findingId} 不存在` };
+  }
+
+  const updated: WikiStructuralFinding = {
+    ...findings[idx],
+    updatedAt: timestamp,
+  };
+  if (fields.fixChangeSetId !== undefined) {
+    updated.fixChangeSetId = fields.fixChangeSetId;
+  }
+  if (fields.fixRevision !== undefined) {
+    updated.fixRevision = fields.fixRevision;
+  }
+
+  findings[idx] = updated;
+  await writeFindings(kbPath, findings);
+  return { ok: true, finding: updated };
 }

@@ -17,12 +17,20 @@ files:
   - package.json
   - build/icons/**/*
   # @lancedb/lancedb 的 optionalDependencies 带一整套「自带向量化」依赖
-  # （@huggingface/transformers + onnxruntime-node/web + openai，实测未压缩约 337MB）。
-  # 本项目 embedding 走用户配置的端点、从不 import lancedb/embedding/*，
-  # 全项目也搜不到这四者的任何 import，属纯死重，必须排除以控制安装包体积
-  # （ADR 0034 §6）。带 `**/` 前缀是为了同时命中顶层与被 npm 嵌套安装的副本
-  # （实测 @lancedb/lancedb/node_modules/openai 也会出现）。
-  # 注意：不能改用全局 --omit=optional —— 本项目自身的 optionalDependencies
+  # （@huggingface/transformers + onnxruntime-node/web + openai），实测未压缩约
+  # 337.5MB。本项目 embedding 走用户配置的端点、从不 import lancedb/embedding/*，
+  # 全项目搜不到这四者的任何 import，属纯死重，排除以控制安装包体积（ADR 0034 §6）。
+  # 带 `**/` 前缀是为了同时命中顶层与被 npm 嵌套安装的副本。
+  #
+  # 已知残留：`files` 的否定**只排除那一个目录、不连带该包的传递依赖**，实测仍漏进
+  # 约 46.5MB（sharp/@img/*、protobufjs、web-streams-polyfill、flatbuffers 等）。
+  # 曾尝试用脚本按 lockfile 闭包差集剪枝整个子树，但该做法会误删 peerDependency
+  # 提供的运行时依赖（apache-arrow 是 lancedb 的 peerDep，其依赖 flatbuffers 被
+  # 误判为死重），导致 lancedb 无法加载。收益（46.5MB）不值这个风险，故保持现状。
+  # 如后续要彻底清理，正确前提是闭包遍历必须同时覆盖 peerDependencies，
+  # 且只处理顶层 node_modules 条目、并对"lancedb 仍可加载"做实测回归。
+  #
+  # 注意：不要改用全局 --omit=optional —— 本项目自身的 optionalDependencies
   # 里的 @rollup/rollup-win32-x64-msvc、lightningcss-win32-x64-msvc 是构建必需。
   - '!**/@huggingface/transformers/**'
   - '!**/onnxruntime-node/**'
