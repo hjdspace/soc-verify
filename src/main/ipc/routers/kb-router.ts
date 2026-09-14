@@ -101,6 +101,8 @@ import {
   recordDecision,
 } from '../../kb/staging';
 import { publishChangeSet } from '../../kb/publish';
+import { saveQueryMessages } from '../../kb/save-query';
+import type { SaveQueryOutcome } from '../../kb/save-query';
 import { assertReadGateOpen, WikiReadGateError } from '../../kb/read-gate';
 import type {
   KbRegistration,
@@ -1610,5 +1612,56 @@ export const kbRouter = t.router({
     .mutation(async ({ input }): Promise<WikiPublishResult> => {
       const kb = await getWikiMountedKb();
       return publishChangeSet(kb.path, { kbId: kb.kbId, changeSetId: input.changeSetId });
+    }),
+
+  // ─── kb.saveQuery（issue 18，spec §7） ─────────────────────
+  //
+  // 用户在聊天中选择一组问答消息，保存为 query 类型的知识页提案。
+  // 主进程固定项目、挂载 kbId 与引用的来源修订；对没有挂载或不存在的
+  // 引用给出明确错误。提案经既有 staging → 审阅 → 发布链路成为
+  // wiki/queries/<pageId>.md，跳过文件转换/提图阶段。
+  // 消息选择 hash + 引用修订去重，重复点击同一选择不创建重复任务。
+
+  saveQuery: t.procedure
+    .input((raw): {
+      messages: Array<{ role: 'user' | 'assistant'; content: string; id?: string }>;
+      title: string;
+      summary: string;
+      sourceRefs: Array<{ sourceId: string; sourceRevision: string; parsedHash: string }>;
+      referencedPageIds?: string[];
+    } => {
+      const r = raw as Record<string, unknown>;
+      if (!Array.isArray(r.messages) || r.messages.length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'messages is required and must be non-empty' });
+      }
+      for (const msg of r.messages) {
+        const m = msg as Record<string, unknown>;
+        if (typeof m.content !== 'string' || m.content.trim().length === 0) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'each message.content must be a non-empty string' });
+        }
+        if (m.role !== 'user' && m.role !== 'assistant') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'message.role must be user or assistant' });
+        }
+      }
+      if (typeof r.title !== 'string' || r.title.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'title is required' });
+      }
+      if (typeof r.summary !== 'string' || r.summary.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'summary is required' });
+      }
+      if (!Array.isArray(r.sourceRefs)) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'sourceRefs must be an array' });
+      }
+      return {
+        messages: r.messages as Array<{ role: 'user' | 'assistant'; content: string; id?: string }>,
+        title: r.title.trim(),
+        summary: r.summary.trim(),
+        sourceRefs: r.sourceRefs as Array<{ sourceId: string; sourceRevision: string; parsedHash: string }>,
+        ...(Array.isArray(r.referencedPageIds) ? { referencedPageIds: r.referencedPageIds as string[] } : {}),
+      };
+    })
+    .mutation(async ({ input }): Promise<SaveQueryOutcome> => {
+      const kb = await getWikiMountedKb();
+      return saveQueryMessages(kb.path, { ...input, kbId: kb.kbId });
     }),
 });
