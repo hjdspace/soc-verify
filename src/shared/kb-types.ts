@@ -1582,7 +1582,10 @@ export type WikiFindingKind =
   | 'no-outlinks'
   | 'broken-link'
   | 'bridge-node'
-  | 'sparse-community';
+  | 'sparse-community'
+  | 'contradiction'
+  | 'missing-knowledge'
+  | 'unsupported-claim';
 
 /** finding 的用户处置状态 */
 export type WikiFindingStatus = 'open' | 'ignored' | 'resolved';
@@ -1615,6 +1618,17 @@ export type WikiStructuralFinding = {
   createdAt: string;
   /** 最后更新时间（ISO） */
   updatedAt: string;
+  // ── 语义检查扩展字段（issue 27，spec §9）──────────────────────
+  /** 原文短引/定位（语义 finding 必须；结构 finding 缺省为 null） */
+  evidenceQuotes?: Array<{ pageId: string; quote: string; location?: string }> | null;
+  /** 结论描述（语义 finding 的检查结论） */
+  description?: string | null;
+  /** 是否为建议（不能证明的结论标建议） */
+  suggestion?: boolean;
+  /** 关联的修复变更集 ID（requestFix 后设置） */
+  fixChangeSetId?: string | null;
+  /** 修复发布后绑定的 revision（复检时验证） */
+  fixRevision?: number | null;
 };
 
 /** lint 扫描的覆盖信息 */
@@ -1645,12 +1659,112 @@ export type WikiLintRunResult =
   | { ok: false; code: 'catalogFailed' | 'readGateBlocked'; message: string };
 
 /** finding 更新动作 */
-export type WikiFindingAction = 'ignore' | 'unignore' | 'resolve' | 'reopen';
+export type WikiFindingAction = 'ignore' | 'unignore' | 'resolve' | 'reopen' | 'requestFix';
 
 /** finding 更新结果 */
 export type WikiFindingUpdateResult =
   | { ok: true; finding: WikiStructuralFinding }
   | { ok: false; code: 'findingNotFound'; message: string };
+
+// ── 语义 Lint（spec §9，issue 27）─────────────────────────────────
+
+/**
+ * 语义 finding 的规则类型（issue 27，spec §9）。
+ *
+ * 语义检查必须按预算选择候选组、加载正文证据再判断；
+ * 不能沿用各页前 500 字摘要抽样就宣称完整检查。
+ */
+export type WikiSemanticFindingKind = 'contradiction' | 'missing-knowledge' | 'unsupported-claim';
+
+/**
+ * 语义检查候选分组策略（spec §9）。
+ *
+ * 候选按同来源修订/主题/引用关系分组，不做无界全页两两比较。
+ */
+export type WikiSemanticGroupStrategy =
+  | 'same-source'    // 同来源修订
+  | 'shared-entity'  // 共实体（同关键词/同链接目标）
+  | 'link-neighbor'; // 链接邻居
+
+/** 语义检查候选组 */
+export type WikiSemanticCandidateGroup = {
+  /** 组身份（策略 + 涉及页面 hash） */
+  groupId: string;
+  /** 分组策略 */
+  strategy: WikiSemanticGroupStrategy;
+  /** 组内页面 pageId 列表 */
+  pageIds: string[];
+  /** 组的关键信息（如共享来源 ID、共享关键词等） */
+  groupKey: string;
+};
+
+/** 语义检查候选组的运行状态 */
+export type WikiSemanticGroupStatus = 'pending' | 'checked' | 'canceled' | 'failed';
+
+/** 语义检查候选组 checkpoint（支持取消/恢复）*/
+export type WikiSemanticCheckpoint = {
+  /** 组身份 */
+  groupId: string;
+  /** 运行状态 */
+  status: WikiSemanticGroupStatus;
+  /** 组内已检查的页面数 */
+  checkedPages: number;
+  /** 组内总页数 */
+  totalPages: number;
+  /** 上次错误信息（failed 时） */
+  error: string | null;
+};
+
+/** 语义 lint 运行结果 */
+export type WikiSemanticLintResult =
+  | {
+      ok: true;
+      kbId: string;
+      revision: number;
+      findings: WikiStructuralFinding[];
+      /** 候选组 checkpoints */
+      checkpoints: WikiSemanticCheckpoint[];
+      coverage: WikiLintCoverage;
+      /** 扫描时间（ISO） */
+      ranAt: string;
+      /** 是否被取消（部分结果仍返回） */
+      canceled: boolean;
+    }
+  | { ok: false; code: 'catalogFailed' | 'readGateBlocked' | 'llmFailed' | 'noLlmConfig'; message: string };
+
+/** lint 修复提案结果（issue 27，spec §9） */
+export type WikiLintFixResult =
+  | {
+      ok: true;
+      /** 创建的变更集 ID */
+      changeSetId: string;
+      /** 关联的 finding ID */
+      findingId: string;
+      /** 绑定的证据 hash（发布后复检时验证是否仍一致） */
+      evidenceHashes: string[];
+      /** 绑定的相关页基线（read/write baseline） */
+      pageBaseline: Array<{ pageId: string; hash: string | null }>;
+      /** 创建时间 */
+      createdAt: string;
+    }
+  | { ok: false; code: 'findingNotFound' | 'findingNotOpen' | 'llmFailed' | 'noLlmConfig' | 'stagingFailed' | 'alreadyRequested'; message: string };
+
+/** 发布后复检结果（issue 27，spec §9） */
+export type WikiSweepReviewResult =
+  | {
+      ok: true;
+      /** 复检的 finding ID */
+      findingId: string;
+      /** 复检绑定的 revision */
+      revision: number;
+      /** 复检结论：已解决 / 仍存在 */
+      resolved: boolean;
+      /** 仍存在时的证据 */
+      evidence: string | null;
+      /** 复检时间 */
+      checkedAt: string;
+    }
+  | { ok: false; code: 'findingNotFound' | 'noPublishedFix' | 'llmFailed' | 'noLlmConfig'; message: string };
 
 /** finding 列表查询过滤 */
 export type WikiFindingFilter = {
