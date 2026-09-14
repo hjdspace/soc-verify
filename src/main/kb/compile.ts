@@ -56,6 +56,7 @@ import {
   type ParsedProposalFile,
 } from './proposal-blocks';
 import { parseWikiPage } from './wiki-page';
+import { scanWikiCatalog } from './wiki-catalog';
 import { parseWikiSchema, WIKI_PAGE_TYPES, DEFAULT_TYPE_DIRS } from './wiki-schema';
 import { wikiLayout, readWikiManifest } from './wiki-layout';
 import { readWikiParsed } from './source-import';
@@ -99,6 +100,12 @@ import {
   clearLongSourceCheckpoint,
   LONG_SOURCE_CHECKPOINT_VERSION,
 } from './long-source-checkpoint';
+import {
+  computeCacheFingerprint,
+  checkCompileCache,
+  checkRejection,
+  type CompileCacheFingerprintInput,
+} from './compile-cache';
 import type {
   WikiChangeSet,
   WikiPageType,
@@ -212,6 +219,18 @@ export type CompileDiagnostics = {
   chunking: CompileChunkProgress | null;
 };
 
+/** 缓存命中（issue 17：已发布产出与指纹均有效，跳过 LLM 调用） */
+export type CompileCacheHit = {
+  ok: true;
+  /** 命中的缓存条目 */
+  cached: { sourceId: string; sourceRevision: string; publishedPageIds: string[]; publishedAt: string };
+  /** 不调用模型，usage 为空 */
+  usage: LlmUsage[];
+  retryCount: number;
+  repairAttempted: boolean;
+  chunking: null;
+};
+
 export type CompileSuccess = {
   ok: true;
   changeSet: WikiChangeSet;
@@ -232,7 +251,7 @@ export type CompileFailure = {
   diagnostics: CompileDiagnostics;
 };
 
-export type CompileResult = CompileSuccess | CompileFailure;
+export type CompileResult = CompileSuccess | CompileCacheHit | CompileFailure;
 
 export type CompileInput = {
   kbId: string;
@@ -270,6 +289,11 @@ export type CompileDeps = {
    * 'vision' = 开始图像解读；'analyzing' = 进入文本分析。
    */
   onPhaseChange?: (phase: 'vision' | 'analyzing') => void;
+  /**
+   * 用户显式重编译（issue 17）：跳过缓存检查与拒绝记录，强制重新编译。
+   * 队列的「重试」在缓存命中场景下默认不 force；用户点「重编译」才传 true。
+   */
+  force?: boolean;
 };
 
 /** 有界修复最多一次（spec §4：只允许一次有界修复调用） */
@@ -903,6 +927,68 @@ export async function compileWikiSource(
       parsedHash: rec.parsedHash,
     };
 
+    // ── 编译缓存检查（issue 17，spec §4：增量跳过） ──
+    // 重复导入或显式重编只重做失效工作；待审阅/拒绝/部分发布不冒充完整成功。
+    // force=true（用户显式重编译）时跳过缓存与拒绝记录检查。
+    if (!deps.force) {
+      throwIfAborted();
+
+      // 全拒绝记录检查：普通刷新不重新烧 token
+      const rejection = await checkRejection(kbPath, input.sourceId, rec.currentRevision);
+      if (rejection.rejected) {
+        return {
+          ok: true,
+          cached: {
+            sourceId: input.sourceId,
+            sourceRevision: rec.currentRevision,
+            publishedPageIds: [],
+            publishedAt: rejection.entry.rejectedAt,
+          },
+          usage: [],
+          retryCount: 0,
+          repairAttempted: false,
+          chunking: null,
+        } satisfies CompileCacheHit;
+      }
+
+      // 缓存指纹检查
+      const purposeForCache = await readFileOrNull(layout.purposeMdPath);
+      const schemaForCache = await readFileOrNull(layout.schemaMdPath);
+      const indexForCache = await readFileOrNull(join(kbPath, 'wiki', 'index.md'));
+      // 已发布页面 pageId 列表（参与指纹）
+      const scan = await scanWikiCatalog(kbPath);
+      const publishedPageIds = scan.ok
+        ? scan.catalog.pages.filter((p) => p.kind === 'page').map((p) => p.pageId)
+        : [];
+      const cacheInput: CompileCacheFingerprintInput = {
+        sourceId: input.sourceId,
+        sourceRevision: rec.currentRevision,
+        parsedHash: rec.parsedHash,
+        visionHash: null, // 视觉指纹在下方计算后更新；此处先 null，命中时视觉未变
+        schemaHash: schemaForCache ? sha256(schemaForCache) : 'ABSENT',
+        purposeHash: purposeForCache ? sha256(purposeForCache) : 'ABSENT',
+        modelFingerprint: llm.model,
+        readDependencyHash: sha256(indexForCache),
+        publishedPageIds,
+      };
+      const cacheResult = await checkCompileCache(kbPath, cacheInput);
+      if (cacheResult.hit) {
+        return {
+          ok: true,
+          cached: {
+            sourceId: input.sourceId,
+            sourceRevision: rec.currentRevision,
+            publishedPageIds: cacheResult.entry.publishedPageIds,
+            publishedAt: cacheResult.entry.publishedAt,
+          },
+          usage: [],
+          retryCount: 0,
+          repairAttempted: false,
+          chunking: null,
+        } satisfies CompileCacheHit;
+      }
+    }
+
     // ── 视觉门禁（issue 12，spec §3：失败/未配置阻止完整编译，不暗退回纯文字）──
     const assetManifest = await readPdfAssetManifest(kbPath, input.sourceId, rec.currentRevision);
     const uniqueAssets: PdfAssetRecord[] = [];
@@ -1357,6 +1443,32 @@ export async function compileWikiSource(
     // 编译成功：丢弃分段 checkpoint（未发布模型中间产物，不是成功缓存 —— 缓存属 issue 17）。
     // 失败/取消时保留，重试只重做未完成段。
     if (chunking) await clearLongSourceCheckpoint(kbPath, input.sourceId);
+
+    // ── 编译缓存指纹（issue 17）：在视觉与合并完成后计算最终指纹，存入 changeSet。
+    // 发布成功后 publish.ts 读取此指纹写入 compile-cache。
+    const purposeForFp = await readFileOrNull(layout.purposeMdPath);
+    const schemaForFp = await readFileOrNull(layout.schemaMdPath);
+    const indexForFp = await readFileOrNull(join(kbPath, 'wiki', 'index.md'));
+    const scanForFp = await scanWikiCatalog(kbPath);
+    const publishedPageIdsForFp = scanForFp.ok
+      ? scanForFp.catalog.pages.filter((p) => p.kind === 'page').map((p) => p.pageId)
+      : [];
+    changeSet.compileCacheFingerprint = computeCacheFingerprint({
+      sourceId: input.sourceId,
+      sourceRevision: rec.currentRevision,
+      parsedHash: rec.parsedHash,
+      visionHash: visionAppendix ? sha256(visionAppendix) : null,
+      schemaHash: schemaForFp ? sha256(schemaForFp) : 'ABSENT',
+      purposeHash: purposeForFp ? sha256(purposeForFp) : 'ABSENT',
+      modelFingerprint: llm.model,
+      readDependencyHash: sha256(indexForFp),
+      publishedPageIds: publishedPageIdsForFp,
+    });
+    // 持久化带指纹的 changeSet（原子替换）
+    await writeFileAtomic(
+      join(layout.stagingDir, `${changeSet.changeSetId}.json`),
+      JSON.stringify(changeSet, null, 2),
+    );
 
     return { ok: true, changeSet, usage, retryCount, repairAttempted, chunking };
   } catch (err) {

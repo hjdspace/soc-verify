@@ -46,6 +46,11 @@ import { assertReadGateOpen, WikiReadGateError } from './read-gate';
 import { resolveCandidateSet, validateCandidateLinks } from './candidate-set';
 import type { CandidatePage } from './candidate-set';
 import {
+  saveCompileCache,
+  recordRejection,
+  type CompileCacheEntry,
+} from './compile-cache';
+import {
   buildWikiIndex,
   buildWikiOverview,
   buildWikiLogEntry,
@@ -445,6 +450,11 @@ export async function publishChangeSet(
       if (built.error.code === 'stale') {
         await invalidateApproval(kbPath, input.changeSetId, built.error.detail ?? [], input.now);
       }
+      // ── 全拒绝记录（issue 17：普通刷新不重新烧 token） ──
+      // nothingAccepted = 所有页/hunk 均被拒绝 → 记录拒绝决定
+      if (built.error.code === 'nothingAccepted') {
+        await recordRejectionAfterPublish(kbPath, input.changeSetId, input.now);
+      }
       return { ok: false, error: built.error };
     }
 
@@ -453,6 +463,12 @@ export async function publishChangeSet(
     if (!committed.ok) {
       return fail('ioError', `发布提交失败（目标保持完整旧版）: ${committed.error.message}`);
     }
+
+    // ── 编译缓存保存（issue 17，spec §4：成功才更新 compile-cache） ──
+    // 只有 compile origin 且带指纹的变更集才写缓存；
+    // published_partial 也写入但 partial=true（checkCompileCache 会跳过它）。
+    // 全拒绝（无候选页）由 resolveCandidateSet 拦截，此处不会走到。
+    await saveCompileCacheAfterPublish(kbPath, input.changeSetId, plan);
 
     return {
       ok: true,
@@ -624,4 +640,74 @@ function mapStagingError(code: string): WikiPublishErrorCode {
   if (code === 'changeSetNotFound') return 'changeSetNotFound';
   if (code === 'stagingCorrupted') return 'stagingCorrupted';
   return 'ioError';
+}
+
+// ── 编译缓存保存（issue 17）─────────────────────────────────────
+
+/**
+ * 发布成功后保存编译缓存或记录全拒绝。
+ *
+ * - compile origin + compileCacheFingerprint 存在 → saveCompileCache
+ *   (partial=true 时写入但 checkCompileCache 会跳过)
+ * - compile origin + 无候选页（全拒绝）→ recordRejection
+ *   (spec §4：全拒绝记录决定，普通刷新不烧 token)
+ * - saveQuery/fix origin → 不处理缓存
+ *
+ * 失败不阻断发布结果（缓存是派生数据，可重建）。
+ */
+async function saveCompileCacheAfterPublish(
+  kbPath: string,
+  changeSetId: string,
+  plan: PublishPlan,
+): Promise<void> {
+  // 重新读取变更集以获取 origin 和 compileCacheFingerprint
+  const csRes = await readChangeSet(kbPath, changeSetId);
+  if (!csRes.ok) return;
+  const cs = csRes.value;
+
+  if (cs.origin !== 'compile') return;
+  if (!cs.sources[0]) return;
+  const sourceRef = cs.sources[0]!;
+
+  // 全拒绝：resolveCandidateSet 会以 nothingAccepted 阻止发布。
+  // 但如果走到这里且 plan.pages 为空（理论上不会），记录拒绝。
+  if (plan.pages.length === 0) {
+    const now = plan.meta.publishedAt as string | undefined ?? new Date().toISOString();
+    await recordRejection(kbPath, sourceRef.sourceId, sourceRef.sourceRevision, now);
+    return;
+  }
+
+  // 有编译缓存指纹 → 保存
+  if (cs.compileCacheFingerprint) {
+    const now = plan.meta.publishedAt as string | undefined ?? new Date().toISOString();
+    const entry: CompileCacheEntry = {
+      fingerprint: cs.compileCacheFingerprint,
+      sourceId: sourceRef.sourceId,
+      sourceRevision: sourceRef.sourceRevision,
+      publishedPageIds: plan.pages.map((p) => p.pageId),
+      publishedAt: now,
+      partial: plan.partial,
+    };
+    await saveCompileCache(kbPath, sourceRef.sourceId, entry);
+  }
+}
+
+/**
+ * 全拒绝时记录拒绝决定（issue 17：普通刷新不重新烧 token）。
+ * 只有 compile origin 的变更集参与拒绝记录。
+ * 失败不阻断发布失败结果（拒绝记录是派生数据，可重建）。
+ */
+async function recordRejectionAfterPublish(
+  kbPath: string,
+  changeSetId: string,
+  nowOverride?: string,
+): Promise<void> {
+  const csRes = await readChangeSet(kbPath, changeSetId);
+  if (!csRes.ok) return;
+  const cs = csRes.value;
+  if (cs.origin !== 'compile') return;
+  if (!cs.sources[0]) return;
+  const sourceRef = cs.sources[0]!;
+  const now = nowOverride ?? new Date().toISOString();
+  await recordRejection(kbPath, sourceRef.sourceId, sourceRef.sourceRevision, now);
 }

@@ -243,7 +243,7 @@ describe('compileWikiSource — 100 页手册分段编译（A05）', () => {
     const res = await compile(llm);
 
     expect(res.ok).toBe(true);
-    if (!res.ok) return;
+    if (!res.ok || 'cached' in res) return;
     const chunking = res.chunking;
     expect(chunking).not.toBeNull();
     if (!chunking) return;
@@ -281,7 +281,7 @@ describe('compileWikiSource — 100 页手册分段编译（A05）', () => {
 
     const res = await compile(llm);
     expect(res.ok).toBe(true);
-    if (!res.ok) return;
+    if (!res.ok || 'cached' in res) return;
 
     expect(manual.marks).toHaveLength(3);
     const page = res.changeSet.pages.find((p) => p.relPath.endsWith(`sources/${SOURCE_ID}.md`));
@@ -318,7 +318,7 @@ describe('compileWikiSource — 100 页手册分段编译（A05）', () => {
     const res = await compile(llm);
 
     expect(res.ok).toBe(true);
-    if (!res.ok) return;
+    if (!res.ok || 'cached' in res) return;
     const warnings = res.changeSet.warnings.join('\n');
     expect(warnings).toMatch(/结论超出单段结论上界/);
     expect(warnings).toMatch(/未静默丢弃/);
@@ -363,7 +363,7 @@ describe('compileWikiSource — 取消后从 checkpoint 恢复', () => {
     const second = longFakeLlm({ contextTokens, parsedHash: hash });
     const resumed = await compile(second);
     expect(resumed.ok).toBe(true);
-    if (!resumed.ok) return;
+    if (!resumed.ok || 'cached' in resumed) return;
     expect(resumed.chunking?.resumedFrom).toBe(2);
     expect(resumed.chunking?.total).toBeGreaterThan(2);
     expect(second.calls.filter((c) => c.kind === 'chunk')).toHaveLength(resumed.chunking!.total - 2);
@@ -399,7 +399,7 @@ describe('compileWikiSource — 取消后从 checkpoint 恢复', () => {
     const second = longFakeLlm({ contextTokens, parsedHash: newHash });
     const res2 = await compile(second);
     expect(res2.ok).toBe(true);
-    if (!res2.ok) return;
+    if (!res2.ok || 'cached' in res2) return;
     expect(res2.chunking?.resumedFrom).toBe(0);
     expect(second.calls.filter((c) => c.kind === 'chunk')).toHaveLength(res2.chunking!.total);
     const page = res2.changeSet.pages.find((p) => p.relPath.endsWith(`sources/${SOURCE_ID}.md`));

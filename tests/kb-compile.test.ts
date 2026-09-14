@@ -207,7 +207,7 @@ describe('compileWikiSource — 成功路径', () => {
     const res = await compile(llm);
 
     expect(res.ok).toBe(true);
-    if (!res.ok) return;
+    if (!res.ok || 'cached' in res) return;
     expect(llm.requests).toHaveLength(2);
     // 分析阶段拿到来源全文与 index；生成阶段拿到分析结果
     expect(llm.requests[0]!.user).toContain(PARSED_CONTENT);
@@ -239,10 +239,10 @@ describe('compileWikiSource — 成功路径', () => {
     const llm = fakeLlm(standardScript());
     const res = await compile(llm);
     expect(res.ok).toBe(true);
-    if (!res.ok) return;
+    if (!res.ok || 'cached' in res) return;
     const axi = res.changeSet.pages.find((p) => p.pageId === 'concepts/axi');
     expect(axi?.before).not.toBeNull();
-    expect(res.changeSet.warnings.join('\n')).toContain('正文合并');
+    expect(res.changeSet.warnings.join('\n')).toContain('来源感知合并');
   });
 });
 

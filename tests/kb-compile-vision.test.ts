@@ -279,7 +279,7 @@ describe('compileWikiSource — 视觉附录', () => {
     const llm = fakeLlm(standardScript());
     const res = await compile({ llm, visionLlm: vision });
     expect(res.ok).toBe(true);
-    if (!res.ok) return;
+    if (!res.ok || 'cached' in res) return;
     expect(vision.invoke).toBeDefined();
     // 附录明确标注模型生成与非原文，携带 assetId 与解读内容
     expect(llm.requests[0]!.user).toContain('模型图像解读');
@@ -303,7 +303,7 @@ describe('compileWikiSource — 仅按文字继续（textOnly）', () => {
     const llm = fakeLlm(standardScript());
     const res = await compile({ llm, visionLlm: vision, textOnly: true });
     expect(res.ok).toBe(true);
-    if (!res.ok) return;
+    if (!res.ok || 'cached' in res) return;
     // 明确跳过：不调用视觉模型
     expect((vision as unknown as { calls: number }).calls).toBe(0);
     expect(res.changeSet.partial).toBe(true);
@@ -329,7 +329,7 @@ describe('compileWikiSource — 仅按文字继续（textOnly）', () => {
     const llm = fakeLlm(standardScript());
     const res = await compile({ llm, visionLlm: null, textOnly: true });
     expect(res.ok).toBe(true);
-    if (!res.ok) return;
+    if (!res.ok || 'cached' in res) return;
     expect(res.changeSet.partial).toBe(true);
     expect(res.changeSet.visionGaps).toHaveLength(1);
     expect(res.changeSet.visionGaps![0].assetId).toBe(asset2Id);
@@ -375,7 +375,7 @@ describe('compileWikiSource — 批次上限与真实 usage（issue 13）', () =
     const llm = fakeLlm(standardScript());
     const res = await compile({ llm, visionLlm: fakeVisionLlm(MODEL_OUTPUT) });
     expect(res.ok).toBe(true);
-    if (!res.ok) return;
+    if (!res.ok || 'cached' in res) return;
     // fakeVisionLlm 每次调用 usage {inputTokens:10, outputTokens:5}
     expect(res.usage).toContainEqual({ inputTokens: 10, outputTokens: 5 });
   });

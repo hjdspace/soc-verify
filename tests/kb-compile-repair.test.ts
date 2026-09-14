@@ -151,7 +151,7 @@ describe('compileWikiSource — 有界修复（issue 09）', () => {
     const res = await compile(llm);
 
     expect(res.ok).toBe(true);
-    if (!res.ok) return;
+    if (!res.ok || 'cached' in res) return;
     expect(llm.requests).toHaveLength(3);            // 分析 + 生成 + 修复（不重复修复）
     expect(res.repairAttempted).toBe(true);
     expect(res.changeSet.pages.map((p) => p.pageId)).toEqual([`sources/${SOURCE_ID}`]);
@@ -169,7 +169,7 @@ describe('compileWikiSource — 有界修复（issue 09）', () => {
     ]);
     const res = await compile(llm);
     expect(res.ok).toBe(true);
-    if (!res.ok) return;
+    if (!res.ok || 'cached' in res) return;
     expect(llm.requests).toHaveLength(3);
     expect(res.repairAttempted).toBe(true);
     expect(res.changeSet.pages.map((p) => p.pageId).sort()).toEqual(
@@ -188,7 +188,7 @@ describe('compileWikiSource — 有界修复（issue 09）', () => {
     ]);
     const res = await compile(llm);
     expect(res.ok).toBe(true);
-    if (!res.ok) return;
+    if (!res.ok || 'cached' in res) return;
     expect(llm.requests).toHaveLength(2);
     expect(res.repairAttempted).toBe(false);
     // length 只作为原因信号被记录，不凭空指定修复目标
@@ -206,7 +206,7 @@ describe('compileWikiSource — 有界修复（issue 09）', () => {
     ]);
     const res = await compile(llm);
     expect(res.ok).toBe(true);
-    if (!res.ok) return;
+    if (!res.ok || 'cached' in res) return;
     expect(res.changeSet.pages.map((p) => p.pageId).sort()).toEqual(
       [`sources/${SOURCE_ID}`, 'concepts/axi'].sort(),
     );
@@ -303,7 +303,7 @@ describe('compileWikiSource — 重试策略（issue 09）', () => {
     };
     const res = await compile(llm);
     expect(res.ok).toBe(true);
-    if (!res.ok) return;
+    if (!res.ok || 'cached' in res) return;
     expect(calls).toBe(4);                 // 分析：2 次失败 + 1 次成功；生成：1 次
     expect(res.retryCount).toBe(2);
   });
@@ -361,7 +361,7 @@ describe('compileWikiSource — 重试策略（issue 09）', () => {
     };
     const res = await compile(llm);
     expect(res.ok).toBe(true);
-    if (!res.ok) return;
+    if (!res.ok || 'cached' in res) return;
     expect(res.retryCount).toBe(1);
   });
 

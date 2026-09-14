@@ -140,7 +140,7 @@ describe('来源感知合并端到端（issue 16）', () => {
     }, { llm: llm1, now: '2026-09-14T00:00:00Z', retryBaseDelayMs: 0 });
 
     expect(result1.ok).toBe(true);
-    if (!result1.ok) return;
+    if (!result1.ok || 'cached' in result1) return;
 
     // 发布第一个变更集
     const { publishChangeSet } = await import('../src/main/kb/publish');
@@ -206,7 +206,7 @@ describe('来源感知合并端到端（issue 16）', () => {
     }, { llm: llm2, now: '2026-09-14T01:00:00Z', retryBaseDelayMs: 0 });
 
     expect(result2.ok).toBe(true);
-    if (!result2.ok) return;
+    if (!result2.ok || 'cached' in result2) return;
 
     // 验证 staging 中该页的 proposed 不含旧论断
     const cs2 = await readChangeSet(kbPath, result2.changeSet.changeSetId);
@@ -251,7 +251,7 @@ describe('来源感知合并端到端（issue 16）', () => {
     }, { llm: llmA, now: '2026-09-14T00:00:00Z', retryBaseDelayMs: 0 });
 
     expect(resultA.ok).toBe(true);
-    if (!resultA.ok) return;
+    if (!resultA.ok || 'cached' in resultA) return;
 
     // 发布第一个变更集
     const { publishChangeSet } = await import('../src/main/kb/publish');
@@ -313,7 +313,7 @@ describe('来源感知合并端到端（issue 16）', () => {
     }, { llm: llmB, now: '2026-09-14T01:00:00Z', retryBaseDelayMs: 0 });
 
     expect(resultB.ok).toBe(true);
-    if (!resultB.ok) return;
+    if (!resultB.ok || 'cached' in resultB) return;
 
     // 验证 staging 中概念页
     const csB = await readChangeSet(kbPath, resultB.changeSet.changeSetId);

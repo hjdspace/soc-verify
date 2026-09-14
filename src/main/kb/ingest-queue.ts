@@ -33,7 +33,7 @@ import { readWikiManifest } from './wiki-layout';
 import { convertWikiSource, WikiSourceAbortedError } from './source-import';
 import type { SourceConvertOutcome } from './source-import';
 import { compileWikiSource, createDefaultCompileLlmFactory } from './compile';
-import type { CompileLlm, CompileSuccess } from './compile';
+import type { CompileLlm, CompileSuccess, CompileCacheHit } from './compile';
 import { createDefaultVisionLlmFactory } from './vision';
 import type { VisionLlm } from './vision';
 import type { LlmUsage } from './llm-call';
@@ -265,7 +265,7 @@ type RunFailure = {
   usage?: LlmUsage[];
   retryCount?: number;
 };
-type RunOutcome = SourceConvertOutcome | CompileSuccess | RunFailure | 'aborted';
+type RunOutcome = SourceConvertOutcome | CompileSuccess | CompileCacheHit | RunFailure | 'aborted';
 
 export type WikiQueueAttachResult =
   | { ok: true; /** 恢复的未完结任务数 */ restored: number; snapshot: WikiQueueSnapshot }
@@ -974,6 +974,8 @@ export class WikiIngestQueueManager {
       },
     );
     if (result.ok) {
+      // 缓存命中（issue 17）：不设 validating，无 staging/发布流程
+      if ('cached' in result) return result;
       setPhase('validating');
       return result;
     }

@@ -836,6 +836,11 @@ export type WikiChangeSet = {
   visionGaps?: WikiVisionGap[] | null;
   /** 部分产出标记：visionGaps 非空时为 true，不冒充完整编译 */
   partial?: boolean;
+  /**
+   * 编译缓存指纹（issue 17）：编译时计算的完整指纹，发布成功后用于写入 compile-cache。
+   * saveQuery/fix 变更集不设此字段（只有 compile origin 才参与缓存）。
+   */
+  compileCacheFingerprint?: string | null;
   createdAt: string;
   updatedAt: string;
 };
