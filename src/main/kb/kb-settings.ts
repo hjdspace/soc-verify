@@ -15,10 +15,10 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { app } from 'electron';
-import type { ConvertEngineId, KbLlmSettings, KbSettings } from '@shared/kb-types';
+import type { ConvertEngineId, EmbeddingSettings, KbLlmSettings, KbSettings } from '@shared/kb-types';
 
 // Re-export for backwards compatibility (main process callers import from kb-settings)
-export type { KbLlmSettings, KbSettings } from '@shared/kb-types';
+export type { EmbeddingSettings, KbLlmSettings, KbSettings } from '@shared/kb-types';
 
 const SETTINGS_FILE = 'kb-settings.json';
 
@@ -40,6 +40,28 @@ function normalizeRole(raw: Partial<KbLlmSettings> | undefined): KbLlmSettings {
   };
 }
 
+/** embedding 角色规范化（spec §8/§11，issue 21） */
+function normalizeEmbedding(raw: Partial<EmbeddingSettings> | undefined): EmbeddingSettings {
+  const providerId = typeof raw?.providerId === 'string' ? raw.providerId.trim() : '';
+  const model = typeof raw?.model === 'string' ? raw.model.trim() : '';
+  const maxChunkChars = typeof raw?.maxChunkChars === 'number' && raw.maxChunkChars > 0
+    ? Math.floor(raw.maxChunkChars)
+    : undefined;
+  const overlapChunkChars = typeof raw?.overlapChunkChars === 'number' && raw.overlapChunkChars >= 0
+    ? Math.floor(raw.overlapChunkChars)
+    : undefined;
+  const concurrency = typeof raw?.concurrency === 'number' && raw.concurrency >= 1
+    ? Math.floor(raw.concurrency)
+    : undefined;
+  const result: EmbeddingSettings = {};
+  if (providerId) result.providerId = providerId;
+  if (model) result.model = model;
+  if (maxChunkChars !== undefined) result.maxChunkChars = maxChunkChars;
+  if (overlapChunkChars !== undefined) result.overlapChunkChars = overlapChunkChars;
+  if (concurrency !== undefined) result.concurrency = concurrency;
+  return result;
+}
+
 /** 规范化外部输入：未知引擎回退默认、字符串 trim、空串清空 */
 function normalize(input: unknown): KbSettings {
   const raw = (input ?? {}) as Partial<KbSettings> & {
@@ -51,11 +73,14 @@ function normalize(input: unknown): KbSettings {
     : DEFAULT_KB_SETTINGS.convertEngine;
   const llm = normalizeRole(raw.llm);
   const vision = normalizeRole(raw.vision);
+  const embedding = normalizeEmbedding(raw.embedding);
   return {
     convertEngine,
     llm,
     // vision 角色显式保存（issue 12）；完全未配置时不产生字段（= 未配置）
     ...(vision.providerId || vision.model ? { vision } : {}),
+    // embedding 角色显式保存（issue 21）；完全未配置时不产生字段（= 嵌入降级）
+    ...(embedding.providerId || embedding.model ? { embedding } : {}),
   };
 }
 

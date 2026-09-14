@@ -521,6 +521,8 @@ export type KbSettings = {
   llm: KbLlmSettings;
   /** vision 角色（图像解读；缺省/空 = 未配置，视觉任务 blocked） */
   vision?: KbLlmSettings;
+  /** embedding 角色（向量索引；缺省/空 = 未配置，嵌入降级为关键词检索） */
+  embedding?: EmbeddingSettings;
 };
 
 // ── 图像解读（spec §3，issue 12）────────────────────────────────
@@ -1206,5 +1208,127 @@ export type WikiReadError = { code: WikiReadErrorCode; message: string };
 export type WikiReadOutcome =
   | { ok: true; page: WikiReadResult }
   | { ok: false; error: WikiReadError };
+
+// ── 向量嵌入（spec §8/§11，issue 21 — 向量能力 spike）──────────
+
+/**
+ * 嵌入角色配置（独立于 compile/vision 角色）。
+ *
+ * 凭证仍由主进程 credential manager 管理，不写进库或 renderer。
+ * 嵌入端点常开但需要独立配置：未配置时关键词/图仍可用（降级）。
+ */
+export type EmbeddingSettings = {
+  /** 显式指定的凭证 providerId；空 = 未配置（嵌入降级） */
+  providerId?: string;
+  /** 显式指定的嵌入模型 ID；空 = 未配置 */
+  model?: string;
+  /** 分块目标字符数（缺省 1000） */
+  maxChunkChars?: number;
+  /** 分块重叠字符数（缺省 200） */
+  overlapChunkChars?: number;
+  /** 并发数（缺省 1） */
+  concurrency?: number;
+};
+
+/**
+ * 嵌入端点解析后的运行时配置（由 llm-config 推导，不持久化 API key）。
+ * 供 embedding-endpoint / embedding-service 消费。
+ */
+export type EmbeddingRuntimeConfig = {
+  endpoint: string;
+  apiKey: string;
+  model: string;
+  /** 输出维度（如配置端返回不一致则报错） */
+  expectedDimensions?: number;
+  /** 额外请求头 */
+  extraHeaders?: Record<string, string>;
+  maxChunkChars: number;
+  overlapChunkChars: number;
+  concurrency: number;
+};
+
+/** 嵌入空间指纹：同维度换模型不得共用空间 */
+export type EmbeddingFingerprint = {
+  /** SHA256 签名 */
+  hash: string;
+  /** 参与签名的配置摘要（供显示与诊断） */
+  signature: {
+    endpoint: string;
+    model: string;
+    expectedDimensions?: number;
+    distanceMetric: string;
+    maxChunkChars: number;
+    overlapChunkChars: number;
+    chunkerVersion: number;
+  };
+};
+
+/** 嵌入 HTTP 错误分类（spec §11 验收 A16/A22） */
+export type EmbeddingErrorKind =
+  | 'notConfigured'       // 未配置嵌入端点
+  | 'auth'                // 401/403
+  | 'modelNotFound'      // 404 模型不存在
+  | 'rateLimited'         // 429
+  | 'timeout'             // 请求超时
+  | 'network'             // 网络失败
+  | 'dimensionMismatch'   // 返回维度与配置不符
+  | 'oversizedInput'      // 输入过长
+  | 'provider'            // 其他提供商错误
+  | 'storage';            // 向量存储写入失败
+
+/** 嵌入错误 */
+export type EmbeddingError = {
+  kind: EmbeddingErrorKind;
+  message: string;
+  /** HTTP 状态码（如有） */
+  statusCode?: number;
+};
+
+/** 嵌入分块 */
+export type EmbeddingChunk = {
+  /** 块在页面中的 0-based 位置 */
+  index: number;
+  /** 块文本 */
+  text: string;
+  /** 标题面包屑（`## A > ### B`） */
+  headingPath: string;
+};
+
+/** 向量 upsert 输入行 */
+export type VectorUpsertChunk = {
+  chunkIndex: number;
+  chunkText: string;
+  headingPath: string;
+  embedding: number[];
+};
+
+/** 向量搜索命中（per-chunk） */
+export type VectorSearchHit = {
+  chunkId: string;
+  pageId: string;
+  chunkIndex: number;
+  chunkText: string;
+  headingPath: string;
+  /** 1/(1+distance)，越高越相关 */
+  score: number;
+};
+
+/** 向量搜索结果（per-page 聚合） */
+export type VectorPageResult = {
+  id: string;
+  score: number;
+  matchedChunks?: Array<{ text: string; headingPath: string; score: number }>;
+};
+
+/** 向量索引覆盖状态 */
+export type VectorCoverage = {
+  /** 已索引页数 */
+  pages: number;
+  /** 已索引块数 */
+  chunks: number;
+  /** 当前嵌入指纹 hash（未索引时为 null） */
+  fingerprintHash: string | null;
+};
+
 
 
