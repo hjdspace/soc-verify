@@ -1069,8 +1069,26 @@ export type WikiSearchHit = {
   graphRelatedTo?: WikiGraphRelatedTo;
 };
 
-/** 检索模式：keyword = 关键词；keyword+graph = 关键词 + 图一跳扩展 */
-export type WikiSearchMode = 'keyword' | 'keyword+graph';
+/**
+ * 检索模式：
+ * - keyword = 仅关键词
+ * - keyword+graph = 关键词 + 图一跳扩展
+ * - hybrid = 关键词 + 向量 RRF 融合
+ * - hybrid+graph = 关键词 + 向量 RRF + 图一跳扩展
+ */
+export type WikiSearchMode = 'keyword' | 'keyword+graph' | 'hybrid' | 'hybrid+graph';
+
+/** 向量搜索状态（issue 24，spec §8） */
+export type VectorSearchStatus = {
+  /** 嵌入降级：未配置/失败 → 关键词仍可用 */
+  degraded: boolean;
+  /** 降级原因（按库配置提示一次） */
+  degradeReason?: string;
+  /** 嵌入错误类型（如 notConfigured/auth/rateLimited/network） */
+  errorKind?: EmbeddingErrorKind;
+  /** 向量命中页数（RRF 融合后） */
+  vectorPageHits: number;
+};
 
 export type WikiSearchResponse = {
   mode: WikiSearchMode;
@@ -1078,8 +1096,10 @@ export type WikiSearchResponse = {
   /** 索引覆盖状态（参与排名的候选数） */
   coverage: { wikiPages: number; parsedSources: number };
   hits: WikiSearchHit[];
-  /** 图扩展信息（mode=keyword 时为 null） */
+  /** 图扩展信息（无图扩展时为 null） */
   graphExpansion?: WikiGraphExpansionInfo | null;
+  /** 向量搜索状态（issue 24；未提供 embeddingService 时为 undefined） */
+  vectorStatus?: VectorSearchStatus;
 };
 
 export type WikiSearchErrorCode =
@@ -1101,6 +1121,8 @@ export type WikiSearchOptions = {
   tag?: string;
   /** 限定检索对象；缺省两者都搜 */
   kind?: WikiSearchKind;
+  /** 按修订过滤向量命中（issue 24；缺省不过滤） */
+  revision?: string;
 };
 
 export type WikiSearchOutcome =

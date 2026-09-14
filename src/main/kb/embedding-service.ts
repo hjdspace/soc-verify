@@ -84,7 +84,7 @@ function createLimiter(rawLimit: number): <T>(task: () => Promise<T>) => Promise
  * 向量嵌入服务 — 编排分块、嵌入、存储与搜索。
  */
 export class EmbeddingService {
-  constructor(private readonly store: VectorStore) {}
+  constructor(public readonly store: VectorStore) {}
 
   /**
    * 嵌入一个 wiki 页面：

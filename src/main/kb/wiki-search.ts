@@ -1,5 +1,5 @@
 /**
- * Wiki Search — 统一关键词检索服务（spec §8，issue 14）。
+ * Wiki Search — 统一关键词 + 向量混合检索服务（spec §8，issue 14/24）。
  *
  * 用户（tRPC kb.wikiSearch）与 Agent（kb_search Host Tool）共用同一个
  * 服务与排序实现，不复制第二套排名：
@@ -12,11 +12,13 @@
  *     历史修订只有显式原文定位才读）。
  *  3. 去重、topK 限量（默认 20，1–50），同分按 `(kind, id)` 规范身份
  *     稳定排序。
- *  4. 无嵌入也能检索（本期 mode 恒为 'keyword'；向量/图由后继票在同一
- *     契约上扩展）。
+ *  4. 无嵌入也能检索（mode='keyword'）；有嵌入时关键词/向量 RRF k=60
+ *     融合（mode='hybrid'），向量结果先按页聚合再 RRF（issue 24）。
  *  5. stale 由 frontmatter sources 与 manifest 当前修订**动态核对**：
  *     页面来源引用的修订与 manifest 当前修订不一致（或来源已删除）时
  *     标记 stale，不信任缓存结果。
+ *  6. 嵌入降级（未配置/401/坏模型/429/网络）时关键词/图保持可用，
+ *     vectorStatus.degraded=true 并按库配置提示一次（issue 24）。
  *
  * @see docs/prd/knowledge-base-llm-wiki-spec.md §8
  */
@@ -28,11 +30,17 @@ import { assertReadGateOpen, WikiReadGateError } from './read-gate';
 import { readWikiManifest, wikiLayout } from './wiki-layout';
 import { scanWikiCatalog } from './wiki-catalog';
 import { getWikiGraphSnapshot, getOneHopNeighbors } from './wiki-graph';
+import type { EmbeddingService } from './embedding-service';
 import type {
+  EmbeddingErrorKind,
+  EmbeddingRuntimeConfig,
+  VectorPageResult,
+  VectorSearchStatus,
   WikiGraphExpansionInfo,
   WikiGraphRelatedTo,
   WikiSearchError,
   WikiSearchHit,
+  WikiSearchMode,
   WikiSearchOptions,
   WikiSearchOutcome,
   WikiSourceRef,
@@ -51,6 +59,17 @@ const SCORE_CJK_CHAR_WEIGHT = 0.2;
 const DEFAULT_TOP_K = 20;
 const MAX_TOP_K = 50;
 const SNIPPET_MAX_CHARS = 400;
+
+/** RRF k 常数（spec §8.2: sum(1/(60+rank))） */
+const RRF_K = 60;
+
+/** 搜索上下文（issue 24：向量混合搜索注入） */
+export type SearchContext = {
+  /** 嵌入服务实例（提供向量搜索能力） */
+  embeddingService: EmbeddingService;
+  /** 嵌入运行时配置 */
+  embeddingCfg: EmbeddingRuntimeConfig;
+};
 
 // ── 分词与匹配 ──────────────────────────────────────────────────
 
@@ -125,14 +144,16 @@ function isStale(refs: WikiSourceRef[], sources: Record<string, { currentRevisio
 // ── 主服务 ──────────────────────────────────────────────────────
 
 /**
- * 统一关键词检索：已发布 wiki 页 + 当前 parsed 来源全文。
+ * 统一关键词 + 向量混合检索：已发布 wiki 页 + 当前 parsed 来源全文。
  *
  * @param kbPath 当前挂载库根目录（每次调用由调用方从 registry 动态解析）
  * @param options 查询与筛选
+ * @param ctx 搜索上下文（issue 24：注入嵌入服务以启用向量混合搜索）
  */
 export async function searchWiki(
   kbPath: string,
   options: WikiSearchOptions,
+  ctx?: SearchContext,
 ): Promise<WikiSearchOutcome> {
   const query = options.query.trim();
   if (!query) {
@@ -230,13 +251,153 @@ export async function searchWiki(
     deduped.set(`${hit.kind}:${hit.id}`, hit); // 规范身份去重
   }
   const topK = clampTopK(options.topK);
-  const ranked = Array.from(deduped.values()).sort((a, b) => {
+
+  // 关键词排名（按原始 score 降序，同分按规范身份稳定排序）
+  const keywordRanked = Array.from(deduped.values()).sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
-    // 同分按规范身份稳定排序（不依赖文件遍历顺序）
     return `${a.kind}:${a.id}`.localeCompare(`${b.kind}:${b.id}`);
   });
 
-  const baseHits = ranked.slice(0, topK);
+  // ── 向量搜索 + RRF 融合（issue 24，spec §8.2）─────────────────
+  // 向量按 chunk 检索，先按 pageId 聚合为页面候选，再与关键词排名做
+  // sum(1/(60+rank))。缺一个信号时保持已有信号排名，缺失值不计票。
+  // 嵌入降级（未配置/失败）时关键词/图保持可用，vectorStatus.degraded=true。
+  let vectorStatus: VectorSearchStatus | undefined;
+  let vectorResults: VectorPageResult[] = [];
+  let vectorPageHits = 0;
+
+  if (ctx) {
+    const revision = options.revision;
+    const vecResult = await ctx.embeddingService.searchByQuery(
+      manifest.manifest.kbId,
+      query,
+      ctx.embeddingCfg,
+      topK,
+      revision,
+    );
+
+    if (vecResult.degraded) {
+      // 降级：关键词/图保持可用，提示一次
+      // 推断降级原因
+      let errorKind: EmbeddingErrorKind | undefined;
+      let degradeReason: string | undefined;
+      if (!ctx.embeddingCfg.endpoint || !ctx.embeddingCfg.apiKey || !ctx.embeddingCfg.model) {
+        errorKind = 'notConfigured';
+        degradeReason = '嵌入端点未配置';
+      } else {
+        // 查看索引错误状态以推断原因
+        const status = await ctx.embeddingService.getIndexStatus(
+          manifest.manifest.kbId,
+          ctx.embeddingCfg,
+        );
+        if (status.errorStatus && status.errorStatus.kind) {
+          errorKind = status.errorStatus.kind;
+          degradeReason = status.errorStatus.message;
+        } else {
+          errorKind = 'network';
+          degradeReason = '向量搜索降级';
+        }
+      }
+      vectorStatus = {
+        degraded: true,
+        ...(degradeReason ? { degradeReason } : {}),
+        ...(errorKind ? { errorKind } : {}),
+        vectorPageHits: 0,
+      };
+    } else {
+      vectorResults = vecResult.results;
+      // 过滤不在 catalog 中的页面（失效向量过滤）
+      const validPageIds = new Set(catalog.pages.filter((p) => p.parse.ok).map((p) => p.pageId));
+      vectorResults = vectorResults.filter((r) => validPageIds.has(r.id));
+      vectorPageHits = vectorResults.length;
+      vectorStatus = {
+        degraded: false,
+        vectorPageHits,
+      };
+    }
+  }
+
+  // ── RRF 融合 ──────────────────────────────────────────────────
+  // 关键词排名和向量排名通过 RRF sum(1/(60+rank)) 融合。
+  // 缺一个信号时保持已有信号排名，缺失值不计票。
+  // 向量结果先按页聚合（searchByQuery 已做 per-page 聚合）。
+  let baseHits: WikiSearchHit[];
+  let mode: WikiSearchMode;
+
+  if (vectorStatus && !vectorStatus.degraded && vectorResults.length > 0) {
+    // RRF 融合
+    const kwRankMap = new Map<string, number>();
+    keywordRanked.forEach((hit, rank) => {
+      kwRankMap.set(`${hit.kind}:${hit.id}`, rank);
+    });
+
+    const vecRankMap = new Map<string, number>();
+    vectorResults.forEach((vr, rank) => {
+      vecRankMap.set(`wiki:${vr.id}`, rank);
+    });
+
+    // 收集所有出现在任一排名中的身份
+    const allKeys = new Set<string>([...kwRankMap.keys(), ...vecRankMap.keys()]);
+
+    // 计算 RRF 分数
+    const rrfScored: Array<{ key: string; rrfScore: number; hit?: WikiSearchHit; vecResult?: VectorPageResult }> = [];
+    for (const key of allKeys) {
+      let rrfScore = 0;
+      const kwRank = kwRankMap.get(key);
+      if (kwRank !== undefined) {
+        rrfScore += 1 / (RRF_K + kwRank);
+      }
+      const vecRank = vecRankMap.get(key);
+      if (vecRank !== undefined) {
+        rrfScore += 1 / (RRF_K + vecRank);
+      }
+
+      const hit = deduped.get(key);
+      const vecResult = vectorResults.find((vr) => `wiki:${vr.id}` === key);
+      rrfScored.push({ key, rrfScore, hit, vecResult });
+    }
+
+    // 按 RRF 分数降序，同分按规范身份稳定排序
+    rrfScored.sort((a, b) => {
+      if (b.rrfScore !== a.rrfScore) return b.rrfScore - a.rrfScore;
+      return a.key.localeCompare(b.key);
+    });
+
+    // 构建 baseHits
+    baseHits = rrfScored.slice(0, topK).map((entry) => {
+      if (entry.hit) {
+        // 已有 hit（来自关键词搜索），更新 score 为 RRF 分数
+        return { ...entry.hit, score: entry.rrfScore };
+      }
+      // 来自向量搜索但不在关键词结果中的页面
+      const page = catalog.pages.find((p) => p.pageId === entry.vecResult?.id);
+      if (!page || !page.parse.ok) {
+ // 不应发生（已过滤），防御性跳过
+        return null;
+      }
+      const fm = page.parse.frontmatter;
+      return {
+        kind: 'wiki' as const,
+        id: page.pageId,
+        relativePath: page.relPath.replace(/\\\\/g, '/'),
+        absolutePath: join(layout.kbPath, page.relPath),
+        title: fm.title,
+        snippet: null,
+        pageType: page.type,
+        tags: fm.tags,
+        keywords: fm.keywords,
+        sourceRefs: fm.sources,
+        stale: isStale(fm.sources, manifestSources),
+        score: entry.rrfScore,
+      };
+    }).filter((h): h is WikiSearchHit => h !== null);
+
+    mode = 'hybrid';
+  } else {
+    // 无向量或降级 → 使用关键词排名
+    baseHits = keywordRanked.slice(0, topK);
+    mode = 'keyword';
+  }
 
   // ── 图一跳扩展（spec §8.3-4）──────────────────────────────────
   // 从初筛前 min(topK,10) 个 Wiki Page 沿入/出链接一跳扩展。
@@ -246,6 +407,8 @@ export async function searchWiki(
   // 图 revision 落后时只返回关键词并标 rebuilding，不使用过时边。
   let graphExpansion: WikiGraphExpansionInfo | null = null;
   let finalHits = baseHits;
+  // 最终模式：基础模式 + 图扩展后缀
+  let finalMode: WikiSearchMode = mode;
 
   if (topK < 2) {
     // topK < 2 → 图名额为 0，不扩展
@@ -260,7 +423,7 @@ export async function searchWiki(
       graphExpansion = { rebuilding: true, quota: 0, expanded: 0 };
     } else {
       const { snapshot } = graphResult;
-      const vectorPageHits = 0; // 本期无向量，vectorPageHits=0
+      // 向量命中页数影响图名额（issue 24：vectorPageHits 不再恒为 0）
       const graphQuota = computeGraphQuota(topK, vectorPageHits);
 
       if (graphQuota > 0) {
@@ -349,6 +512,10 @@ export async function searchWiki(
           quota: graphQuota,
           expanded: expanded.length,
         };
+        // 有图补召回 → 模式加 +graph 后缀
+        if (expanded.length > 0) {
+          finalMode = mode === 'hybrid' ? 'hybrid+graph' : 'keyword+graph';
+        }
       } else {
         // graphQuota = 0 → 不扩展
         graphExpansion = { rebuilding: false, quota: 0, expanded: 0 };
@@ -362,7 +529,7 @@ export async function searchWiki(
   return {
     ok: true,
     result: {
-      mode: graphExpansion && graphExpansion.expanded > 0 ? 'keyword+graph' : 'keyword',
+      mode: finalMode,
       kbId: manifest.manifest.kbId,
       coverage: {
         wikiPages: wantWiki ? catalog.pages.filter((p) => p.parse.ok).length : 0,
@@ -370,6 +537,7 @@ export async function searchWiki(
       },
       hits: finalHits,
       graphExpansion,
+      ...(vectorStatus ? { vectorStatus } : {}),
     },
   };
 }

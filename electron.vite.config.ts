@@ -14,10 +14,10 @@ export default defineConfig({
         // gets inlined into the CJS output and fails at runtime because the
         // native binary path resolution breaks.
         // better-sqlite3 is also a native module — same treatment.
-        // node-pty / better-sqlite3 / @firecrawl/anydoc 均为 NAPI 原生模块
-        // （运行时需加载 .node 二进制），必须 externalize 让 Rollup 不要打包，
-        // 否则 __dirname 上下文丢失，asar 环境下原生二进制路径解析失败。
-        external: ['node-pty', 'better-sqlite3', '@firecrawl/anydoc'],
+        // node-pty / better-sqlite3 / @firecrawl/anydoc / @lancedb/lancedb 均为
+        // 原生模块（运行时需加载 .node 二进制），必须 externalize 让 Rollup 不要
+        // 打包，否则 __dirname 上下文丢失，asar 环境下原生二进制路径解析失败。
+        external: ['node-pty', 'better-sqlite3', '@firecrawl/anydoc', '@lancedb/lancedb'],
       }
     },
     resolve: {
