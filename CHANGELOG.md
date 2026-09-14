@@ -6,6 +6,56 @@
 
 ---
 
+## [0.5.1](https://github.com/hjdspace/soc-verify/compare/v0.5.0...v0.5.1) (2026-09-15)
+
+### 重大升级：Wiki 知识库全流程落地
+
+本版本完成知识库（KB）模块从零到一的全面重构，落地 LLM Wiki 双层架构，涵盖来源导入、分段编译、图像提取、全文/向量/图混合检索、结构化审阅、质量门禁、安全撤回等 29 个 issue 闭环。
+
+### Features
+
+* **kb:** 知识库重构为 LLM Wiki 双层架构，落地注册/路径防护/原子提交原语（issue 01）
+* **kb:** 来源导入与修订保留——稳定身份/原子转换/引用根扫描（issue 02）
+* **kb:** wiki 页面只读浏览、统一链接解析与写作规则编辑（issue 04）
+* **kb:** 知识提案 staging 与独立审阅入口（issue 05）
+* **kb:** 整页审阅后安全发布并保存历史（issue 06）
+* **kb:** 按页面与 hunk 审阅关联变更集（issue 07）
+* **kb:** 打通短来源编译与人工发布（issue 08）
+* **kb:** 流完整度、有界修复与失败诊断（issue 09）
+* **kb:** 分段编译长手册并恢复断点（issue 10）
+* **kb:** 提取 PDF 图像与矢量页并定位原文（issue 11）
+* **kb:** 配置视觉模型并审阅图像解读（issue 12）
+* **kb:** 批量读图去重、缓存与续跑（issue 13）
+* **kb:** 统一关键词检索与 Agent 知识导航（issue 14，spec §8）
+* **kb:** 分页读取知识页及指定修订证据（issue 15，spec §8）
+* **kb:** source-aware merge for wiki page compilation（issue 16）
+* **kb:** compile cache for incremental skip（issue 17）
+* **kb:** saveQuery — save chat Q&A as reviewable query pages（issue 18）
+* **kb:** page history reading and rollback proposal（issue 19）
+* **kb:** 安全撤回来源与停用知识库（issue 20）
+* **kb:** embedding capability logic layer（issue 21）
+* **kb:** 分块向量索引 with revision/coverage/status（issue 22）
+* **kb:** unified knowledge graph and graph-expanded search（issue 23）
+* **kb:** hybrid search (RRF fusion) and index rebuilding（issue 24）
+* **kb:** structural lint and finding persistence（issue 25）
+* **kb:** graph insights — bridge nodes & sparse communities; graph view with sigma/worker layout and Electron smoke gate（issue 26）
+* **kb:** semantic lint, lint-fixes, and sweep-reviews（issue 27）
+* **kb:** retire legacy KB entry points and uncalled modules（issue 28）
+* **kb:** SoC 知识与检索证据质量门禁与合成样例库（issue 29）
+* **kb:** 完成 wiki 知识库全流程功能落地与重构
+* **kb:** add wiki persistent import queue feature
+
+### Bug Fixes
+
+* **kb-router:** add defensive throw to ensure all code paths return
+
+### Refactor
+
+* **kb:** issue 04 code-review 修复
+* **kb:** issue 11 双轴审查修复（续跑合并/去重/错误码定型）
+* **kb:** 替换相对导入为别名导入，完善 lint 修复相关逻辑
+* **kb:** 收紧图渲染器 API 面并补齐清除过滤入口（issue 26）
+
 ## [0.5.0](https://github.com/hjdspace/soc-verify/compare/v0.4.9...v0.5.0) (2026-09-12)
 
 ### 重大升级：Pi 引擎全面迁移
