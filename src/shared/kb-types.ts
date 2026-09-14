@@ -268,7 +268,22 @@ export type WikiSourceRecord = {
   errorMessage?: string;
   /** 当前修订的资产数量 */
   assetCount: number;
+  /**
+   * PDF 图像资产提取状态（issue 11；仅 .pdf 来源写此字段）。
+   * 与机械全文转换解耦：扫描版 PDF 转换失败仍可提图，此字段单独可见。
+   */
+  pdfAssets?: WikiPdfAssetsStatus;
   importedAt: string;
+  updatedAt: string;
+};
+
+/** PDF 图像资产提取状态（WikiSourceRecord.pdfAssets） */
+export type WikiPdfAssetsStatus = {
+  status: 'ready' | 'failed';
+  /** 提取到的资产记录数（位图对象 + 页面渲染，含同图多次出现的位置记录） */
+  assetCount: number;
+  errorCode?: string;
+  errorMessage?: string;
   updatedAt: string;
 };
 
@@ -289,6 +304,8 @@ export type WikiSourceSummary = {
   /** 当前修订尚无对应成功转换（失败/转换中/从未转换） */
   parsedStale: boolean;
   assetCount: number;
+  /** PDF 图像资产提取状态（仅 .pdf 来源） */
+  pdfAssets?: WikiPdfAssetsStatus;
   importedAt: string;
   updatedAt: string;
 };

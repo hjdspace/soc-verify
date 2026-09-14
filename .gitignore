@@ -18,6 +18,8 @@ resources/fonts/*
 !resources/fonts/MesloLGS NF *.ttf
 # JetBrainsMono.zip 是下载的临时文件（123MB），不入库
 resources/fonts/*.zip
+# pdfjs 本地运行时（npm run prepare:pdfjs 的派生产物，issue 11）
+resources/pdfjs/
 
 .socverify/
 .cache/

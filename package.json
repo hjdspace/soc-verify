@@ -32,6 +32,7 @@
     "setup:agent": "node scripts/setup-agent.mjs",
     "patch:native": "node scripts/patch-native-modules.mjs",
     "prepare:runner-deps": "node scripts/prepare-runner-deps.mjs",
+    "prepare:pdfjs": "node scripts/prepare-pdfjs-runtime.mjs",
     "download:officecli": "node scripts/download-officecli.mjs",
     "prebuild:officecli": "node scripts/download-officecli.mjs",
     "download:rtl-tools": "node scripts/download-rtl-tools.mjs",
@@ -41,9 +42,9 @@
     "download:zsh-plugins": "node scripts/download-zsh-plugins.mjs",
     "build:linux-pty": "node scripts/build-linux-pty.mjs",
     "build:linux-sqlite": "node scripts/build-linux-sqlite.mjs",
-    "package": "node scripts/download-officecli.mjs && node scripts/download-rtl-tools.mjs && node scripts/download-nerd-fonts.mjs && node scripts/download-starship.mjs && node scripts/download-zsh-plugins.mjs && node scripts/setup-agent.mjs --require-runner && node scripts/prepare-runner-deps.mjs && node scripts/engine-payload-gate.mjs --payload runner-pi,resources/runner-deps/node_modules --out dist/engine-payload-report.json && node scripts/build.mjs && node scripts/patch-native-modules.mjs && node scripts/run-electron-builder.mjs",
-    "package:win": "node scripts/download-officecli.mjs && node scripts/download-rtl-tools.mjs && node scripts/download-nerd-fonts.mjs && node scripts/download-starship.mjs && node scripts/download-zsh-plugins.mjs && node scripts/setup-agent.mjs --require-runner && node scripts/prepare-runner-deps.mjs --platform win32-x64 && node scripts/engine-payload-gate.mjs --payload runner-pi,resources/runner-deps/node_modules --out dist/engine-payload-report.json && node scripts/build.mjs && node scripts/patch-native-modules.mjs && node scripts/run-electron-builder.mjs --win",
-    "package:linux": "node scripts/download-officecli.mjs && node scripts/download-rtl-tools.mjs && node scripts/download-nerd-fonts.mjs && node scripts/download-starship.mjs && node scripts/download-zsh-plugins.mjs && node scripts/setup-agent.mjs --require-runner && node scripts/prepare-runner-deps.mjs --platform linux-x64 && node scripts/engine-payload-gate.mjs --payload runner-pi,resources/runner-deps/node_modules --out dist/engine-payload-report.json && node scripts/build.mjs && node scripts/patch-native-modules.mjs && node scripts/build-linux-pty.mjs && node scripts/build-linux-sqlite.mjs && node scripts/build-traceweave-wrapper.mjs && node scripts/run-electron-builder.mjs --linux"
+    "package": "node scripts/download-officecli.mjs && node scripts/download-rtl-tools.mjs && node scripts/download-nerd-fonts.mjs && node scripts/download-starship.mjs && node scripts/download-zsh-plugins.mjs && node scripts/setup-agent.mjs --require-runner && node scripts/prepare-runner-deps.mjs && node scripts/prepare-pdfjs-runtime.mjs && node scripts/engine-payload-gate.mjs --payload runner-pi,resources/runner-deps/node_modules --out dist/engine-payload-report.json && node scripts/build.mjs && node scripts/patch-native-modules.mjs && node scripts/run-electron-builder.mjs",
+    "package:win": "node scripts/download-officecli.mjs && node scripts/download-rtl-tools.mjs && node scripts/download-nerd-fonts.mjs && node scripts/download-starship.mjs && node scripts/download-zsh-plugins.mjs && node scripts/setup-agent.mjs --require-runner && node scripts/prepare-runner-deps.mjs --platform win32-x64 && node scripts/prepare-pdfjs-runtime.mjs && node scripts/engine-payload-gate.mjs --payload runner-pi,resources/runner-deps/node_modules --out dist/engine-payload-report.json && node scripts/build.mjs && node scripts/patch-native-modules.mjs && node scripts/run-electron-builder.mjs --win",
+    "package:linux": "node scripts/download-officecli.mjs && node scripts/download-rtl-tools.mjs && node scripts/download-nerd-fonts.mjs && node scripts/download-starship.mjs && node scripts/download-zsh-plugins.mjs && node scripts/setup-agent.mjs --require-runner && node scripts/prepare-runner-deps.mjs --platform linux-x64 && node scripts/prepare-pdfjs-runtime.mjs && node scripts/engine-payload-gate.mjs --payload runner-pi,resources/runner-deps/node_modules --out dist/engine-payload-report.json && node scripts/build.mjs && node scripts/patch-native-modules.mjs && node scripts/build-linux-pty.mjs && node scripts/build-linux-sqlite.mjs && node scripts/build-traceweave-wrapper.mjs && node scripts/run-electron-builder.mjs --linux"
   },
   "dependencies": {
     "@firecrawl/anydoc": "^0.1.9",
@@ -126,7 +127,7 @@
     "lucide-react": "^1.24.0",
     "mermaid": "^11.16.1",
     "pathe": "^2.0.3",
-    "pdfjs-dist": "^5.4.296",
+    "pdfjs-dist": "5.4.296",
     "pi-mcp-adapter": "2.32.1",
     "pi-subagents": "0.66.0",
     "pi-web-access": "0.29.0",

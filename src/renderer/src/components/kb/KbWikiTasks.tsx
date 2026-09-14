@@ -1,22 +1,44 @@
 /**
- * KbWikiTasks — wiki 库导入任务面板（issue 03）。
+ * KbWikiTasks — wiki 库导入任务面板（issue 03）+ PDF 资产查看（issue 11）。
  *
  * 用户从这里控制导入队列：来源加入队列、暂停/继续、取消/重试/上下移、
  * 清除已完成；重启恢复的 restoredWaiting 横幅提供「继续」入口。
  * 快照经 kb.queueSnapshot 拉取，kb:task 事件按 seq 增量应用。
+ *
+ * PDF 来源（issue 11）可展开图像资产面板：清单摘要（页进度/失败/跳过）、
+ * 资产缩略图（kb.pdfAssetFile 解析路径 → local-resource:// 加载）、
+ * 点击卡片看页码/坐标/渲染参数（返回原页信息）、继续渲染剩余页。
  *
  * @see src/renderer/src/stores/kb-queue.ts — 状态与操作
  * @see docs/prototypes/knowledge-base.html — UI 原型
  */
 
 import { useEffect, useCallback, useState } from 'react';
-import { ListTodo, Pause, Play, Trash2, RotateCcw, XCircle, ArrowUp, ArrowDown, Plus, Sparkles, AlertTriangle } from 'lucide-react';
+import { ListTodo, Pause, Play, Trash2, RotateCcw, XCircle, ArrowUp, ArrowDown, Plus, Sparkles, AlertTriangle, Image as ImageIcon } from 'lucide-react';
+import type { inferRouterOutputs } from '@trpc/server';
+import type { AppRouter } from '@main/ipc/router';
 import { useKbQueueStore } from '@renderer/stores/kb-queue';
 import { useKbStore } from '@renderer/stores/kb';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
 import type { WikiIngestPhase, WikiIngestTask, WikiSourceSummary, WikiTaskUsage } from '@shared/kb-types';
 import { isActivePhase, isRetryablePhase } from '@shared/kb-task-phases';
+
+type PdfAssetsOutput = inferRouterOutputs<AppRouter>['kb']['pdfAssets'];
+type PdfAssetsManifest = NonNullable<PdfAssetsOutput['manifest']>;
+type PdfAssetRecord = PdfAssetsManifest['assets'][number];
+type PdfAssetStats = PdfAssetsManifest['stats'];
+
+/** 本地文件 → local-resource:// URL（与主进程 local-resource-protocol 的编码约定一致） */
+function localResourceUrl(filePath: string): string {
+  const normalized = filePath.replace(/\\/g, '/');
+  return `local-resource://app/${encodeURIComponent(normalized)}`;
+}
+
+const METHOD_LABELS: Record<PdfAssetRecord['method'], string> = {
+  object: '位图',
+  'page-render': '整页渲染',
+};
 
 const PHASE_LABELS: Record<WikiIngestPhase, string> = {
   queued: '排队中',
@@ -54,7 +76,7 @@ const CANCELLABLE: ReadonlySet<WikiIngestPhase> = new Set([
   'awaiting_review',
 ]);
 
-type WikiSourceSummaryLite = Pick<WikiSourceSummary, 'sourceId' | 'sourcePath'>;
+type WikiSourceSummaryLite = Pick<WikiSourceSummary, 'sourceId' | 'sourcePath' | 'ext'>;
 
 function PhaseChip({ phase }: { phase: WikiIngestPhase }) {
   return (
@@ -197,6 +219,8 @@ export function KbWikiTasks() {
   // ── 来源列表（快照就绪后拉取，切库重拉）──
   const [sources, setSources] = useState<WikiSourceSummaryLite[]>([]);
   const [sourcesLoading, setSourcesLoading] = useState(false);
+  // 当前展开 PDF 资产面板的来源（issue 11）
+  const [assetsOpenFor, setAssetsOpenFor] = useState<string | null>(null);
 
   useEffect(() => {
     if (snapshotState !== 'ready') return;
@@ -305,26 +329,307 @@ export function KbWikiTasks() {
         </div>
       )}
 
-      {/* ── 来源列表（加入队列入口）── */}
-      <div className="mt-4 border-t border-border">
-        <div className="px-3 py-2 text-xs font-medium text-muted-foreground">库内来源</div>
-        {sourcesLoading ? (
-          <div className="px-3 py-4 text-center text-xs text-muted-foreground">加载来源…</div>
-        ) : sources.length === 0 ? (
-          <div className="px-3 py-4 text-center text-xs text-muted-foreground">
-            库内暂无来源文档
-          </div>
+      {/* ── 来源列表（加入队列入口 + PDF 资产查看）── */}
+      <SourceList
+        sources={sources}
+        sourcesLoading={sourcesLoading}
+        assetsOpenFor={assetsOpenFor}
+        onToggleAssets={(id) => setAssetsOpenFor((cur) => (cur === id ? null : id))}
+        onEnqueue={handleEnqueue}
+        onCompile={handleCompile}
+      />
+    </div>
+  );
+}
+
+// ── PDF 资产面板（issue 11）────────────────────────────────────
+
+/** 资产缩略图：路径经 kb.pdfAssetFile 解析（只接受内容 hash），local-resource 加载 */
+function AssetThumb({
+  sourceId,
+  revision,
+  record,
+  selected,
+  onSelect,
+}: {
+  sourceId: string;
+  revision: string;
+  record: PdfAssetRecord;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const [src, setSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    trpc.kb.pdfAssetFile
+      .query({ sourceId, revision, assetId: record.assetId })
+      .then((r) => {
+        if (alive && r.path) setSrc(localResourceUrl(r.path));
+      })
+      .catch(() => {
+        // 解析失败保持占位（清单与缩略图不一致时用户仍能看到页码信息）
+      });
+    return () => {
+      alive = false;
+    };
+  }, [sourceId, revision, record.assetId]);
+
+  const label = METHOD_LABELS[record.method] ?? record.method;
+  return (
+    <button
+      onClick={onSelect}
+      data-testid={`pdf-asset-${record.assetId.slice(0, 8)}`}
+      title={`第 ${record.page} 页 ${label}（${record.width} × ${record.height}）`}
+      className={cn(
+        'group flex w-24 flex-col overflow-hidden rounded border transition-colors',
+        selected ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50',
+      )}
+    >
+      <div className="flex h-16 items-center justify-center overflow-hidden bg-secondary/40">
+        {src ? (
+          <img src={src} alt={`第 ${record.page} 页 ${label}`} className="max-h-16 max-w-full object-contain" />
         ) : (
-          sources.map((s) => (
-            <div
-              key={s.sourceId}
-              className="flex items-center gap-2 border-b border-border/60 px-3 py-1.5 text-xs last:border-b-0"
+          <span className="text-[10px] text-muted-foreground">加载中…</span>
+        )}
+      </div>
+      <div className="flex items-center justify-between gap-1 px-1 py-0.5">
+        <span className="text-[10px] font-medium text-foreground">第 {record.page} 页</span>
+        <span className="rounded bg-secondary px-1 text-[9px] text-secondary-foreground">{label}</span>
+      </div>
+    </button>
+  );
+}
+
+/** 单条资产详情（页码 = 返回原页定位；坐标为 PDF 用户空间） */
+function AssetDetail({ record }: { record: PdfAssetRecord }) {
+  return (
+    <div
+      data-testid="pdf-asset-detail"
+      className="rounded border border-border bg-secondary/30 px-3 py-2 text-[11px] leading-relaxed"
+    >
+      <div className="flex items-center gap-2">
+        <span className="font-medium text-foreground">原页：第 {record.page} 页</span>
+        <span className="rounded bg-secondary px-1 text-[10px] text-secondary-foreground">
+          {METHOD_LABELS[record.method] ?? record.method}
+        </span>
+        <span className="text-muted-foreground">
+          {record.width} × {record.height} px
+        </span>
+        <span className="font-mono text-[10px] text-muted-foreground/70" title={record.assetId}>
+          {record.assetId.slice(0, 12)}…
+        </span>
+      </div>
+      {record.rect && (
+        <div className="mt-0.5 text-muted-foreground">
+          位置 {Math.round(record.rect.x)}, {Math.round(record.rect.y)} ·{' '}
+          {Math.round(record.rect.width)} × {Math.round(record.rect.height)}（PDF 用户空间）
+        </div>
+      )}
+      {record.render && (
+        <div className="mt-0.5 text-muted-foreground">
+          渲染参数 scale {record.render.scale} · 最长边 {record.render.maxEdge}
+          {record.render.scaled ? '（已等比缩小）' : ''}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PdfAssetsPanel({ sourceId }: { sourceId: string }) {
+  const [manifest, setManifest] = useState<PdfAssetsManifest | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [extracting, setExtracting] = useState(false);
+  const [limit, setLimit] = useState(60);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const r = await trpc.kb.pdfAssets.query({ sourceId });
+      setManifest(r.manifest);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [sourceId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const extract = useCallback(
+    async (render?: readonly number[]) => {
+      setExtracting(true);
+      setError(null);
+      try {
+        const res = await trpc.kb.pdfAssetExtract.mutate(
+          render ? { sourceId, render: [...render] } : { sourceId },
+        );
+        if (!res.ok) setError(`${res.error.message}`);
+        else setSelectedId(null);
+        await load();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setExtracting(false);
+      }
+    },
+    [sourceId, load],
+  );
+
+  if (loading) {
+    return (
+      <div className="px-3 py-3 text-xs text-muted-foreground" data-testid="pdf-assets-panel">
+        加载图像资产…
+      </div>
+    );
+  }
+
+  return (
+    <div className="border-t border-border/40 bg-secondary/20 px-3 py-2" data-testid="pdf-assets-panel">
+      {error && <div className="mb-2 text-[11px] text-red-500">{error}</div>}
+
+      {!manifest ? (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span>尚未提取图像资产</span>
+          <button
+            onClick={() => void extract()}
+            disabled={extracting}
+            title="提取 PDF 图像资产"
+            className="rounded bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary transition-colors hover:bg-primary/20 disabled:opacity-40"
+          >
+            {extracting ? '提取中…' : '提取图片'}
+          </button>
+        </div>
+      ) : (
+        <>
+          {/* 摘要：覆盖情况可解释，不默默只取前 N 张 */}
+          <SummaryLine stats={manifest.stats} textLayer={manifest.textLayer} />
+
+          {manifest.stats.failures.length > 0 && (
+            <ul className="mt-1 list-disc pl-4">
+              {manifest.stats.failures.map((f, i) => (
+                <li key={i} className="text-[10px] text-red-500">
+                  第 {f.page} 页：{f.reason}
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {manifest.stats.renderRemaining.length > 0 && !extracting && (
+            <button
+              onClick={() => void extract(manifest.stats.renderRemaining)}
+              title="渲染剩余未渲染页"
+              className="mt-1 rounded bg-secondary px-2 py-1 text-[11px] text-secondary-foreground transition-colors hover:bg-accent"
             >
+              继续渲染剩余 {manifest.stats.renderRemaining.length} 页
+            </button>
+          )}
+          {extracting && <p className="mt-1 text-[11px] text-muted-foreground">提取中…</p>}
+
+          {/* 资产网格 */}
+          <div className="mt-2 flex flex-wrap gap-2">
+            {manifest.assets.slice(0, limit).map((record) => (
+              <AssetThumb
+                key={`${record.assetId}-${record.page}-${record.method}`}
+                sourceId={sourceId}
+                revision={manifest.revision}
+                record={record}
+                selected={selectedId === record.assetId}
+                onSelect={() => setSelectedId((cur) => (cur === record.assetId ? null : record.assetId))}
+              />
+            ))}
+          </div>
+          {manifest.assets.length > limit && (
+            <button
+              onClick={() => setLimit((l) => l + 120)}
+              className="mt-1 text-[11px] text-primary underline underline-offset-2"
+            >
+              显示更多（还有 {manifest.assets.length - limit} 条记录）
+            </button>
+          )}
+
+          {selectedId && manifest.assets.find((a) => a.assetId === selectedId) && (
+            <div className="mt-2">
+              <AssetDetail record={manifest.assets.find((a) => a.assetId === selectedId)!} />
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function SummaryLine({ stats, textLayer }: { stats: PdfAssetStats; textLayer: boolean }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+      <span className="font-medium text-foreground">资产 {stats.bitmapAssets + stats.renderAssets}</span>
+      <span>页 {stats.processedPages}/{stats.totalPages}</span>
+      <span>失败 {stats.failedPages}</span>
+      <span>跳过 {stats.skippedPages}</span>
+      {stats.renderRemaining.length > 0 && <span>待渲染 {stats.renderRemaining.length} 页</span>}
+      <span
+        className={cn(
+          'rounded px-1 text-[10px]',
+          textLayer ? 'bg-secondary text-secondary-foreground' : 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
+        )}
+        title={textLayer ? '来源含文本层' : '纯图像来源（扫描件）：原图可预览，但不承诺机械全文/OCR'}
+      >
+        {textLayer ? '含文本层' : '无文本层'}
+      </span>
+    </div>
+  );
+}
+
+// ── 来源列表 ────────────────────────────────────────────────────
+
+function SourceList({
+  sources,
+  sourcesLoading,
+  assetsOpenFor,
+  onToggleAssets,
+  onEnqueue,
+  onCompile,
+}: {
+  sources: WikiSourceSummaryLite[];
+  sourcesLoading: boolean;
+  assetsOpenFor: string | null;
+  onToggleAssets: (sourceId: string) => void;
+  onEnqueue: (sourceId: string) => void;
+  onCompile: (sourceId: string) => void;
+}) {
+  return (
+    <div className="mt-4 border-t border-border">
+      <div className="px-3 py-2 text-xs font-medium text-muted-foreground">库内来源</div>
+      {sourcesLoading ? (
+        <div className="px-3 py-4 text-center text-xs text-muted-foreground">加载来源…</div>
+      ) : sources.length === 0 ? (
+        <div className="px-3 py-4 text-center text-xs text-muted-foreground">
+          库内暂无来源文档
+        </div>
+      ) : (
+        sources.map((s) => (
+          <div key={s.sourceId}>
+            <div className="flex items-center gap-2 border-b border-border/60 px-3 py-1.5 text-xs">
               <span className="min-w-0 flex-1 truncate text-foreground" title={s.sourcePath}>
                 {s.sourcePath}
               </span>
+              {s.ext === '.pdf' && (
+                <button
+                  onClick={() => onToggleAssets(s.sourceId)}
+                  title="查看 PDF 图像资产"
+                  className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                >
+                  <ImageIcon className="h-3 w-3" />
+                  图片
+                </button>
+              )}
               <button
-                onClick={() => handleEnqueue(s.sourceId)}
+                onClick={() => onEnqueue(s.sourceId)}
                 title="加入队列"
                 className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               >
@@ -332,7 +637,7 @@ export function KbWikiTasks() {
                 加入队列
               </button>
               <button
-                onClick={() => handleCompile(s.sourceId)}
+                onClick={() => onCompile(s.sourceId)}
                 title="编译为知识页（提案经审阅后发布）"
                 className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               >
@@ -340,9 +645,10 @@ export function KbWikiTasks() {
                 编译
               </button>
             </div>
-          ))
-        )}
-      </div>
+            {assetsOpenFor === s.sourceId && s.ext === '.pdf' && <PdfAssetsPanel sourceId={s.sourceId} />}
+          </div>
+        ))
+      )}
     </div>
   );
 }

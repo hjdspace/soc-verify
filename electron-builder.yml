@@ -34,6 +34,13 @@ extraResources:
   - from: resources/terminal
     to: terminal
     filter: ["**/*"]
+  # pdfjs 本地运行时（issue 11）：legacy ESM build + standard_fonts/cmaps/wasm
+  # + @napi-rs/canvas（pdf.mjs 的 createRequire 解析基座）。
+  # 由 npm run prepare:pdfjs 物化；运行时 resolvePdfRuntimePaths 读取
+  # <resourcesPath>/pdfjs，只使用本地资源（无 CDN）。
+  - from: resources/pdfjs
+    to: pdfjs
+    filter: ["**/*"]
   - from: resources/binaries
     to: binaries
     # 排除 officecli 自更新残留：.update.partial 为下载中断的临时文件，

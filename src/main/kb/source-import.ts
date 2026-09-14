@@ -45,6 +45,7 @@ import {
   TEXT_IMPORT_EXTENSIONS,
 } from './source-identity';
 import { collectReferencedRevisions } from './source-refs';
+import { extractAndStorePdfAssets } from './pdf-asset-store';
 import { getActiveConvertEngine, getConvertEngine } from './engines';
 import type { ConvertEngine, EngineAsset } from './engines/types';
 import type {
@@ -296,6 +297,43 @@ async function commitManifestUpdate(
 }
 
 /**
+ * PDF 图像资产提取（issue 11）。与机械全文转换解耦：
+ *  - 转换失败（如无文字层的扫描件）**仍要提图**，否则用户看不到原页证据；
+ *  - 提取失败只改 pdfAssets 状态，不改变 parsed 语义（有图 ≠ 有全文）；
+ *  - 被取消（AbortSignal）时抛 WikiSourceAbortedError，不留痕迹。
+ */
+async function extractPdfAssetsForRecord(
+  kbPath: string,
+  rec: WikiSourceRecord,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  if (extOf(rec.sourcePath) !== '.pdf') return;
+  const outcome = await extractAndStorePdfAssets(kbPath, rec.sourceId, {
+    ...(signal ? { signal } : {}),
+    parsedHash: rec.parsedHash,
+  });
+  const at = new Date().toISOString();
+  if (outcome.ok) {
+    rec.pdfAssets = {
+      status: 'ready',
+      assetCount: outcome.manifest.assets.length,
+      updatedAt: at,
+    };
+    return;
+  }
+  if (outcome.error.code === 'aborted') {
+    throw new WikiSourceAbortedError();
+  }
+  rec.pdfAssets = {
+    status: 'failed',
+    assetCount: 0,
+    errorCode: outcome.error.code,
+    errorMessage: outcome.error.message,
+    updatedAt: at,
+  };
+}
+
+/**
  * 执行转换并写入 parsed/assets，把 rec 推到终态（ready/failed）。
  * engine = null 表示文本直通。返回 null = 成功；否则返回错误码字符串。
  * rec.currentRevision 必须已是新修订；parsedRevision/parsedHash 在失败时
@@ -363,6 +401,11 @@ async function finalizeConversion(
     // 产物写入失败同样持久失败状态（原件已保存，parsed 停留旧值）
     markFailed(rec, 'ioError', `转换产物写入失败: ${String(err)}`);
   }
+
+  // PDF 图像资产提取（位图对象 + 矢量页整页渲染）：转换成功与失败都执行，
+  // 状态落在 rec.pdfAssets（终态由调用方的 manifest 提交一并持久化）。
+  await extractPdfAssetsForRecord(kbPath, rec, signal);
+
   // 提交临界区：parsed/assets 已落盘，终态 manifest 必须写完（不可中止）
   onCommitting?.();
   rec.updatedAt = new Date().toISOString();
@@ -700,6 +743,7 @@ export async function listWikiSources(kbPath: string): Promise<WikiSourceSummary
       parsedHash: r.parsedHash,
       parsedStale: r.status !== 'ready' || r.parsedRevision !== r.currentRevision || r.parsedHash === null,
       assetCount: r.assetCount,
+      ...(r.pdfAssets !== undefined ? { pdfAssets: r.pdfAssets } : {}),
       importedAt: r.importedAt,
       updatedAt: r.updatedAt,
     }));

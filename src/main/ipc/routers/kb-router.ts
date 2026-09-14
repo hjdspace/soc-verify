@@ -74,6 +74,14 @@ import {
   type SourceImportOutcome,
 } from '../../kb/source-import';
 import { wikiIngestQueue } from '../../kb/wiki-queue';
+import {
+  extractAndStorePdfAssets,
+  readPdfAssetManifest,
+  resolvePdfAssetFile,
+  type PdfAssetStoreExtractResult,
+  type PdfAssetManifest,
+} from '../../kb/pdf-asset-store';
+import type { PdfRenderSpec } from '../../kb/pdf-assets';
 import { WikiQueueError, type WikiQueueAttachResult } from '../../kb/ingest-queue';
 import {
   scanWikiCatalog,
@@ -241,6 +249,61 @@ function parseSourceIdInput(
     }
   }
   return out as { sourceId: string } & Record<string, string>;
+}
+
+/**
+ * PDF 资产输入校验（issue 11）：
+ *  - render：'none' | 'auto' | 'all' | 页号数组（1-based 正整数）
+ *  - scale/maxEdge/batchSize：正数（越界由提取内核 clamp/按最长边等比缩放）
+ */
+function parsePdfAssetInput(raw: unknown): {
+  sourceId: string;
+  revision?: string;
+  render?: PdfRenderSpec;
+  scale?: number;
+  maxEdge?: number;
+  batchSize?: number;
+} {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const out: {
+    sourceId: string;
+    revision?: string;
+    render?: PdfRenderSpec;
+    scale?: number;
+    maxEdge?: number;
+    batchSize?: number;
+  } = { sourceId: parseSourceIdInput(raw, ['revision']).sourceId };
+
+  if (typeof r.revision === 'string' && r.revision.trim().length > 0) out.revision = r.revision.trim();
+
+  if (r.render !== undefined) {
+    if (typeof r.render === 'string') {
+      if (!['none', 'auto', 'all'].includes(r.render)) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: `render 取值非法: ${r.render}` });
+      }
+      out.render = r.render as PdfRenderSpec;
+    } else if (Array.isArray(r.render)) {
+      const pages = r.render.map((p) => {
+        if (typeof p !== 'number' || !Number.isInteger(p) || p < 1) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'render 页号必须为 1 起的整数' });
+        }
+        return p;
+      });
+      out.render = pages;
+    } else {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: 'render 必须为 none/auto/all 或页号数组' });
+    }
+  }
+
+  for (const key of ['scale', 'maxEdge', 'batchSize'] as const) {
+    const v = r[key];
+    if (v === undefined) continue;
+    if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: `${key} 必须为正数` });
+    }
+    out[key] = v;
+  }
+  return out;
 }
 
 /**
@@ -887,6 +950,58 @@ export const kbRouter = t.router({
     .mutation(async ({ input }): Promise<SourceConvertOutcome> => {
       const kbPath = await getWikiMountedKbPath();
       return convertWikiSource(kbPath, input.sourceId);
+    }),
+
+  // ─── kb.pdfAssets / pdfAssetExtract / pdfAssetFile（issue 11） ──
+  //
+  // PDF 图像资产（位图对象 + 矢量页整页渲染）：
+  //  - pdfAssets：读取资产清单（未提取过 = null；revision 缺省 = 当前修订）
+  //  - pdfAssetExtract：按分批语义提取，返回 renderRemaining 供「继续下一批」
+  //  - pdfAssetFile：解析资产文件绝对路径（只接受内容 hash 命名）
+
+  pdfAssets: t.procedure
+    .input((raw): { sourceId: string; revision?: string } => {
+      const parsed = parsePdfAssetInput(raw);
+      return parsed.revision ? { sourceId: parsed.sourceId, revision: parsed.revision } : { sourceId: parsed.sourceId };
+    })
+    .query(async ({ input }): Promise<{ manifest: PdfAssetManifest | null }> => {
+      const kbPath = await getWikiMountedKbPath();
+      return { manifest: await readPdfAssetManifest(kbPath, input.sourceId, input.revision) };
+    }),
+
+  pdfAssetExtract: t.procedure
+    .input(parsePdfAssetInput)
+    .mutation(async ({ input }): Promise<PdfAssetStoreExtractResult> => {
+      const kbPath = await getWikiMountedKbPath();
+      return extractAndStorePdfAssets(kbPath, input.sourceId, {
+        ...(input.revision ? { revision: input.revision } : {}),
+        ...(input.render !== undefined ? { render: input.render } : {}),
+        ...(input.scale !== undefined ? { scale: input.scale } : {}),
+        ...(input.maxEdge !== undefined ? { maxEdge: input.maxEdge } : {}),
+        ...(input.batchSize !== undefined ? { batchSize: input.batchSize } : {}),
+      });
+    }),
+
+  pdfAssetFile: t.procedure
+    .input((raw): { sourceId: string; revision: string; assetId: string } => {
+      const r = (raw ?? {}) as Record<string, unknown>;
+      if (typeof r.revision !== 'string' || r.revision.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'revision is required' });
+      }
+      if (typeof r.assetId !== 'string' || r.assetId.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'assetId is required' });
+      }
+      return {
+        sourceId: parseSourceIdInput(raw).sourceId,
+        revision: r.revision.trim(),
+        assetId: r.assetId.trim(),
+      };
+    })
+    .query(async ({ input }): Promise<{ path: string | null }> => {
+      const kbPath = await getWikiMountedKbPath();
+      return {
+        path: await resolvePdfAssetFile(kbPath, input.sourceId, input.revision, input.assetId),
+      };
     }),
 
   // ─── kb.importExtensions（issue 02） ───────────────────────
