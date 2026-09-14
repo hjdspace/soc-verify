@@ -7,7 +7,7 @@
  *    不接受模型输入）+ schema/purpose 快照（由 stageProposal 记 hash）；
  *  - 先简洁分析再生成（compile-prompts，无隐藏思维链）；
  *  - 读集：当前知识库目录（wiki/index.md）+ 必要既有页（本票以 index
- *    为上下文，跨来源正文合并待 issue 16）；
+ *    为上下文，跨来源正文合并在 staging 后按来源关系执行 issue 16）；
  *  - 输出只经既有 stageProposal（路径沙箱/frontmatter/归属固定），
  *    本模块不写 wiki/；
  *  - 坏输出必须拒绝：缺来源摘要页、伪造其他来源页、证据不符、未闭合块。
@@ -75,10 +75,12 @@ import {
   buildGenerationPrompt,
   buildRepairPrompt,
   buildChunkAnalysisPrompt,
+  buildMergePrompt,
   parseChunkAnalysisOutput,
   CHUNK_ANALYSIS_PROMPT_VERSION,
   CHUNK_ANALYSIS_MAX_TOKENS,
 } from './compile-prompts';
+import { mergePageContent, type MergeFn, type MergeResult } from './page-merge';
 import {
   computeCompileBudget,
   estimateTokens,
@@ -289,6 +291,7 @@ const ANALYSIS_SYSTEM = '你是严谨的研究分析员。只输出最终结构�
 const GENERATION_SYSTEM = '你是 wiki 维护者。只输出 FILE 块，不输出思考过程或其他文字。';
 const REPAIR_SYSTEM = '你是 wiki 维护者。只补齐被请求的 FILE 块，每个块必须完整闭合，不输出其他内容。';
 const CHUNK_ANALYSIS_SYSTEM = '你是严谨的研究分析员。只分析给定的这一段，输出「分块分析」与「全局摘要」两个小节，不输出思考过程。';
+const MERGE_SYSTEM = '你是 wiki 维护者。只输出合并后的完整页面内容，不输出思考过程或其他文字。';
 
 /**
  * 指令骨架的保守 token 预留（输出格式说明、frontmatter 规则、路由表等）。
@@ -1253,12 +1256,98 @@ export async function compileWikiSource(
     completedPhases.push('validating');
 
     const changeSet = staged.value.changeSet;
-    // 既有同页更新提示：跨来源正文合并能力待 issue 16
-    if (changeSet.pages.some((p) => p.before !== null)) {
-      changeSet.warnings.push(
-        '提案包含既有同页更新：跨来源正文合并能力待后续版本，请逐 hunk 审阅确认。',
-      );
-      // staging 文件已写入 —— 补写一次把提示持久化（原子替换）
+
+    // ── 阶段 3.5：来源感知合并（issue 16，spec §4 合并策略） ──
+    // 对每个 before !== null 的页面（既有同页更新），按来源关系合并：
+    //  - 同来源修订 → 替换正文（撤回旧论断）
+    //  - 跨来源合并 → LLM 正文合并 + 来源引用 union + 锁定字段回写
+    // 合并失败时保留旧页并阻止该提案发布（spec §4：异常不覆盖旧页）。
+    const pagesWithBefore = changeSet.pages.filter((p) => p.before !== null);
+    if (pagesWithBefore.length > 0) {
+      const nowForMerge = now;
+      const mergeWarnings: string[] = [];
+      const mergeUsages: LlmUsage[] = [];
+
+      // LLM 合并入口：调用 buildMergePrompt 组装提示词，复用编译 Llm
+      const mergeFn: MergeFn = async (existingContent, incomingContent, sourceFileName, mergeSignal) => {
+        const mergeResult = await invokePhase(llm, {
+          system: MERGE_SYSTEM,
+          user: buildMergePrompt({ sourceName: sourceFileName, existingContent, incomingContent }),
+          maxTokens: GENERATION_MAX_TOKENS,
+        }, mergeSignal ?? signal, baseDelayMs);
+        retryCount += mergeResult.retryCount;
+        if (!mergeResult.ok) {
+          throw new Error(`LLM 合并调用失败: ${mergeResult.message}`);
+        }
+        if (mergeResult.usage) mergeUsages.push(mergeResult.usage);
+        return await resultText(mergeResult);
+      };
+
+      let anyMerged = false;
+      let anyFailed = false;
+
+      for (const page of changeSet.pages) {
+        if (page.before === null) continue; // 新页跳过
+
+        const mergeResult: MergeResult = await mergePageContent({
+          incomingContent: page.proposed,
+          existingContent: page.before,
+          incomingSourceRef: sourceRef,
+          merger: mergeFn,
+          sourceFileName: rec.sourcePath,
+          pagePath: page.relPath,
+          now: nowForMerge,
+          signal,
+        });
+
+        if (mergeResult.ok) {
+          if (mergeResult.llmMerged) {
+            anyMerged = true;
+            mergeWarnings.push(
+              `来源感知合并：${page.relPath} — 跨来源正文已由 LLM 合并（来源引用去重、锁定字段回写）。`,
+            );
+          } else {
+            mergeWarnings.push(
+              `来源感知合并：${page.relPath} — 同来源修订，正文已替换。`,
+            );
+          }
+          // 更新 proposed 为合并后内容
+          page.proposed = mergeResult.content;
+          // 更新 sources 为合并后引用（去重后的）
+          const mergedParse = parseWikiPage(mergeResult.content);
+          if (mergedParse.ok) {
+            page.sources = mergedParse.frontmatter.sources;
+          }
+        } else {
+          anyFailed = true;
+          // 合并失败：保留旧页（before 作为 proposed），阻止该提案发布
+          mergeWarnings.push(
+            `来源感知合并失败：${page.relPath} — ${mergeResult.message}（保留旧页，请人工审阅确认）。`,
+          );
+          // fallback 内容作为 proposed（保留旧页内容）
+          if (mergeResult.fallback !== null) {
+            page.proposed = mergeResult.fallback;
+          }
+        }
+      }
+
+      // 汇总合并阶段 usage
+      usage.push(...mergeUsages);
+
+      // 合并警告持久化
+      changeSet.warnings.push(...dedupeWarnings(mergeWarnings));
+      if (anyMerged) {
+        changeSet.warnings.push(
+          '提案包含跨来源 LLM 正文合并：已保留各来源贡献，来源引用去重，锁定字段回写。请逐 hunk 审阅合并结果。',
+        );
+      }
+      if (anyFailed) {
+        changeSet.warnings.push(
+          '部分页面来源感知合并失败：相关页面保留旧内容，请人工审阅后决定是否接受。',
+        );
+      }
+
+      // 持久化更新后的 changeSet（原子替换）
       await writeFileAtomic(
         join(layout.stagingDir, `${changeSet.changeSetId}.json`),
         JSON.stringify(changeSet, null, 2),
