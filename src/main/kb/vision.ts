@@ -36,7 +36,7 @@ import { join } from 'node:path';
 import { sha256Hex } from './hash';
 import { callLlm, LlmCallError, type LlmUsage } from './llm-call';
 import { resolveKbVisionLlmConfig, type LlmConfig } from './llm-config';
-import { wikiLayout } from './wiki-layout';
+import { wikiLayout, readWikiManifest } from './wiki-layout';
 import { readPdfAssetManifest, resolvePdfAssetFile } from './pdf-asset-store';
 import { DEFAULT_MAX_EDGE } from './pdf-assets';
 import { loadPdfRuntime } from './pdf-runtime';
@@ -477,7 +477,6 @@ function persistQueued(path: string, write: () => Promise<void>): Promise<void> 
 
 /** 来源显示名（manifest 的 sourcePath；manifest 不可读时回退 sourceId） */
 async function sourceNameFor(kbPath: string, sourceId: string): Promise<string> {
-  const { readWikiManifest } = await import('./wiki-layout');
   const read = await readWikiManifest(kbPath);
   return read.ok ? (read.manifest.sources?.[sourceId]?.sourcePath ?? sourceId) : sourceId;
 }

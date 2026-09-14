@@ -93,6 +93,7 @@ vi.mock('@firecrawl/anydoc', () => ({
 
 import { kbRouter } from '../src/main/ipc/routers/kb-router';
 import { initWikiLayout } from '../src/main/kb/wiki-layout';
+import { wikiIngestQueue } from '../src/main/kb/wiki-queue';
 import type { WikiQueueSnapshot, WikiTaskEvent } from '@shared/kb-types';
 
 const caller = kbRouter.createCaller({});
@@ -217,6 +218,57 @@ describe('kb-router 持久导入队列（issue 03）', () => {
     expect(snap.snapshot.paused).toBe(false);
     expect(snap.snapshot.tasks).toEqual([]);
     expect(sendCalls.some(([ch]) => ch === 'kb:task')).toBe(false);
+  });
+
+  it('重启后保留挂载记录时，已有来源可直接加入队列', async () => {
+    await registerAndMount();
+    const sourceId = await importOne(makeTxt('restart.txt'), 'restart.txt');
+    // 重启丢失进程内绑定，但项目的知识库挂载记录仍在磁盘上。
+    await wikiIngestQueue.detach(kbId);
+    expect(wikiIngestQueue.snapshot(kbId)).toBeNull();
+    expect((await caller.status({})).mounted?.kbId).toBe(kbId);
+
+    const result = await caller.queueEnqueue({ sourceIds: [sourceId] });
+    expect(result.results[0]).toMatchObject({ ok: true, task: { sourceId } });
+    await waitForSnapshot((s) => s.tasks.some((t) => t.sourceId === sourceId && t.phase === 'done'));
+  });
+
+  it('重启后首次快照恢复未完成任务，并保留暂停状态直到用户继续', async () => {
+    await registerAndMount();
+    await caller.queuePause({});
+    const sourceId = await importOne(makeTxt('waiting.txt'), 'waiting.txt');
+    await caller.queueEnqueue({ sourceIds: [sourceId] });
+    await wikiIngestQueue.detach(kbId);
+
+    const snapshot = await caller.queueSnapshot({});
+    expect(snapshot).toMatchObject({
+      ok: true,
+      snapshot: { kbId, paused: true, restoredWaiting: true, tasks: [{ sourceId, phase: 'queued' }] },
+    });
+    expect(await caller.queueResume({})).toEqual({ ok: true });
+    await waitForSnapshot((s) => s.tasks.length === 1 && s.tasks[0].phase === 'done');
+  });
+
+  it('重启后并发加载快照和编译入队，保留全部任务', async () => {
+    await registerAndMount();
+    await caller.queuePause({});
+    const ids: string[] = [];
+    for (const rel of ['compile-1.txt', 'compile-2.txt', 'compile-3.txt']) {
+      ids.push(await importOne(makeTxt(rel), rel));
+    }
+    await wikiIngestQueue.detach(kbId);
+
+    const [snapshot, ...enqueued] = await Promise.all([
+      caller.queueSnapshot({}),
+      ...ids.map((sourceId) => caller.wikiCompileEnqueue({ sourceId })),
+    ]);
+    expect(snapshot.ok).toBe(true);
+    expect(enqueued.every((r) => r.results[0]?.ok)).toBe(true);
+    const after = await caller.queueSnapshot({});
+    expect(after.ok).toBe(true);
+    if (!after.ok) return;
+    expect(after.snapshot.tasks.map((t) => t.sourceId).sort()).toEqual([...ids].sort());
+    expect(after.snapshot.tasks.every((t) => t.kind === 'compileSource' && t.phase === 'queued')).toBe(true);
   });
 
   it('文本来源入队 → 转换完成 → 持久化 done；未知来源报 sourceNotFound；同来源去重', { timeout: 15000 }, async () => {

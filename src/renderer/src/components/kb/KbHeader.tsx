@@ -1,7 +1,7 @@
 /**
  * KbHeader — 知识库头部组件（库切换器 + 统计 + 上传按钮）。
  *
- * wiki 布局挂载时：文档导入/分类能力尚未就绪，上传按钮禁用并提示。
+ * wiki 布局通过来源导入与编译队列生成知识页提案。
  */
 
 import { BookOpen, ChevronDown, Upload, CheckCircle, CircleSlash } from 'lucide-react';
@@ -11,13 +11,14 @@ import { cn } from '@renderer/lib/utils';
 export function KbHeader() {
   const kbStatus = useKbStore((s) => s.kbStatus);
   const documents = useKbStore((s) => s.documents);
+  const wikiSources = useKbStore((s) => s.wikiSources);
   const categories = useKbStore((s) => s.categories);
   const uploading = useKbStore((s) => s.uploading);
   const setKbModalOpen = useKbStore((s) => s.setKbModalOpen);
 
   const mountedKb = kbStatus?.mounted;
   const isWikiFormat = mountedKb?.format === 'wiki';
-  const docCount = documents.length;
+  const docCount = isWikiFormat ? wikiSources.length : documents.length;
   const catCount = categories.length;
   // wiki 布局没有 index.md：用 manifest 就绪度替代索引导航提示
   const indexReady = isWikiFormat
@@ -55,10 +56,10 @@ export function KbHeader() {
           <span className="text-sm font-semibold leading-tight">{docCount}</span>
           <span className="text-[10px] text-muted-foreground">文档</span>
         </div>
-        <div className="flex flex-col items-center">
+        {!isWikiFormat && <div className="flex flex-col items-center">
           <span className="text-sm font-semibold leading-tight">{catCount}</span>
           <span className="text-[10px] text-muted-foreground">分类</span>
-        </div>
+        </div>}
         <div className="flex flex-col items-center">
           {isWikiFormat ? (
             <CircleSlash
@@ -81,11 +82,10 @@ export function KbHeader() {
 
       <div className="flex-1" />
 
-      {/* 上传按钮：wiki 布局暂不支持文档导入 */}
+      {/* 上传按钮 */}
       <button
         onClick={() => void useKbStore.getState().pickAndUpload()}
-        disabled={uploading || isWikiFormat}
-        title={isWikiFormat ? '新布局（LLM Wiki）暂不支持文档导入' : undefined}
+        disabled={uploading}
         className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
       >
         <Upload className="h-3.5 w-3.5" />

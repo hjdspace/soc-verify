@@ -32,7 +32,7 @@
 import { join } from 'node:path';
 import { readdir, rm, readFile } from 'node:fs/promises';
 import { readWikiManifest, writeWikiManifest, wikiLayout, withManifestLock } from './wiki-layout';
-import { collectReferencedRevisions } from './source-refs';
+import { collectReferencedRevisions, extractSourceRefsFromMarkdown } from './source-refs';
 import type { Dirent } from 'node:fs';
 import type { WikiSourceRecord } from '@shared/kb-types';
 
@@ -142,7 +142,6 @@ export async function withdrawSource(kbPath: string, sourceId: string): Promise<
  * 复用 source-refs 的 frontmatter 提取逻辑。
  */
 async function findPagesReferencingSource(kbPath: string, sourceId: string): Promise<string[]> {
-  const { extractSourceRefsFromMarkdown } = await import('./source-refs');
   const layout = wikiLayout(kbPath);
   const result: string[] = [];
 

@@ -649,7 +649,7 @@ export type WikiPageIssueCode =
   | 'badSources'
   | 'badDate';
 
-export type WikiPageIssue = { code: WikiPageIssueCode; message: string };
+export type WikiPageIssue = { code: WikiPageIssueCode; message: string; field?: string };
 
 export type WikiPageParseResult =
   | { ok: true; frontmatter: WikiPageFrontmatter; body: string }

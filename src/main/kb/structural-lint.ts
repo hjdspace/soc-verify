@@ -22,6 +22,8 @@ import type {
   WikiLintRunResult,
   WikiStructuralFinding,
 } from '@shared/kb-types';
+import { buildWikiGraphSnapshot } from './wiki-graph';
+import { assertReadGateOpen, WikiReadGateError } from './read-gate';
 
 // ── 稳定身份 ────────────────────────────────────────────────────
 
@@ -166,9 +168,6 @@ export async function runStructuralLint(
   kbPath: string,
   options?: RunLintOptions,
 ): Promise<WikiLintRunResult> {
-  const { buildWikiGraphSnapshot } = await import('./wiki-graph');
-  const { assertReadGateOpen, WikiReadGateError } = await import('./read-gate');
-
   // 读取门禁
   try {
     await assertReadGateOpen(kbPath);

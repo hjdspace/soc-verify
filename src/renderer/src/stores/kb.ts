@@ -25,6 +25,7 @@ import type {
   KbStatus,
   KbListEntry,
   KbDisposal,
+  WikiSourceSummary,
 } from '@shared/kb-types';
 
 // ── 渲染端独有类型（不跨进程） ─────────────────────────────────
@@ -87,6 +88,7 @@ interface KbStoreState {
 
   // ── 文档列表 ─────────────────────────────────────────────
   documents: KbDocument[];
+  wikiSources: WikiSourceSummary[];
   documentsLoading: boolean;
 
   // ── 上传状态 ─────────────────────────────────────────────
@@ -156,6 +158,7 @@ export const useKbStore = create<KbStoreState>((set, get) => ({
   categoriesLoading: false,
   selectedCategory: null,
   documents: [],
+  wikiSources: [],
   documentsLoading: false,
   uploading: false,
   kbModalOpen: false,
@@ -210,6 +213,10 @@ export const useKbStore = create<KbStoreState>((set, get) => ({
 
   // ── 加载分类树 ───────────────────────────────────────────
   loadCategories: async () => {
+    if (get().kbStatus?.mounted?.format === 'wiki') {
+      set({ categories: [], categoriesLoading: false, selectedCategory: null });
+      return;
+    }
     set({ categoriesLoading: true });
     try {
       const result = await trpc.kb.categories.query({});
@@ -223,10 +230,15 @@ export const useKbStore = create<KbStoreState>((set, get) => ({
   loadDocuments: async () => {
     set({ documentsLoading: true });
     try {
+      if (get().kbStatus?.mounted?.format === 'wiki') {
+        const wikiSources = await trpc.kb.sources.query({});
+        set({ wikiSources, documents: [], documentsLoading: false });
+        return;
+      }
       const result = await trpc.kb.documents.query({});
-      set({ documents: result, documentsLoading: false });
+      set({ documents: result, wikiSources: [], documentsLoading: false });
     } catch {
-      set({ documentsLoading: false, documents: [] });
+      set({ documentsLoading: false, documents: [], wikiSources: [] });
     }
   },
 
@@ -250,9 +262,39 @@ export const useKbStore = create<KbStoreState>((set, get) => ({
 
   // ── 上传文档 ─────────────────────────────────────────────
   uploadFiles: async (filePaths) => {
-    if (filePaths.length === 0) return;
+    if (filePaths.length === 0 || get().uploading) return;
     set({ uploading: true });
     try {
+      if (get().kbStatus?.mounted?.format === 'wiki') {
+        const result = await trpc.kb.importSources.mutate({
+          items: filePaths.map((absolutePath) => ({ absolutePath })),
+        });
+        const failures: string[] = [];
+        let imported = 0;
+        for (const [index, outcome] of result.results.entries()) {
+          if (!outcome.ok) {
+            failures.push(`${filePaths[index]}: ${outcome.error.message}`);
+            continue;
+          }
+          imported++;
+          try {
+            const queued = await trpc.kb.wikiCompileEnqueue.mutate({ sourceId: outcome.source.sourceId });
+            for (const task of queued.results) {
+              if (!task.ok) failures.push(`${outcome.source.sourcePath}: 编译入队失败，${task.error.message}`);
+            }
+          } catch (err) {
+            failures.push(`${outcome.source.sourcePath}: 编译入队失败，${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+        if (failures.length > 0) {
+          useToastStore.getState().warning('部分文档导入或编译入队失败', failures.join('\n'));
+        } else if (imported > 0) {
+          useToastStore.getState().success(`${imported} 个文档已导入并加入编译队列`);
+        }
+        set({ uploading: false, ...(imported > 0 ? { activeTab: 'tasks' as const } : {}) });
+        await get().refreshAll();
+        return;
+      }
       const result = await trpc.kb.upload.mutate({ filePaths });
       const failures = result.results.filter((r) => !r.ok);
       if (failures.length > 0) {
@@ -421,6 +463,7 @@ export const useKbStore = create<KbStoreState>((set, get) => ({
           kbStatus: null,
           categories: [],
           documents: [],
+          wikiSources: [],
           selectedCategory: null,
         });
         await get().loadKbList();
@@ -499,8 +542,8 @@ export const useKbStore = create<KbStoreState>((set, get) => ({
 
   // ── 刷新全部数据 ─────────────────────────────────────────
   refreshAll: async () => {
+    await get().loadKbStatus();
     await Promise.all([
-      get().loadKbStatus(),
       get().loadCategories(),
       get().loadDocuments(),
     ]);

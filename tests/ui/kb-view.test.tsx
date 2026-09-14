@@ -127,6 +127,8 @@ vi.mock('@renderer/lib/trpc', () => ({
       status: { query: vi.fn().mockResolvedValue(mockKbStatus) },
       categories: { query: vi.fn().mockResolvedValue(mockCategories) },
       documents: { query: vi.fn().mockResolvedValue(mockDocuments) },
+      sources: { query: vi.fn().mockResolvedValue([]) },
+      wikiCatalog: { query: vi.fn().mockResolvedValue({ ok: true, catalog: { typeDirs: {}, pages: [], aggregates: [], orphans: [] } }) },
       upload: { mutate: vi.fn().mockResolvedValue({ results: [{ ok: true, document: mockDocuments[0] }] }) },
       retry: { mutate: vi.fn().mockResolvedValue({ ok: true, document: mockDocuments[0] }) },
       delete: { mutate: vi.fn().mockResolvedValue({ ok: true }) },
@@ -216,6 +218,7 @@ function resetKbStore() {
     categoriesLoading: false,
     selectedCategory: null,
     documents: [],
+    wikiSources: [],
     documentsLoading: false,
     uploading: false,
     kbModalOpen: false,
@@ -323,13 +326,48 @@ describe('KbView', () => {
       expect(screen.getByText(/新布局（LLM Wiki）知识库已挂载/)).toBeTruthy();
     });
 
-    it('disables upload button for wiki-format mount', () => {
+    it('enables upload and explains the wiki review workflow', async () => {
+      const { trpc } = await import('@renderer/lib/trpc');
+      vi.mocked(trpc.kb.status.query).mockResolvedValue(mockKbStatus);
       useKbStore.setState({ kbStatus: mockKbStatus });
       render(<KbView />);
 
       const uploadButton = screen.getByText('上传文档').closest('button');
-      expect(uploadButton?.disabled).toBe(true);
-      expect(uploadButton?.title).toContain('暂不支持文档导入');
+      expect(uploadButton?.disabled).toBe(false);
+      await waitFor(() => expect(screen.getByText('上传后自动转换 → 编译知识页提案 → 审阅发布')).toBeTruthy());
+      fireEvent.click(uploadButton!);
+      await waitFor(() => expect(trpc.kb.pickFiles.mutate).toHaveBeenCalled());
+    });
+
+    it('refreshes the wiki catalog from the main refresh button', async () => {
+      const { trpc } = await import('@renderer/lib/trpc');
+      vi.mocked(trpc.kb.status.query).mockResolvedValue(mockKbStatus);
+      useKbStore.setState({ kbStatus: mockKbStatus, activeTab: 'wiki' });
+      render(<KbView />);
+      await waitFor(() => expect(trpc.kb.wikiCatalog.query).toHaveBeenCalledTimes(1));
+      fireEvent.click(screen.getByTitle('刷新'));
+      await waitFor(() => expect(trpc.kb.wikiCatalog.query).toHaveBeenCalledTimes(2));
+    });
+
+    it('renders wiki source documents without legacy category actions', async () => {
+      const { trpc } = await import('@renderer/lib/trpc');
+      vi.mocked(trpc.kb.status.query).mockResolvedValue(mockKbStatus);
+      const sources = ['one.pdf', 'two.pdf', 'three.pdf'].map((name) => ({
+        sourceId: name, sourcePath: name, ext: '.pdf', size: 100,
+        revision: 'r1', revisionShort: 'r1', status: 'ready' as const,
+        parsedRevision: 'r1', parsedHash: 'h1', parsedStale: false, assetCount: 0,
+        importedAt: '2026-09-14', updatedAt: '2026-09-14',
+      }));
+      vi.mocked(trpc.kb.sources.query).mockResolvedValueOnce(sources);
+      useKbStore.setState({ kbStatus: mockKbStatus });
+
+      render(<KbView />);
+
+      await waitFor(() => expect(screen.getByText('three.pdf')).toBeTruthy());
+      expect(screen.getAllByText('已转换')).toHaveLength(3);
+      expect(screen.queryByTitle('删除')).toBeNull();
+      expect(trpc.kb.documents.query).not.toHaveBeenCalled();
+      expect(trpc.kb.categories.query).not.toHaveBeenCalled();
     });
 
     it('renders manifest readiness label instead of index for wiki mount', () => {

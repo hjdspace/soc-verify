@@ -25,6 +25,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { stageProposal, listChangeSets, readChangeSet } from './staging';
 import { wikiLayout, readWikiManifest } from './wiki-layout';
+import { writeFileAtomic } from './atomic-commit';
 import type {
   WikiChangeSet,
   WikiSourceRef,
@@ -223,7 +224,6 @@ export async function saveQueryMessages(
   changeSet.warnings.push(`__dedupe_key:${dedupe}`);
 
   // 原子写回带去重键的 changeSet
-  const { writeFileAtomic } = await import('./atomic-commit');
   const layout = wikiLayout(kbPath);
   try {
     await writeFileAtomic(

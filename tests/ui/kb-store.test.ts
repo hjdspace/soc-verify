@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { WikiSourceRecord } from '@shared/kb-types';
 
 // ─── Hoisted mock data ──────────────────────────────────────
 
@@ -109,6 +110,9 @@ vi.mock('@renderer/lib/trpc', () => ({
       categories: { query: vi.fn().mockResolvedValue(mockCategories) },
       documents: { query: vi.fn().mockResolvedValue(mockDocuments) },
       upload: { mutate: vi.fn().mockResolvedValue({ results: [{ ok: true, document: mockDocuments[0] }] }) },
+      importSources: { mutate: vi.fn().mockResolvedValue({ results: [] }) },
+      sources: { query: vi.fn().mockResolvedValue([]) },
+      wikiCompileEnqueue: { mutate: vi.fn().mockResolvedValue({ results: [{ ok: true }] }) },
       retry: { mutate: vi.fn().mockResolvedValue({ ok: true, document: mockDocuments[0] }) },
       delete: { mutate: vi.fn().mockResolvedValue({ ok: true }) },
       register: { mutate: vi.fn().mockResolvedValue({ ok: true, id: 'kb-3', name: '新知识库', path: 'D:\\docs\\new-kb', registeredAt: 1700000006000, format: 'wiki' }) },
@@ -179,6 +183,7 @@ function resetKbStore() {
     categoriesLoading: false,
     selectedCategory: null,
     documents: [],
+    wikiSources: [],
     documentsLoading: false,
     uploading: false,
     kbModalOpen: false,
@@ -319,6 +324,73 @@ describe('KbStore', () => {
   // ── 上传文档 ─────────────────────────────────────────────
 
   describe('uploadFiles', () => {
+    const source = (name: string): WikiSourceRecord => ({
+      sourceId: name, sourcePath: name, ext: '.pdf', size: 100,
+      currentRevision: 'r1', parsedRevision: 'r1', parsedHash: 'h1',
+      engine: 'anydoc', engineFingerprint: 'anydoc', status: 'ready', assetCount: 0,
+      importedAt: '2026-09-14', updatedAt: '2026-09-14',
+    });
+
+    it('imports three PDFs through the wiki pipeline instead of the retired category upload', async () => {
+      const { trpc } = await import('@renderer/lib/trpc');
+      useKbStore.setState({ kbStatus: mockKbStatus });
+      vi.mocked(trpc.kb.upload.mutate).mockRejectedValue(new Error(
+        '新布局（LLM Wiki）知识库暂不支持此能力：旧分类读写入口已停用，功能将由知识库新流水线提供',
+      ));
+      const filePaths = ['D:\\docs\\one.pdf', 'D:\\docs\\two.pdf', 'D:\\docs\\three.pdf'];
+      vi.mocked(trpc.kb.importSources.mutate).mockResolvedValueOnce({
+        results: ['one.pdf', 'two.pdf', 'three.pdf'].map((name) => ({ ok: true, source: source(name), reused: false })),
+      });
+      vi.mocked(trpc.kb.pickFiles.mutate).mockResolvedValueOnce({ canceled: false, filePaths });
+
+      await useKbStore.getState().pickAndUpload();
+      vi.mocked(trpc.kb.upload.mutate).mockResolvedValue({ results: [{ ok: true, document: mockDocuments[0] }] });
+
+      expect(toastMocks.error).not.toHaveBeenCalled();
+      expect(trpc.kb.importSources.mutate).toHaveBeenCalledWith({
+        items: filePaths.map((absolutePath) => ({ absolutePath })),
+      });
+      expect(trpc.kb.upload.mutate).not.toHaveBeenCalled();
+      expect(trpc.kb.wikiCompileEnqueue.mutate).toHaveBeenCalledTimes(3);
+      expect(trpc.kb.wikiCompileEnqueue.mutate).toHaveBeenCalledWith({ sourceId: 'three.pdf' });
+      expect(trpc.kb.sources.query).toHaveBeenCalled();
+      expect(trpc.kb.documents.query).not.toHaveBeenCalled();
+      expect(trpc.kb.categories.query).not.toHaveBeenCalled();
+      expect(useKbStore.getState().activeTab).toBe('tasks');
+      expect(useKbStore.getState().uploading).toBe(false);
+    });
+
+    it('continues after an import failure and a compile enqueue failure without claiming full success', async () => {
+      const { trpc } = await import('@renderer/lib/trpc');
+      useKbStore.setState({ kbStatus: mockKbStatus });
+      vi.mocked(trpc.kb.importSources.mutate).mockResolvedValueOnce({ results: [
+        { ok: false, error: { code: 'ioError', message: 'PDF 已加密' } },
+        { ok: true, source: source('two.pdf'), reused: false },
+        { ok: true, source: source('three.pdf'), reused: false },
+      ] });
+      vi.mocked(trpc.kb.wikiCompileEnqueue.mutate).mockRejectedValueOnce(new Error('队列不可用'));
+
+      await useKbStore.getState().uploadFiles(['one.pdf', 'two.pdf', 'three.pdf']);
+
+      expect(trpc.kb.wikiCompileEnqueue.mutate).toHaveBeenCalledTimes(2);
+      expect(toastMocks.warning).toHaveBeenCalledWith('部分文档导入或编译入队失败', expect.stringMatching(/PDF 已加密[\s\S]*队列不可用/));
+      expect(toastMocks.success).not.toHaveBeenCalled();
+      expect(useKbStore.getState().uploading).toBe(false);
+      expect(trpc.kb.sources.query).toHaveBeenCalled();
+    });
+
+    it('loads wiki source identities and conversion errors without the retired document API', async () => {
+      const { trpc } = await import('@renderer/lib/trpc');
+      useKbStore.setState({ kbStatus: mockKbStatus });
+      const row = { ...source('one.pdf'), revision: 'r1', revisionShort: 'r1', parsedStale: true, status: 'failed' as const, errorMessage: 'PDF 已加密' };
+      vi.mocked(trpc.kb.sources.query).mockResolvedValueOnce([row]);
+
+      await useKbStore.getState().loadDocuments();
+
+      expect(useKbStore.getState().wikiSources).toEqual([row]);
+      expect(trpc.kb.documents.query).not.toHaveBeenCalled();
+    });
+
     it('calls tRPC upload and refreshes data', async () => {
       const { trpc } = await import('@renderer/lib/trpc');
       await useKbStore.getState().uploadFiles(['D:\\file1.pdf']);
@@ -610,12 +682,14 @@ describe('KbStore', () => {
   // ── 刷新全部 ─────────────────────────────────────────────
 
   describe('refreshAll', () => {
-    it('loads status, categories, and documents in parallel', async () => {
+    it('loads the mounted format before choosing the source API', async () => {
+      const { trpc } = await import('@renderer/lib/trpc');
       await useKbStore.getState().refreshAll();
 
       expect(useKbStore.getState().kbStatus).toEqual(mockKbStatus);
-      expect(useKbStore.getState().categories).toEqual(mockCategories);
-      expect(useKbStore.getState().documents).toEqual(mockDocuments);
+      expect(trpc.kb.sources.query).toHaveBeenCalled();
+      expect(trpc.kb.categories.query).not.toHaveBeenCalled();
+      expect(trpc.kb.documents.query).not.toHaveBeenCalled();
     });
   });
 

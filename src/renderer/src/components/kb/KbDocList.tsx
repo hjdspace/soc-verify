@@ -15,6 +15,7 @@ import { useCallback, useState } from 'react';
 import { Upload, RotateCcw, Trash2, FileText, AlertCircle } from 'lucide-react';
 import { useKbStore, type KbDocument } from '@renderer/stores/kb';
 import { cn } from '@renderer/lib/utils';
+import { KbWikiSources } from './KbWikiTasks';
 
 // ── 文件类型图标 ────────────────────────────────────────────
 
@@ -129,6 +130,8 @@ function formatSize(bytes: number): string {
 // ── 文档列表主组件 ──────────────────────────────────────────
 
 export function KbDocList() {
+  const isWikiFormat = useKbStore((s) => s.kbStatus?.mounted?.format === 'wiki');
+  const uploading = useKbStore((s) => s.uploading);
   const documents = useKbStore((s) => s.documents);
   const selectedCategory = useKbStore((s) => s.selectedCategory);
   const loading = useKbStore((s) => s.documentsLoading);
@@ -207,14 +210,18 @@ export function KbDocList() {
       >
         <Upload className="mx-auto mb-1 h-5 w-5" />
         <div className="text-xs font-medium">拖拽文档到此处，或点击选择文件</div>
-        <div className="mt-1 text-[11px]">上传后自动转换 Markdown → AI 自动分类 → 更新索引</div>
+        <div className="mt-1 text-[11px]">
+          {uploading ? '正在导入文档，请稍候…' : isWikiFormat
+            ? '上传后自动转换 → 编译知识页提案 → 审阅发布'
+            : '上传后自动转换 Markdown → AI 自动分类 → 更新索引'}
+        </div>
         <div className="mt-1.5 text-[10px] tracking-wide">
           pdf · doc/docx · ppt/pptx · xls/xlsx · odt · rtf · epub · csv
         </div>
       </div>
 
       {/* 文档表格 */}
-      {filteredDocs.length === 0 ? (
+      {isWikiFormat ? <KbWikiSources /> : filteredDocs.length === 0 ? (
         <div className="flex flex-col items-center justify-center gap-2 py-8 text-center">
           <FileText className="h-8 w-8 text-muted-foreground/30" />
           <p className="text-xs text-muted-foreground">

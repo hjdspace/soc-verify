@@ -450,15 +450,19 @@ type ProposalAnalysis = {
   warnings: string[];
   truncated: string[];
   missingSummary: boolean;
+  /** 仅缺少标题/摘要、且来源证据校验通过的既有页。 */
+  missingMetadata?: Array<{ path: string; message: string }>;
+  /** 页面存在但缺少 frontmatter 围栏，允许定向补全。 */
+  missingFrontmatter?: string[];
   /** 可读失败原因（ok=true 时为空串） */
   message: string;
-  /** 失败是否属于「有界修复可救」（缺摘要页 / 流截断） */
+  /** 失败是否属于「有界修复可救」（缺摘要页 / 流截断 / 缺页头或标题摘要） */
   repairable: boolean;
 };
 
 /** 不完整性的可读描述（含应用固定的摘要页路径） */
 function describeGaps(
-  analysis: { missingSummary: boolean; truncated: string[] },
+  analysis: Pick<ProposalAnalysis, 'missingSummary' | 'truncated' | 'missingMetadata' | 'missingFrontmatter'>,
   summaryRelPath: string,
 ): string {
   const parts: string[] = [];
@@ -468,16 +472,20 @@ function describeGaps(
   if (analysis.truncated.length > 0) {
     parts.push(`提案存在未闭合块（流截断）: ${analysis.truncated.join('、')}`);
   }
+  for (const item of analysis.missingMetadata ?? []) parts.push(`${item.path}: ${item.message}`);
+  for (const path of analysis.missingFrontmatter ?? []) parts.push(`${path}: 缺少 \`---\` 围栏的 frontmatter`);
   return parts.join('；');
 }
 
 /**
  * 判定提案是否可作为完整输出接受。
  *
- * 三类失败：
+ * 失败分类：
  *  - 结构性缺口（缺固定摘要页 / 未闭合块）→ repairable=true（有界修复可救）；
  *  - 归属违规（出现非本来源的来源页）→ 拒绝，不修复（不是截断伪影）；
- *  - 证据/格式违规（frontmatter 非法、sources 不含本来源 sourceRef）
+ *  - 仅缺 title/summary 且证据合法 → 对原路径补全后重新校验；
+ *  - 缺少 frontmatter 围栏 → 请求完整页头，修复后校验来源证据；
+ *  - 其余证据/格式违规（frontmatter 非法、sources 不含本来源 sourceRef）
  *    → 拒绝，不修复（重试同一模型不会改变归属事实）。
  */
 function analyzeProposal(
@@ -521,21 +529,21 @@ function analyzeProposal(
     };
   }
 
-  if (!hasSummary || parsed.truncated.length > 0) {
-    const gaps = describeGaps({ missingSummary: !hasSummary, truncated: parsed.truncated }, summaryRelPath);
-    return {
-      ok: false,
-      files: parsed.files,
-      warnings: parsed.warnings,
-      truncated: parsed.truncated,
-      missingSummary: !hasSummary,
-      message: `${gaps} — 拒绝接受不完整输出`,
-      repairable: true,
-    };
-  }
-
+  const missingMetadata: NonNullable<ProposalAnalysis['missingMetadata']> = [];
+  const missingFrontmatter: string[] = [];
   for (const file of parsed.files) {
-    const page = parseWikiPage(file.content);
+    let page = parseWikiPage(file.content);
+    if (!page.ok && page.issues.length === 1 && page.issues[0]?.code === 'missingFrontmatter') {
+      missingFrontmatter.push(file.path);
+      continue;
+    }
+    if (!page.ok && page.issues.every((i) => i.code === 'missingField' && (i.field === 'title' || i.field === 'summary'))) {
+      missingMetadata.push({ path: file.path, message: page.issues.map((i) => i.message).join('；') });
+      // 仅为校验其余字段（尤其来源归属）填入临时值；原文件始终保留，
+      // 这些值不会进入模型提案或 staging，最终标题/摘要必须由补全返回。
+      const validationFields = page.issues.map((i) => `${i.field}: "validation-only"`).join('\n');
+      page = parseWikiPage(file.content.replace(/^(---[^\n]*\n)/, `$1${validationFields}\n`));
+    }
     if (!page.ok) {
       return {
         ok: false,
@@ -566,6 +574,15 @@ function analyzeProposal(
     }
   }
 
+  if (!hasSummary || parsed.truncated.length > 0 || missingMetadata.length > 0 || missingFrontmatter.length > 0) {
+    const gaps = { missingSummary: !hasSummary, truncated: parsed.truncated, missingMetadata, missingFrontmatter };
+    return {
+      ok: false, files: parsed.files, warnings: parsed.warnings, ...gaps,
+      message: `${describeGaps(gaps, summaryRelPath)} — 拒绝接受不完整输出`,
+      repairable: true,
+    };
+  }
+
   return {
     ok: true,
     files: parsed.files,
@@ -578,7 +595,7 @@ function analyzeProposal(
 }
 
 /**
- * 计算有界修复的目标路径：仅「缺失的固定来源摘要页」+「沙箱内的未闭合块」。
+ * 计算有界修复目标：缺失的固定来源摘要页、沙箱内未闭合块和缺页头/标题/摘要页。
  * 沙箱外的截断路径不是既定目标，不请求修复（也不扩大写入范围）。
  */
 function repairTargetsFrom(
@@ -595,10 +612,14 @@ function repairTargetsFrom(
   };
 
   if (analysis.missingSummary) push(summaryRelPath);
-  for (const raw of analysis.truncated) {
+  for (const raw of [
+    ...analysis.truncated,
+    ...(analysis.missingMetadata ?? []).map((item) => item.path),
+    ...(analysis.missingFrontmatter ?? []),
+  ]) {
     const check = checkTargetRoute(raw, typeDirs);
     if (!check.ok) {
-      warnings.push(`截断路径不在可写沙箱内，不作为修复目标: ${raw}`);
+      warnings.push(`待补全路径不在可写沙箱内，不作为修复目标: ${raw}`);
       continue;
     }
     push(check.normalized);
@@ -1240,7 +1261,7 @@ export async function compileWikiSource(
       );
     }
 
-    // ── 阶段 2.5：有界修复（至多 MAX_REPAIR_ATTEMPTS 次，仅缺失/截断的既定路径） ──
+    // ── 阶段 2.5：有界修复（至多 MAX_REPAIR_ATTEMPTS 次，仅已知缺口的既定路径） ──
     let repairAttemptsUsed = 0;
     while (!verdict.ok && verdict.repairable && repairAttemptsUsed < MAX_REPAIR_ATTEMPTS) {
       const { targets, warnings: targetWarnings } = repairTargetsFrom(verdict, summaryRelPath, typeDirs);
@@ -1252,9 +1273,12 @@ export async function compileWikiSource(
       repairAttemptsUsed += 1;
       repairAttempted = true;
 
-      const reasons = targets.map((t) => (normalizeProposalPath(t) === normalizeProposalPath(summaryRelPath)
-        ? '缺少必需的来源摘要页'
-        : '上一版在流结束前未闭合（被截断）'));
+      const reasons = targets.map((t) => verdict.missingMetadata?.find((item) => normalizeProposalPath(item.path) === normalizeProposalPath(t))?.message
+        ?? (verdict.missingSummary && normalizeProposalPath(t) === normalizeProposalPath(summaryRelPath)
+          ? '缺少必需的来源摘要页'
+          : verdict.missingFrontmatter?.some((path) => normalizeProposalPath(path) === normalizeProposalPath(t))
+            ? '页面缺少 `---` 围栏的 frontmatter，请补齐完整页头'
+            : '上一版在流结束前未闭合（被截断）'));
       const repair = await invokePhase(llm, {
         system: REPAIR_SYSTEM,
         user: buildRepairPrompt({
@@ -1268,6 +1292,8 @@ export async function compileWikiSource(
           pageTypes,
           requestedPaths: targets,
           reasons,
+          previousFiles: serializeProposalFiles(verdict.files.filter((file) =>
+            targets.some((target) => normalizeProposalPath(target) === normalizeProposalPath(file.path)))),
         }),
         maxTokens: REPAIR_MAX_TOKENS,
       }, signal, baseDelayMs);
@@ -1276,7 +1302,7 @@ export async function compileWikiSource(
         unresolvedPaths = dedupePaths([...targets, ...verdict.truncated]);
         return failWith(
           'llmFailed',
-          `有界修复后仍不完整: ${describeGaps(verdict, summaryRelPath)}；修复调用失败: ${repair.message}`,
+          `来源「${rec.sourcePath}」有界修复后仍不完整: ${describeGaps(verdict, summaryRelPath)}；修复调用失败: ${repair.message}`,
           { retryCount, repairAttempted: true, unresolvedPaths },
         );
       }
@@ -1295,7 +1321,7 @@ export async function compileWikiSource(
         unresolvedPaths = dedupePaths([...unresolvedAfterRepair, ...verdict.truncated]);
         return failWith(
           'llmFailed',
-          `有界修复后仍不完整: 未补齐 ${unresolvedAfterRepair.join('、')} — 拒绝发布不完整输出`,
+          `来源「${rec.sourcePath}」有界修复后仍不完整: 未补齐 ${unresolvedAfterRepair.join('、')} — 拒绝发布不完整输出`,
           { retryCount, repairAttempted: true, unresolvedPaths },
         );
       }
@@ -1311,11 +1337,13 @@ export async function compileWikiSource(
       unresolvedPaths = dedupePaths([
         ...(verdict.missingSummary ? [summaryRelPath] : []),
         ...verdict.truncated,
+        ...(verdict.missingMetadata ?? []).map((item) => item.path),
+        ...(verdict.missingFrontmatter ?? []),
       ]);
       const message = verdict.repairable && repairAttempted
         ? `有界修复后仍不完整: ${verdict.message}`
         : verdict.message;
-      return failWith('llmFailed', message, { retryCount, repairAttempted, unresolvedPaths });
+      return failWith('llmFailed', `来源「${rec.sourcePath}」${message}`, { retryCount, repairAttempted, unresolvedPaths });
     }
     extraWarnings.push(...verdict.warnings);
 

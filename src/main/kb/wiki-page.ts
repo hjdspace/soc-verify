@@ -75,7 +75,7 @@ export function parseWikiPage(content: string): WikiPageParseResult {
 
   for (const field of REQUIRED_FIELDS) {
     if (fm[field] === undefined) {
-      issues.push({ code: 'missingField', message: `缺少必填字段「${field}」` });
+      issues.push({ code: 'missingField', message: `缺少必填字段「${field}」`, field });
     }
   }
 

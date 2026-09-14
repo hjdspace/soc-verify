@@ -140,6 +140,102 @@ const stagingFiles = (): string[] =>
 // ── 有界修复：触发条件 ──────────────────────────────────────────
 
 describe('compileWikiSource — 有界修复（issue 09）', () => {
+  it.each([
+    ['只有正文', '# AXI 来源\n\n概述。'],
+    ['页头前有空行', `\n${summaryPage()}`],
+    ['页头被代码围栏包裹', `\`\`\`markdown\n${summaryPage()}\n\`\`\``],
+    ['缺少页头结束围栏', summaryPage().replace(/\n---\n/, '\n')],
+  ])('%s → 将原页和诊断送入一次修复，完整校验后才暂存', async (_label, incomplete) => {
+    const llm = fakeLlm([ANALYSIS_OK, fileBlock(SUMMARY_PATH, incomplete), fileBlock(SUMMARY_PATH, summaryPage())]);
+    const res = await compile(llm);
+    expect(res.ok).toBe(true);
+    expect(llm.requests).toHaveLength(3);
+    expect(llm.requests[2]!.user).toContain(incomplete);
+    expect(llm.requests[2]!.user).toContain('缺少 `---` 围栏的 frontmatter');
+    expect(stagingFiles()).toHaveLength(1);
+    expect(readdirSync(join(kbPath, 'wiki', 'sources'))).toHaveLength(0);
+  });
+
+  it('修复后仍无页头 → 只尝试一次，保留来源名和未修复路径', async () => {
+    const incomplete = fileBlock(SUMMARY_PATH, '# AXI 来源');
+    const llm = fakeLlm([ANALYSIS_OK, incomplete, incomplete]);
+    const res = await compile(llm);
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(llm.requests).toHaveLength(3);
+    expect(res.diagnostics.repairAttempted).toBe(true);
+    expect(res.diagnostics.unresolvedPaths).toContain(SUMMARY_PATH);
+    expect(res.message).toContain(SOURCE_PATH);
+    expect(res.message).toContain('缺少 `---` 围栏的 frontmatter');
+    expect(stagingFiles()).toHaveLength(0);
+  });
+
+  it('缺围栏、缺标题和截断同时出现 → 同一次修复补齐全部已知缺口', async () => {
+    const conceptPath = 'wiki/concepts/axi.md';
+    const truncatedPath = 'wiki/concepts/handshake.md';
+    const llm = fakeLlm([
+      ANALYSIS_OK,
+      [
+        fileBlock(SUMMARY_PATH, '# AXI 来源'),
+        fileBlock(conceptPath, conceptPage().replace(/^title:.*\n/m, '')),
+        `---FILE: ${truncatedPath}---\n${conceptPage()}`,
+      ].join('\n\n'),
+      [fileBlock(SUMMARY_PATH, summaryPage()), fileBlock(conceptPath, conceptPage()), fileBlock(truncatedPath, conceptPage())].join('\n\n'),
+    ]);
+    const res = await compile(llm);
+    expect(res.ok).toBe(true);
+    expect(llm.requests).toHaveLength(3);
+    if (!res.ok || 'cached' in res) return;
+    expect(res.changeSet.pages).toHaveLength(3);
+  });
+
+  it('补齐围栏后来源证据不符 → 拒绝进入暂存，不再次修复', async () => {
+    const llm = fakeLlm([
+      ANALYSIS_OK, fileBlock(SUMMARY_PATH, '# AXI 来源'),
+      fileBlock(SUMMARY_PATH, summaryPage().replace(SRC_REF.sourceId, 'c'.repeat(64))),
+    ]);
+    const res = await compile(llm);
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.message).toContain('证据与来源不符');
+    expect(llm.requests).toHaveLength(3);
+    expect(stagingFiles()).toHaveLength(0);
+  });
+
+  it('缺少 title/summary → 一次限定路径补全，成功后仅进入审阅暂存区', async () => {
+    const incomplete = summaryPage().replace(/^title:.*\n/m, '').replace(/^summary:.*\n/m, '');
+    const llm = fakeLlm([ANALYSIS_OK, fileBlock(SUMMARY_PATH, incomplete), fileBlock(SUMMARY_PATH, summaryPage())]);
+    const res = await compile(llm);
+    expect(res.ok).toBe(true);
+    expect(llm.requests).toHaveLength(3);
+    expect(llm.requests[2]!.user).toContain('title');
+    expect(llm.requests[2]!.user).toContain('summary');
+    expect(llm.requests[2]!.user).toContain(incomplete);
+    expect(stagingFiles()).toHaveLength(1);
+    expect(readdirSync(join(kbPath, 'wiki', 'sources'))).toHaveLength(0);
+  });
+
+  it('补全后仍缺少标题 → 停止重试并保留未补齐路径', async () => {
+    const incomplete = summaryPage().replace(/^title:.*\n/m, '');
+    const llm = fakeLlm([ANALYSIS_OK, fileBlock(SUMMARY_PATH, incomplete), fileBlock(SUMMARY_PATH, incomplete)]);
+    const res = await compile(llm);
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(llm.requests).toHaveLength(3);
+    expect(res.diagnostics.unresolvedPaths).toContain(SUMMARY_PATH);
+    expect(res.message).toContain(SOURCE_PATH);
+    expect(stagingFiles()).toHaveLength(0);
+  });
+
+  it('缺少标题同时证据不符 → 不允许以补全为由修复来源归属', async () => {
+    const incomplete = summaryPage().replace(/^title:.*\n/m, '').replace(SRC_REF.sourceId, 'c'.repeat(64));
+    const llm = fakeLlm([ANALYSIS_OK, fileBlock(SUMMARY_PATH, incomplete)]);
+    const res = await compile(llm);
+    expect(res.ok).toBe(false);
+    expect(llm.requests).toHaveLength(2);
+    expect(stagingFiles()).toHaveLength(0);
+  });
+
   it('finishReason=length + 截断的来源摘要块 → 恰一次修复调用补齐后成功', async () => {
     const llm = fakeLlm([
       ANALYSIS_OK,

@@ -98,6 +98,7 @@ vi.mock('@renderer/stores/toast', () => ({
 
 import { KbWikiTab } from '@renderer/components/kb/KbWikiTab';
 import { useKbWikiStore } from '@renderer/stores/kb-wiki';
+import { useKbStore } from '@renderer/stores/kb';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -124,6 +125,31 @@ beforeEach(() => {
 });
 
 describe('KbWikiTab 页面分组（分隔符与大小写归一化）', () => {
+  it('目录可折叠并保留嵌套子目录与页面选择', async () => {
+    const nested = { ...mockCatalog.catalog.pages[0], pageId: 'concepts/axi/channels', relPath: 'wiki/concepts/axi/channels.md' };
+    wikiCatalogQueryMock.mockResolvedValue({ ok: true, catalog: { ...mockCatalog.catalog, pages: [nested] } });
+    render(<KbWikiTab />);
+    const folder = await screen.findByRole('button', { name: 'Concepts' });
+    expect(folder).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: 'axi' })).toBeInTheDocument();
+    fireEvent.click(folder);
+    expect(screen.queryByTestId('wiki-page-concepts/axi/channels')).not.toBeInTheDocument();
+    fireEvent.click(folder);
+    fireEvent.click(screen.getByTestId('wiki-page-concepts/axi/channels'));
+    expect(wikiPageQueryMock).toHaveBeenCalledWith({ pageId: nested.pageId });
+  });
+
+  it('空库说明发布流程并提供导入任务与知识审阅入口', async () => {
+    wikiCatalogQueryMock.mockResolvedValue({ ok: true, catalog: { ...mockCatalog.catalog, pages: [] } });
+    render(<KbWikiTab />);
+    expect(await screen.findByText('尚无已发布知识页')).toBeInTheDocument();
+    expect(screen.queryByText('（空）')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '查看导入任务' }));
+    expect(useKbStore.getState().activeTab).toBe('tasks');
+    fireEvent.click(screen.getByRole('button', { name: '前往知识审阅' }));
+    expect(useKbStore.getState().activeTab).toBe('review');
+  });
+
   it('schema 目录大小写与 relPath 目录不一致时页面仍归入对应分组', async () => {
     render(<KbWikiTab />);
     const group = await screen.findByTestId('wiki-group-Concepts');

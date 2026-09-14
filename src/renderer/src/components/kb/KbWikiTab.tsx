@@ -11,25 +11,29 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { BookOpen, FileWarning, Network, ScrollText, Search, ShieldAlert, X } from 'lucide-react';
+import { BookOpen, FileText, FileWarning, Network, ScrollText, Search, ShieldAlert, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { cn } from '@renderer/lib/utils';
 import { trpc } from '@renderer/lib/trpc';
 import { useKbWikiStore } from '@renderer/stores/kb-wiki';
 import { wikiLinksToDisplayMarkdown, parseWikilinkHref } from '@renderer/lib/wiki-links';
 import { KbWikiGraph } from './KbWikiGraph';
-import type { WikiPageType, WikiSearchHit } from '@shared/kb-types';
+import { useKbStore } from '@renderer/stores/kb';
+import { KbPageTree } from './KbPageTree';
+import type { WikiPageType, WikiSearchHit, WikiSourceSummary } from '@shared/kb-types';
 
 export function KbWikiTab() {
-  const [section, setSection] = useState<'pages' | 'graph' | 'rules' | 'search'>('pages');
+  const [section, setSection] = useState<'pages' | 'raw' | 'graph' | 'rules' | 'search'>('pages');
   const loadCatalog = useKbWikiStore((s) => s.loadCatalog);
   const reset = useKbWikiStore((s) => s.reset);
   const openPage = useKbWikiStore((s) => s.openPage);
+  const loadDocuments = useKbStore((s) => s.loadDocuments);
 
   useEffect(() => {
     void loadCatalog();
+    void loadDocuments();
     return () => reset();
-  }, [loadCatalog, reset]);
+  }, [loadCatalog, loadDocuments, reset]);
 
   /** 检索结果中的 wiki 命中 → 切到知识页区并打开该页 */
   const openWikiHit = (pageId: string): void => {
@@ -58,6 +62,19 @@ export function KbWikiTab() {
         >
           <BookOpen className="h-3.5 w-3.5" />
           知识页
+        </button>
+        <button
+          onClick={() => setSection('raw')}
+          className={cn(
+            'flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors',
+            section === 'raw'
+              ? 'bg-primary/10 text-primary'
+              : 'text-muted-foreground hover:text-foreground',
+          )}
+          data-testid="kb-wiki-raw-tab"
+        >
+          <FileText className="h-3.5 w-3.5" />
+          原始全文
         </button>
         <button
           onClick={() => setSection('search')}
@@ -106,6 +123,8 @@ export function KbWikiTab() {
 
       {section === 'pages' ? (
         <PageBrowser />
+      ) : section === 'raw' ? (
+        <RawBrowser />
       ) : section === 'graph' ? (
         <KbWikiGraph onOpenPage={openGraphPage} />
       ) : section === 'search' ? (
@@ -117,6 +136,71 @@ export function KbWikiTab() {
   );
 }
 
+function RawBrowser() {
+  const sources = useKbStore((s) => s.wikiSources);
+  const [activeSourceId, setActiveSourceId] = useState<string | null>(null);
+  const [content, setContent] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const openSource = async (source: WikiSourceSummary): Promise<void> => {
+    setActiveSourceId(source.sourceId);
+    setContent(null);
+    setError(null);
+    setLoading(true);
+    try {
+      const result = await trpc.kb.sourceParsed.query({ sourceId: source.sourceId });
+      setContent(result.content);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const activeSource = sources.find((source) => source.sourceId === activeSourceId) ?? null;
+  return (
+    <div className="flex flex-1 overflow-hidden" data-testid="kb-wiki-raw-browser">
+      <div className="w-60 shrink-0 overflow-y-auto border-r border-border py-2">
+        <div className="px-3 pb-2 text-[11px] font-medium text-muted-foreground">raw / parsed</div>
+        {sources.length === 0 ? (
+          <div className="px-3 py-4 text-xs text-muted-foreground">暂无已转换来源全文</div>
+        ) : sources.map((source) => (
+          <button
+            key={source.sourceId}
+            onClick={() => void openSource(source)}
+            data-testid={`kb-wiki-raw-${source.sourceId}`}
+            className={cn(
+              'flex w-full items-center gap-1.5 px-3 py-1.5 text-left text-xs hover:bg-secondary',
+              activeSourceId === source.sourceId && 'bg-secondary font-medium',
+            )}
+            title={source.sourcePath}
+          >
+            <FileText className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">{source.sourcePath}</span>
+          </button>
+        ))}
+      </div>
+      <div className="flex-1 overflow-y-auto px-6 py-4">
+        {!activeSource ? (
+          <div className="flex h-full items-center justify-center text-xs text-muted-foreground">从左侧选择来源全文</div>
+        ) : (
+          <>
+            <div className="mb-3 flex items-center gap-2 border-b border-border pb-2">
+              <span className="font-mono text-xs">{activeSource.sourcePath}</span>
+              <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground">raw</span>
+              {activeSource.parsedStale && <span className="text-[10px] text-amber-600">当前原件尚未转换</span>}
+            </div>
+            <div className="whitespace-pre-wrap text-[11px] leading-relaxed" data-testid="kb-wiki-raw-content">
+              {loading ? '正在读取全文…' : error ?? content}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── 页面浏览 ────────────────────────────────────────────────────
 
 function PageBrowser() {
@@ -124,20 +208,6 @@ function PageBrowser() {
   const catalogLoading = useKbWikiStore((s) => s.catalogLoading);
   const catalogError = useKbWikiStore((s) => s.catalogError);
   const activePageId = useKbWikiStore((s) => s.activePageId);
-  const openPage = useKbWikiStore((s) => s.openPage);
-
-  // 按类型目录分组（保持 schema 路由顺序）
-  const groups = useMemo(() => {
-    if (!catalog) return [];
-    return Object.entries(catalog.typeDirs).map(([type, dir]) => ({
-      type: type as WikiPageType,
-      dir,
-      // schema 的 dir 与磁盘目录名大小写可能不一致（Windows 不敏感文件系统），
-      // 归一化分隔符与大小写后再过滤，避免页面从分组中丢失
-      pages: catalog.pages.filter((p) => p.relPath.replace(/\\/g, '/').toLowerCase().startsWith(`wiki/${dir.toLowerCase()}/`)),
-    }));
-  }, [catalog]);
-
   if (catalogLoading) {
     return <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">正在编目页面…</div>;
   }
@@ -156,71 +226,25 @@ function PageBrowser() {
 
   return (
     <div className="flex flex-1 overflow-hidden">
-      {/* 页面目录 */}
-      <div className="w-60 shrink-0 overflow-y-auto border-r border-border py-2">
-        {groups.map((g) => (
-          <div key={g.dir} className="mb-2" data-testid={`wiki-group-${g.dir}`}>
-            <div className="px-3 py-1 text-[11px] font-medium text-muted-foreground">
-              {g.dir} <span className="font-normal">({g.type})</span>
-            </div>
-            {g.pages.length === 0 ? (
-              <div className="px-3 py-0.5 text-[11px] text-muted-foreground/60">（空）</div>
-            ) : (
-              g.pages.map((p) => (
-                <button
-                  key={p.pageId}
-                  onClick={() => void openPage(p.pageId)}
-                  data-testid={`wiki-page-${p.pageId}`}
-                  className={cn(
-                    'block w-full truncate px-3 py-1 text-left text-xs transition-colors',
-                    p.parse.ok ? 'text-foreground hover:bg-secondary' : 'text-destructive',
-                    activePageId === p.pageId ? 'bg-secondary font-medium' : '',
-                  )}
-                  title={p.parse.ok ? p.pageId : p.parse.issues.map((i) => i.message).join('\n')}
-                >
-                  {p.pageId}
-                  {p.routeMismatch ? ' ⚠' : ''}
-                </button>
-              ))
-            )}
-          </div>
-        ))}
-
-        {catalog.aggregates.length > 0 && (
-          <div className="mb-2">
-            <div className="px-3 py-1 text-[11px] font-medium text-muted-foreground">聚合页</div>
-            {catalog.aggregates.map((a) => (
-              <button
-                key={a.pageId}
-                onClick={() => void openPage(a.pageId)}
-                className={cn(
-                  'block w-full truncate px-3 py-1 text-left text-xs transition-colors hover:bg-secondary',
-                  activePageId === a.pageId ? 'bg-secondary font-medium' : '',
-                )}
-              >
-                {a.pageId}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {catalog.orphans.length > 0 && (
-          <div className="mb-2">
-            <div className="px-3 py-1 text-[11px] font-medium text-muted-foreground">
-              路由外（{catalog.orphans.length}）
-            </div>
-            {catalog.orphans.map((o) => (
-              <div key={o.relPath} className="truncate px-3 py-0.5 text-[11px] text-muted-foreground/70" title={o.relPath}>
-                {o.relPath}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      <KbPageTree catalog={catalog} />
 
       {/* 页面正文 */}
       <div className="flex-1 overflow-hidden">
-        <WikiPageView />
+        {catalog.pages.length === 0 && !activePageId ? (
+          <div className="flex h-full items-center justify-center px-8 text-center">
+            <div className="max-w-md">
+              <BookOpen className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
+              <p className="text-sm font-medium">尚无已发布知识页</p>
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                文档上传后需完成编译，再到知识审阅接受并发布提案。若编译失败或等待模型配置，请先查看导入任务。
+              </p>
+              <div className="mt-4 flex justify-center gap-2">
+                <button onClick={() => useKbStore.getState().setActiveTab('tasks')} className="rounded bg-primary px-3 py-1.5 text-xs text-primary-foreground hover:bg-primary/90">查看导入任务</button>
+                <button onClick={() => useKbStore.getState().setActiveTab('review')} className="rounded border border-border px-3 py-1.5 text-xs hover:bg-secondary">前往知识审阅</button>
+              </div>
+            </div>
+          </div>
+        ) : <WikiPageView />}
       </div>
     </div>
   );

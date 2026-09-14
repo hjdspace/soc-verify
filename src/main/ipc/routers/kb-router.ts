@@ -51,7 +51,7 @@ import {
   writeIndexMd,
   readMarkdownDoc,
 } from '../../kb/pipeline';
-import { resolveKbLlmConfig } from '../../kb/llm-config';
+import { resolveKbLlmConfig, resolveKbVisionLlmConfig } from '../../kb/llm-config';
 import { kbSettingsManager, ENGINE_IDS, type KbSettings } from '../../kb/kb-settings';
 import { listConvertEngines, type ConvertEngineInfo } from '../../kb/engines';
 import {
@@ -107,6 +107,12 @@ import { saveQueryMessages } from '../../kb/save-query';
 import type { SaveQueryOutcome } from '../../kb/save-query';
 import { readPageHistory, createRollbackProposal } from '../../kb/page-rollback';
 import type { RollbackOutcome, ReadHistoryOutcome } from '../../kb/page-rollback';
+import {
+  verifyVisionModel,
+  readVisionInterpretations,
+  retryVisionAsset,
+  createDefaultVisionLlmFactory,
+} from '../../kb/vision';
 import {
   withdrawSource,
   previewDeleteKb,
@@ -339,7 +345,7 @@ function parsePdfAssetInput(raw: unknown): {
 }
 
 /**
- * 获取当前挂载的 wiki 布局知识库（路径 + kbId，队列 procedures 共用）。
+ * 获取当前挂载的 wiki 布局知识库（路径 + kbId）。
  */
 async function getWikiMountedKb(): Promise<{ path: string; kbId: string }> {
   const rootPath = activeProject().rootPath;
@@ -352,6 +358,13 @@ async function getWikiMountedKb(): Promise<{ path: string; kbId: string }> {
   }
   await assertWikiReadable(status.mounted.path);
   return { path: status.mounted.path, kbId: status.mounted.kbId };
+}
+
+/** 重启后挂载记录仍在磁盘，但进程内队列尚未附着；所有队列入口先恢复绑定。 */
+async function getWikiQueueKb(): Promise<{ path: string; kbId: string }> {
+  const kb = await getWikiMountedKb();
+  await wikiIngestQueue.attach(kb.path, kb.kbId);
+  return kb;
 }
 
 /** WikiQueueError → 结构化 Result（不抛错；渲染端按 code 分支处理） */
@@ -794,8 +807,6 @@ export const kbRouter = t.router({
       return {};
     })
     .mutation(async () => {
-      const { resolveKbVisionLlmConfig } = await import('../../kb/llm-config');
-      const { verifyVisionModel } = await import('../../kb/vision');
       const config = await resolveKbVisionLlmConfig();
       if (!config) {
         return {
@@ -980,7 +991,6 @@ export const kbRouter = t.router({
     })
     .query(async ({ input }): Promise<{ interpretations: WikiVisionInterpretation[] | null }> => {
       const kbPath = await getWikiMountedKbPath();
-      const { readVisionInterpretations } = await import('../../kb/vision');
       return {
         interpretations: await readVisionInterpretations(kbPath, input.sourceId, input.revision),
       };
@@ -1013,7 +1023,6 @@ export const kbRouter = t.router({
     })
     .mutation(async ({ input }): Promise<RetryVisionAssetResult> => {
       const kb = await getWikiMountedKb();
-      const { retryVisionAsset, createDefaultVisionLlmFactory } = await import('../../kb/vision');
       const llm = await createDefaultVisionLlmFactory()(new AbortController().signal);
       if (!llm) {
         return {
@@ -1070,7 +1079,7 @@ export const kbRouter = t.router({
       return {};
     })
     .query(async (): Promise<QueueSnapshotResult> => {
-      const kb = await getWikiMountedKb();
+      const kb = await getWikiQueueKb();
       const snapshot = wikiIngestQueue.snapshot(kb.kbId);
       if (!snapshot) return { ok: false, reason: 'notAttached' };
       return { ok: true, snapshot };
@@ -1095,7 +1104,7 @@ export const kbRouter = t.router({
       return { sourceIds: r.sourceIds as string[] };
     })
     .mutation(async ({ input }): Promise<QueueEnqueueResult> => {
-      const kb = await getWikiMountedKb();
+      const kb = await getWikiQueueKb();
       const results: QueueEnqueueResult['results'] = [];
       for (const sourceId of input.sourceIds) {
         try {
@@ -1123,7 +1132,7 @@ export const kbRouter = t.router({
       return { sourceId: r.sourceId.trim() };
     })
     .mutation(async ({ input }): Promise<QueueEnqueueResult> => {
-      const kb = await getWikiMountedKb();
+      const kb = await getWikiQueueKb();
       try {
         const task = await wikiIngestQueue.enqueueCompile(kb.kbId, input.sourceId);
         return { results: [{ ok: true, task }] };
@@ -1142,7 +1151,7 @@ export const kbRouter = t.router({
       return {};
     })
     .mutation(async (): Promise<QueueOpResult> => {
-      const kb = await getWikiMountedKb();
+      const kb = await getWikiQueueKb();
       try {
         await wikiIngestQueue.pause(kb.kbId);
         return { ok: true };
@@ -1156,7 +1165,7 @@ export const kbRouter = t.router({
       return {};
     })
     .mutation(async (): Promise<QueueOpResult> => {
-      const kb = await getWikiMountedKb();
+      const kb = await getWikiQueueKb();
       try {
         await wikiIngestQueue.resume(kb.kbId);
         return { ok: true };
@@ -1179,7 +1188,7 @@ export const kbRouter = t.router({
       return { taskId: r.taskId.trim() };
     })
     .mutation(async ({ input }): Promise<QueueOpResult> => {
-      const kb = await getWikiMountedKb();
+      const kb = await getWikiQueueKb();
       try {
         await wikiIngestQueue.cancelTask(kb.kbId, input.taskId);
         return { ok: true };
@@ -1197,7 +1206,7 @@ export const kbRouter = t.router({
       return { taskId: r.taskId.trim() };
     })
     .mutation(async ({ input }): Promise<QueueOpResult> => {
-      const kb = await getWikiMountedKb();
+      const kb = await getWikiQueueKb();
       try {
         await wikiIngestQueue.retryTask(kb.kbId, input.taskId);
         return { ok: true };
@@ -1222,7 +1231,7 @@ export const kbRouter = t.router({
       return { taskId: r.taskId.trim() };
     })
     .mutation(async ({ input }): Promise<QueueOpResult> => {
-      const kb = await getWikiMountedKb();
+      const kb = await getWikiQueueKb();
       try {
         await wikiIngestQueue.continueTextOnly(kb.kbId, input.taskId);
         return { ok: true };
@@ -1248,7 +1257,7 @@ export const kbRouter = t.router({
       return { taskId: r.taskId.trim(), direction: r.direction };
     })
     .mutation(async ({ input }): Promise<{ moved: boolean }> => {
-      const kb = await getWikiMountedKb();
+      const kb = await getWikiQueueKb();
       return { moved: await wikiIngestQueue.moveTask(kb.kbId, input.taskId, input.direction) };
     }),
 
@@ -1257,7 +1266,7 @@ export const kbRouter = t.router({
       return {};
     })
     .mutation(async (): Promise<{ removed: number }> => {
-      const kb = await getWikiMountedKb();
+      const kb = await getWikiQueueKb();
       return { removed: await wikiIngestQueue.clearFinished(kb.kbId) };
     }),
 

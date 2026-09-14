@@ -3,7 +3,7 @@
  *
  * KB Registration（应用全局配置）：
  *   - 存储位置：`<userData>/socverify-data/kb-registry.json`
- *   - 空目录 → 初始化 wiki 布局（schema/purpose/raw/wiki/.kb + manifest）并登记
+ *   - 空目录或含文件的非结构目录 → 初始化 wiki 布局（schema/purpose/raw/wiki/.kb + manifest）并登记（不覆盖已有文件）
  *   - 已有 wiki 目录（.kb/manifest.json）→ 读取库内持久 kbId 登记登记；
  *     同 kbId 已登记在别的路径 = 复制库冲突，可 asCopy 赋新 kbId 注册为副本
  *   - 同一路径不能重复登记
@@ -35,6 +35,7 @@ import {
   checkWikiHealth,
 } from './wiki-layout';
 import { recoverTransactions, type RecoveryReport } from './atomic-commit';
+import { previewDeleteKb } from './source-disposal';
 import type {
   KbRegistration,
   KbDisposal,
@@ -250,7 +251,7 @@ type RegisterSuccessData = KbRegistration & { disposedLegacy?: boolean };
 /**
  * 注册知识库。
  *
- * - 空目录：初始化 wiki 布局并登记（kbId 持久于库内 manifest）
+ * - 空目录或含文件的非结构目录：初始化 wiki 布局并登记（kbId 持久于库内 manifest，不覆盖已有文件）
  * - wiki 目录：读取 manifest kbId；同路径拒绝重复登记；
  *   kbId 与已有登记冲突 = 复制库 → 拒绝或 asCopy 赋新 ID
  * - 旧格式目录：不登记，写处置记录并返回 legacyFormat 错误（不删文件）
@@ -328,15 +329,9 @@ async function register(
     };
   }
 
-  if (detected.kind === 'foreign') {
-    return {
-      ok: false,
-      error: makeError('structureIncompatible', '目录不是可识别的知识库（含未知文件且没有库结构标记）'),
-    };
-  }
-
-  if (detected.kind === 'empty') {
-    // 空目录 → 初始化 wiki 布局
+  if (detected.kind === 'foreign' || detected.kind === 'empty') {
+    // 非空目录（无库结构标记）或空目录 → 初始化 wiki 布局
+    // initWikiLayout 使用 mkdir recursive + writeIfMissing，不会覆盖已有文件
     const kbId = generateUniqueKbId(name, existing);
     const manifest = await initWikiLayout(realPath, { kbId, name });
     const entry: KbRegistration = {
@@ -438,7 +433,6 @@ async function deleteKb(kbId: string, projectRoot: string): Promise<KbResult<voi
   }
 
   // 范围预览：检测未知文件
-  const { previewDeleteKb } = await import('./source-disposal');
   const preview = await previewDeleteKb(entry.path);
   if (!preview.canDelete) {
     return {

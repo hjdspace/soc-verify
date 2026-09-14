@@ -302,6 +302,8 @@ export class WikiIngestQueueManager {
   private pendingEvents: WikiTaskEvent[] = [];
   /** 磁盘写串行化：并发 flush 的写入乱序会让旧快照覆盖新快照 */
   private persistChain: Promise<unknown> = Promise.resolve();
+  /** 快照与入队可能同时触发重启恢复，附着必须串行，避免覆盖已恢复的状态。 */
+  private attachChain: Promise<unknown> = Promise.resolve();
 
   constructor(options: WikiIngestQueueOptions = {}) {
     this.notify = options.notify;
@@ -316,6 +318,12 @@ export class WikiIngestQueueManager {
    * 提交、落安全状态）。坏队列文件/身份不符拒绝且不改写文件。
    */
   async attach(kbPath: string, kbId: string): Promise<WikiQueueAttachResult> {
+    const result = this.attachChain.then(() => this.attachInternal(kbPath, kbId));
+    this.attachChain = result.catch(() => undefined);
+    return result;
+  }
+
+  private async attachInternal(kbPath: string, kbId: string): Promise<WikiQueueAttachResult> {
     const current = this.state;
     if (current && current.kbId === kbId && current.kbPath === kbPath) {
       const snap = this.snapshot(kbId);
@@ -466,7 +474,7 @@ export class WikiIngestQueueManager {
       throw new WikiQueueError('sourceNotFound', `来源不存在: ${sourceId}`);
     }
     const existing = st.tasks.find(
-      (t) => t.kind === 'convertSource' && t.sourceId === sourceId && !STOPPED_PHASES.has(t.phase),
+      (t) => t.sourceId === sourceId && t.phase !== 'done' && t.phase !== 'blocked',
     );
     if (existing) return cloneTask(existing);
 
@@ -501,8 +509,8 @@ export class WikiIngestQueueManager {
   }
 
   /**
-   * 来源编译任务入队（issue 08）。同来源活动编译任务去重；
-   * 转换任务与编译任务互不冲突（编译运行内部会保障来源就绪）。
+   * 来源编译任务入队（issue 08）。同来源未完成任务统一去重；
+   * 编译运行内部会保障来源就绪。
    * 持久化成功才算入队成功。
    */
   async enqueueCompile(kbId: string, sourceId: string): Promise<WikiIngestTask> {
@@ -516,7 +524,7 @@ export class WikiIngestQueueManager {
       throw new WikiQueueError('sourceNotFound', `来源不存在: ${sourceId}`);
     }
     const existing = st.tasks.find(
-      (t) => t.kind === 'compileSource' && t.sourceId === sourceId && !STOPPED_PHASES.has(t.phase),
+      (t) => t.sourceId === sourceId && t.phase !== 'done' && t.phase !== 'blocked',
     );
     if (existing) return cloneTask(existing);
 
@@ -642,7 +650,7 @@ export class WikiIngestQueueManager {
     }
   }
 
-  /** 重试 failed/cancelled 任务：新 attempt，lastError 保留到新结果产生。 */
+  /** 重试 failed/cancelled 任务：新 attempt；错误诊断保留到新结果产生。 */
   async retryTask(kbId: string, taskId: string): Promise<void> {
     const st = this.requireAttached(kbId);
     const task = st.tasks.find((t) => t.taskId === taskId);

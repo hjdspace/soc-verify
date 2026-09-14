@@ -233,7 +233,7 @@ export function KbModal() {
         {/* 注册新库 */}
         <div className="mb-3">
           <label className="mb-1.5 block text-[11px] text-muted-foreground">
-            注册新库（选择或输入目录，空目录将初始化新布局）
+            注册新库（选择或输入目录，将自动初始化知识库结构）
           </label>
           <div className="flex gap-1.5">
             <input

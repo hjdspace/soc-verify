@@ -333,12 +333,21 @@ describe('kb-router', () => {
       expect(disposals).toHaveLength(1);
     });
 
-    it('foreign 目录（未知文件且无库结构标记）被拒绝', async () => {
+    it('含文件的目录（无库结构标记）被初始化为 wiki 布局，原有文件保留', async () => {
       const kbDir = makeEmptyDir('foreign-kb');
       writeFileSync(join(kbDir, 'random.txt'), 'not a kb', 'utf-8');
 
       const result = await caller.register({ name: '外来库', path: kbDir });
-      expect(errOf(result).code).toBe('structureIncompatible');
+      expect(result.ok).toBe(true);
+      const data = regData(result);
+      expect(data.format).toBe('wiki');
+
+      // wiki 布局结构已创建
+      expect(existsSync(join(kbDir, 'schema.md'))).toBe(true);
+      expect(existsSync(join(kbDir, '.kb', 'manifest.json'))).toBe(true);
+
+      // 原有文件保留
+      expect(existsSync(join(kbDir, 'random.txt'))).toBe(true);
     });
 
     it('manifest 损坏的 wiki 目录被拒绝（manifestCorrupted）', async () => {

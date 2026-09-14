@@ -215,6 +215,28 @@ async function attachFresh(notify?: Notify): Promise<WikiIngestQueueManager> {
 // ─── 持久化与入队 ───────────────────────────────────────────
 
 describe('持久化与入队', () => {
+  it('并发附着等待恢复落盘；首次落盘失败后下一次附着可恢复有效队列', async () => {
+    const mgr = await attachFresh();
+    await mgr.pause('kb-test');
+    await mgr.detach('kb-test');
+    const writing = deferred<void>();
+    const release = deferred<void>();
+    mockWriteFileAtomic.mockImplementationOnce(async () => {
+      writing.resolve();
+      await release.promise;
+      throw new Error('disk unavailable');
+    });
+
+    const first = mgr.attach(kbPath, 'kb-test');
+    await writing.promise;
+    const second = mgr.attach(kbPath, 'kb-test');
+    release.resolve();
+    expect(await first).toEqual({ ok: false, reason: 'queueIoError' });
+    expect((await second).ok).toBe(true);
+    expect(mgr.snapshot('kb-test')).toMatchObject({ kbId: 'kb-test', paused: true });
+    await mgr.detach('kb-test');
+  });
+
   it('入队创建持久任务（taskId/attemptId/kbId/phase/attempt）并落盘，事件带单调 seq', async () => {
     const sid = await importReadyText('a.md', '# A');
     const events: WikiTaskEvent[] = [];
@@ -882,18 +904,20 @@ describe('转换中止契约', () => {
   it('convertWikiSource 在 signal 中止后不落任何转换产物', async () => {
     const sid = await importFailedDocx('abort-direct.docx');
     const gate = deferred<string>();
-    mockToMarkdownBytes.mockImplementation(() => gate.promise);
+    const started = deferred<void>();
+    mockToMarkdownBytes.mockImplementation(() => {
+      started.resolve();
+      return gate.promise;
+    });
     const controller = new AbortController();
 
     // 直接验证契约：convertWikiSource(signal) 在 engine.convert 返回后发现中止
     const { convertWikiSource } = await import('../src/main/kb/source-import');
     const runPromise = convertWikiSource(kbPath, sid, { signal: controller.signal });
-    // 等到 manifest 标记 converting 后触发中止，再放行引擎结果
-    // （并行跑多个测试文件时磁盘负载高，放宽轮询超时避免抖动）
-    await waitFor(async () => {
-      const m = await readWikiManifest(kbPath);
-      return m.ok && m.manifest.sources?.[sid]?.status === 'converting';
-    }, 10000);
+    // 引擎开始时 converting 已落盘；避免轮询读文件与 Windows rename 争用。
+    await started.promise;
+    const converting = await readWikiManifest(kbPath);
+    expect(converting.ok && converting.manifest.sources?.[sid]?.status).toBe('converting');
     controller.abort();
     gate.resolve('# too late');
 

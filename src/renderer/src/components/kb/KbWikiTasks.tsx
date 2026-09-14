@@ -76,9 +76,9 @@ const CANCELLABLE: ReadonlySet<WikiIngestPhase> = new Set([
   'awaiting_review',
 ]);
 
-type WikiSourceSummaryLite = Pick<WikiSourceSummary, 'sourceId' | 'sourcePath' | 'ext'>;
+type WikiSourceSummaryLite = Pick<WikiSourceSummary, 'sourceId' | 'sourcePath' | 'ext' | 'status' | 'errorMessage'>;
 
-function PhaseChip({ phase }: { phase: WikiIngestPhase }) {
+function PhaseChip({ phase, retrying = false }: { phase: WikiIngestPhase; retrying?: boolean }) {
   return (
     <span
       className={cn(
@@ -86,7 +86,7 @@ function PhaseChip({ phase }: { phase: WikiIngestPhase }) {
         PHASE_STYLES[phase] ?? 'bg-secondary text-secondary-foreground',
       )}
     >
-      {PHASE_LABELS[phase]}
+      {retrying && phase === 'queued' ? '重试中' : PHASE_LABELS[phase]}
     </span>
   );
 }
@@ -109,8 +109,10 @@ function TaskRow({ task, index, total }: { task: WikiIngestTask; index: number; 
   const retry = useKbQueueStore((s) => s.retry);
   const continueTextOnly = useKbQueueStore((s) => s.continueTextOnly);
   const move = useKbQueueStore((s) => s.move);
+  const [retrying, setRetrying] = useState(false);
 
-  const active = task.phase === 'queued' || task.phase === 'converting' || task.phase === 'committing';
+  const active = isActivePhase(task.phase);
+  const retryingDisplay = retrying || (task.phase === 'queued' && task.attempt > 1);
   const usage = usageText(task.usage);
   const retryCount = task.retryCount ?? 0;
   // 视觉受阻（issue 12/13）：未配置/解读失败/单批上限 → 提供「仅按文字继续」
@@ -134,7 +136,7 @@ function TaskRow({ task, index, total }: { task: WikiIngestTask; index: number; 
           <span className="truncate text-foreground" title={task.sourcePath}>
             {task.sourcePath || task.sourceId}
           </span>
-          <PhaseChip phase={task.phase} />
+          <PhaseChip phase={task.phase} retrying={retryingDisplay} />
           <span className="shrink-0 text-[10px] text-muted-foreground">第 {task.attempt} 次尝试</span>
         </div>
         {(retryCount > 0 || usage || task.progress) && (
@@ -163,7 +165,7 @@ function TaskRow({ task, index, total }: { task: WikiIngestTask; index: number; 
             {usage && <span title="本次尝试 token 用量">{usage}</span>}
           </div>
         )}
-        {task.lastError && (
+        {task.lastError && !retryingDisplay && !active && (
           <div className="mt-0.5 truncate text-[10px] text-red-500" title={`${task.lastError.code}: ${task.lastError.message}`}>
             {task.lastError.message}
           </div>
@@ -201,11 +203,14 @@ function TaskRow({ task, index, total }: { task: WikiIngestTask; index: number; 
         )}
         {isRetryablePhase(task.phase) && (
           <button
-            onClick={() => void retry(task.taskId)}
+            onClick={() => {
+              setRetrying(true);
+              void retry(task.taskId).finally(() => setRetrying(false));
+            }}
             title={retryTitle}
             className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           >
-            <RotateCcw className="h-3.5 w-3.5" />
+            <RotateCcw className={cn('h-3.5 w-3.5', retrying && 'animate-spin')} />
           </button>
         )}
         {visionBlocked && (
@@ -239,11 +244,13 @@ export function KbWikiTasks() {
   const enqueue = useKbQueueStore((s) => s.enqueue);
 
   const mountedKbId = useKbStore((s) => s.kbStatus?.mounted?.kbId ?? null);
+  const uploading = useKbStore((s) => s.uploading);
 
   // ── 快照拉取 + kb:task 事件订阅（重订阅先拉快照再按 seq 应用事件）──
   useEffect(() => {
+    if (uploading) return;
     void loadSnapshot();
-  }, [loadSnapshot, mountedKbId]);
+  }, [loadSnapshot, mountedKbId, uploading]);
 
   useEffect(() => {
     if (!window.eventBridge) return;
@@ -277,7 +284,7 @@ export function KbWikiTasks() {
     return () => {
       cancelled = true;
     };
-  }, [snapshotState, mountedKbId]);
+  }, [snapshotState, mountedKbId, uploading]);
 
   const handleEnqueue = useCallback(
     (sourceId: string) => {
@@ -296,6 +303,7 @@ export function KbWikiTasks() {
 
   const paused = snapshot?.paused ?? false;
   const tasks = snapshot?.tasks ?? [];
+  const queuedSourceIds = new Set(tasks.filter((task) => task.phase !== 'done').map((task) => task.sourceId));
 
   return (
     <div className="flex-1 overflow-y-auto">
@@ -374,6 +382,7 @@ export function KbWikiTasks() {
         onToggleAssets={(id) => setAssetsOpenFor((cur) => (cur === id ? null : id))}
         onEnqueue={handleEnqueue}
         onCompile={handleCompile}
+        queuedSourceIds={queuedSourceIds}
       />
     </div>
   );
@@ -763,6 +772,27 @@ function SummaryLine({ stats, textLayer }: { stats: PdfAssetStats; textLayer: bo
 
 // ── 来源列表 ────────────────────────────────────────────────────
 
+/** 文档列表复用来源操作，不再使用旧分类文档的预览/删除入口。 */
+export function KbWikiSources() {
+  const sources = useKbStore((s) => s.wikiSources);
+  const loading = useKbStore((s) => s.documentsLoading);
+  const enqueue = useKbQueueStore((s) => s.enqueue);
+  const compile = useKbQueueStore((s) => s.compile);
+  const snapshot = useKbQueueStore((s) => s.snapshot);
+  const [assetsOpenFor, setAssetsOpenFor] = useState<string | null>(null);
+  return (
+    <SourceList
+      sources={sources}
+      sourcesLoading={loading}
+      assetsOpenFor={assetsOpenFor}
+      onToggleAssets={(id) => setAssetsOpenFor((cur) => cur === id ? null : id)}
+      onEnqueue={(id) => void enqueue([id])}
+      onCompile={(id) => void compile(id)}
+      queuedSourceIds={new Set((snapshot?.tasks ?? []).filter((task) => task.phase !== 'done').map((task) => task.sourceId))}
+    />
+  );
+}
+
 function SourceList({
   sources,
   sourcesLoading,
@@ -770,6 +800,7 @@ function SourceList({
   onToggleAssets,
   onEnqueue,
   onCompile,
+  queuedSourceIds,
 }: {
   sources: WikiSourceSummaryLite[];
   sourcesLoading: boolean;
@@ -777,6 +808,7 @@ function SourceList({
   onToggleAssets: (sourceId: string) => void;
   onEnqueue: (sourceId: string) => void;
   onCompile: (sourceId: string) => void;
+  queuedSourceIds: ReadonlySet<string>;
 }) {
   return (
     <div className="mt-4 border-t border-border">
@@ -794,6 +826,9 @@ function SourceList({
               <span className="min-w-0 flex-1 truncate text-foreground" title={s.sourcePath}>
                 {s.sourcePath}
               </span>
+              <span className="text-[10px] text-muted-foreground" title={s.errorMessage}>
+                {s.status === 'ready' ? '已转换' : s.status === 'failed' ? `转换失败：${s.errorMessage ?? ''}` : s.status === 'withdrawn' ? '已撤回' : '转换中'}
+              </span>
               {s.ext === '.pdf' && (
                 <button
                   onClick={() => onToggleAssets(s.sourceId)}
@@ -806,11 +841,12 @@ function SourceList({
               )}
               <button
                 onClick={() => onEnqueue(s.sourceId)}
-                title="加入队列"
-                className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                disabled={queuedSourceIds.has(s.sourceId)}
+                title={queuedSourceIds.has(s.sourceId) ? '该文档已在导入队列中' : '加入队列'}
+                className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <Plus className="h-3 w-3" />
-                加入队列
+                {queuedSourceIds.has(s.sourceId) ? '已在队列' : '加入队列'}
               </button>
               <button
                 onClick={() => onCompile(s.sourceId)}

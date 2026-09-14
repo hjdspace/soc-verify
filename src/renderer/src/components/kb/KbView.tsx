@@ -12,6 +12,7 @@
 import { useEffect, useCallback } from 'react';
 import { BookOpen, RefreshCw, List, Map, Eye, ListTodo, ClipboardCheck } from 'lucide-react';
 import { useKbStore } from '@renderer/stores/kb';
+import { useKbWikiStore } from '@renderer/stores/kb-wiki';
 import { cn } from '@renderer/lib/utils';
 import { KbHeader } from './KbHeader';
 import { KbCategoryTree } from './KbCategoryTree';
@@ -76,6 +77,9 @@ export function KbView() {
     if (activeTab === 'index') {
       void loadIndex();
     }
+    if (activeTab === 'wiki') {
+      void useKbWikiStore.getState().loadCatalog();
+    }
   }, [loadKbStatus, loadCategories, loadDocuments, activeTab, loadIndex]);
 
   // ─── 未挂载知识库 ─────────────────────────────────────────
@@ -104,7 +108,7 @@ export function KbView() {
       {/* ── wiki 布局能力提示：旧分类入口已停用 ─────────── */}
       {kbStatus?.mounted?.format === 'wiki' && (
         <div className="border-b border-border bg-secondary/50 px-4 py-1.5 text-[11px] text-muted-foreground">
-          新布局（LLM Wiki）知识库已挂载：文档导入、分类与索引能力暂未就绪，将由知识库新流水线提供。
+          新布局（LLM Wiki）知识库已挂载：上传文档后自动转换并编译，在「导入任务」查看进度，前往「知识审阅」接受并发布提案后，即可在「知识页」浏览。
         </div>
       )}
 

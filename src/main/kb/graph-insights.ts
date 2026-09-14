@@ -29,6 +29,8 @@ import type {
   WikiStructuralFinding,
 } from '@shared/kb-types';
 import { computeFindingId } from './structural-lint';
+import { buildWikiGraphSnapshot } from './wiki-graph';
+import { assertReadGateOpen, WikiReadGateError } from './read-gate';
 
 // ── 无向图构建 ──────────────────────────────────────────────────
 
@@ -491,9 +493,6 @@ export async function runGraphInsights(
   kbPath: string,
   options?: RunGraphInsightsOptions,
 ): Promise<WikiGraphInsightResult> {
-  const { buildWikiGraphSnapshot } = await import('./wiki-graph');
-  const { assertReadGateOpen, WikiReadGateError } = await import('./read-gate');
-
   // 读取门禁
   try {
     await assertReadGateOpen(kbPath);
