@@ -9,12 +9,13 @@
  * 向渲染进程推送实时进度。abortClosure 同时中止 orchestrator。
  */
 
-import { BrowserWindow, dialog } from 'electron';
+import { BrowserWindow, dialog, shell } from 'electron';
 import { writeFile } from 'node:fs/promises';
 import { t, TRPCError } from '../router-context';
 import { requireProject } from '../../services/project-service';
 import { CoverageManager } from '../../coverage/coverage-manager';
 import { coverageRegistry } from '../../coverage/coverage-registry';
+import { WaiveManager } from '../../coverage/waive/waive-manager';
 import { ClosureManager } from '../../coverage/closure-manager';
 import { ClosureOrchestrator, type ClosureEvent } from '../../coverage/closure-orchestrator';
 import { TestPromoter } from '../../coverage/test-promoter';
@@ -70,6 +71,17 @@ function emitCoverageDetailProgress(event: ImportProgressEvent): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
       win.webContents.send('coverage:detail-progress', event);
+    }
+  }
+}
+
+/**
+ * 向所有 BrowserWindow 转发 waive 文件生成进度事件。
+ */
+function emitCoverageWaiveProgress(event: ImportProgressEvent): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      win.webContents.send('coverage:waive-progress', event);
     }
   }
 }
@@ -393,6 +405,97 @@ export const coverageRouter = t.router({
         sortOrder: input.sortOrder,
       });
       return { detail: result, parsed: result !== null };
+    }),
+
+  // ─── 覆盖率 waive 自动生成（docs/coverage_auto_waive.md） ───────
+  // 前置：parseDetailMetrics 已持久化 <sessionId>-detail.json。
+
+  generateWaive: t.procedure
+    .input((raw): { projectId: string; sessionId: string; topScope?: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.sessionId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and sessionId are required' });
+      }
+      return {
+        projectId: r.projectId,
+        sessionId: r.sessionId,
+        topScope: typeof r.topScope === 'string' ? r.topScope : undefined,
+      };
+    })
+    .mutation(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const mgr = new WaiveManager(project.rootPath);
+      return mgr.generate(
+        { sessionId: input.sessionId, topScope: input.topScope },
+        emitCoverageWaiveProgress,
+      );
+    }),
+
+  listWaiveHistory: t.procedure
+    .input((raw): { projectId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      return { projectId: r.projectId };
+    })
+    .query(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const mgr = new WaiveManager(project.rootPath);
+      return { history: await mgr.listHistory() };
+    }),
+
+  getWaiveAnalysis: t.procedure
+    .input((raw): { projectId: string; runId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.runId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and runId are required' });
+      }
+      return { projectId: r.projectId, runId: r.runId };
+    })
+    .query(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const mgr = new WaiveManager(project.rootPath);
+      return { analysis: await mgr.loadAnalysis(input.runId) };
+    }),
+
+  deleteWaiveHistory: t.procedure
+    .input((raw): { projectId: string; runId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.runId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and runId are required' });
+      }
+      return { projectId: r.projectId, runId: r.runId };
+    })
+    .mutation(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const mgr = new WaiveManager(project.rootPath);
+      return { ok: await mgr.deleteHistoryEntry(input.runId) };
+    }),
+
+  /** 打开 waive 产物目录（或单条 run 的 .vRefine 文件）于系统文件管理器 */
+  openWaiveDir: t.procedure
+    .input((raw): { projectId: string; runId?: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      return { projectId: r.projectId, runId: typeof r.runId === 'string' ? r.runId : undefined };
+    })
+    .mutation(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const mgr = new WaiveManager(project.rootPath);
+      let path = mgr.waiveDir();
+      if (input.runId) {
+        const history = await mgr.listHistory();
+        const entry = history.find((e) => e.runId === input.runId);
+        if (entry) path = entry.outputPath;
+      }
+      const errorMessage = await shell.openPath(path);
+      if (errorMessage) {
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: `打开目录失败: ${errorMessage}` });
+      }
+      return { ok: true, path };
     }),
 
   // ─── Session 生命周期（ADR 0008） ─────────────────────────────
