@@ -213,6 +213,31 @@ process.once('loaded', async () => {
       return () => ipcRenderer.removeListener('coverage:detail-progress', handler);
     },
 
+    // ── 覆盖率 waive 文件生成进度 ──────────────────────────────
+    // coverage:waive-progress —— 主进程推送 .vRefine 自动生成各步骤进度到前端
+    onCoverageWaiveProgress: (
+      callback: (data: {
+        step: string;
+        message: string;
+        percent?: number;
+        durationMs?: number;
+        details?: Record<string, unknown>;
+      }) => void,
+    ) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        data: {
+          step: string;
+          message: string;
+          percent?: number;
+          durationMs?: number;
+          details?: Record<string, unknown>;
+        },
+      ) => callback(data);
+      ipcRenderer.on('coverage:waive-progress', handler);
+      return () => ipcRenderer.removeListener('coverage:waive-progress', handler);
+    },
+
     // ── Issue #9: Browser window-open events ────────────────────
     // browser:open-new-tab —— 主进程通知前端打开新的浏览器标签页
     onBrowserOpenNewTab: (callback: (data: { url: string }) => void) => {
