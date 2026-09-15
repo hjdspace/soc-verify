@@ -259,6 +259,81 @@ export type CoverageDetailSummary = {
   parsedAt: number;
 };
 
+// ─── Coverage Waive（RTL 静态分析自动生成 .vRefine 排除文件） ────
+
+/** 三类结构性不可覆盖信号（docs/coverage_auto_waive.md §0.2） */
+export type WaiveSignalKind = 'const_assign' | 'input_tie' | 'output_floating';
+
+/**
+ * 单条识别出的结构性不可覆盖信号（中间产物明细的原子单元）。
+ * kind=const_assign 时 hier 为 instance 路径、signal 为 assign 左值；
+ * kind=input_tie / output_floating 时 hier 为 <instance>.<子例化名>，
+ * signal 为子模块端口名。
+ */
+export type WaiveSignal = {
+  kind: WaiveSignalKind;
+  /** 信号所在层级路径（点分，如 tb_top.chip_top.dut.u_a.u_b） */
+  hier: string;
+  /** 信号/端口名（可带位选，如 data[3]） */
+  signal: string;
+  /** 来源 RTL 文件（detail.txt 的 File name，绝对路径） */
+  file: string;
+  /** 来源 RTL 行号（1-based，0 = 未知） */
+  line: number;
+  /** tie 常量原文（kind=input_tie 时，如 1'b0） */
+  tieValue?: string;
+};
+
+/** 单个 RTL 文件的分析统计（waive-analysis.json 中 per-file 维度） */
+export type WaiveFileStat = {
+  file: string;
+  /** detail instance 中引用该文件的实例路径列表（去重前） */
+  instanceCount: number;
+  /** 识别出的不可覆盖信号数（含三类） */
+  signalCount: number;
+  /** 识别失败原因（文件不可读 / 解析异常等），成功时为空 */
+  warning?: string;
+};
+
+/**
+ * 一次 waive 生成的中间产物（debug 用）。
+ * 持久化到 `.socverify/coverage/waive/<runId>/waive-analysis.json`。
+ */
+export type WaiveAnalysisData = {
+  runId: string;
+  sessionId: string;
+  generatedAt: number;
+  /** 参与分析的 detail instance 总数 */
+  instanceCount: number;
+  /** 去重后实际读取的 RTL 文件数 */
+  fileCount: number;
+  signals: WaiveSignal[];
+  fileStats: WaiveFileStat[];
+  /** 越界（不属于 top 层级）被丢弃的信号数 */
+  droppedOutOfRange: number;
+  warnings: string[];
+  /** 各阶段耗时（ms） */
+  timings: { rtlScanMs: number; xmlRenderMs: number; totalMs: number };
+};
+
+/**
+ * waive 生成历史记录（快速重生成入口）。
+ * 列表持久化到 `.socverify/coverage/waive/history.json`（最新在前），
+ * 每条记录的产物在 `.socverify/coverage/waive/<runId>/` 目录。
+ */
+export type WaiveHistoryEntry = {
+  runId: string;
+  sessionId: string;
+  generatedAt: number;
+  /** 有效 rule 数（写入 .vRefine 的排除条数） */
+  ruleCount: number;
+  signalCounts: Record<WaiveSignalKind, number>;
+  /** 生成的 .vRefine 绝对路径 */
+  outputPath: string;
+  durationMs: number;
+  warnings: string[];
+};
+
 // ─── CoverageData（插件返回 + 平台缓存） ───────────────────────
 
 /**
