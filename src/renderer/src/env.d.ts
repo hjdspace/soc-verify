@@ -91,6 +91,16 @@ export interface EventBridgeAPI {
       details?: Record<string, unknown>;
     }) => void,
   ) => () => void;
+  // 覆盖率 waive 文件生成进度（.vRefine 自动生成时推送）
+  onCoverageWaiveProgress: (
+    callback: (data: {
+      step: string;
+      message: string;
+      percent?: number;
+      durationMs?: number;
+      details?: Record<string, unknown>;
+    }) => void,
+  ) => () => void;
   // Issue #9: Browser window-open events
   onBrowserOpenNewTab: (callback: (data: { url: string }) => void) => () => void;
   onAuthPopup: (callback: (data: { type: 'opened' | 'closed'; url: string }) => void) => () => void;
