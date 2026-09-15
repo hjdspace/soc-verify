@@ -47,6 +47,12 @@ const mocks = vi.hoisted(() => ({
     loadClosures: vi.fn().mockResolvedValue(undefined),
     abortClosure: vi.fn().mockResolvedValue(undefined),
   },
+  waive: {
+    generating: false,
+    generateWaive: vi.fn().mockResolvedValue(true),
+    registerProgressListener: vi.fn(),
+    loadHistory: vi.fn().mockResolvedValue(undefined),
+  },
   proj: {
     currentProjectId: 'proj-1',
   },
@@ -57,6 +63,7 @@ vi.mock('@renderer/stores/coverage', () => ({
   useCoverageGapsStore: (selector: (s: Record<string, unknown>) => unknown) => selector({}),
   useCoverageClosureStore: (selector: (s: typeof mocks.closure) => unknown) => selector(mocks.closure),
   useCoverageExportStore: (selector: (s: Record<string, unknown>) => unknown) => selector({}),
+  useCoverageWaiveStore: (selector: (s: typeof mocks.waive) => unknown) => selector(mocks.waive),
 }));
 
 vi.mock('@renderer/stores/project', () => ({
