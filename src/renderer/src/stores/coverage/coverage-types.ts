@@ -113,3 +113,8 @@ export type ImportStepLogEntry = {
 
 export type DetailProgressEvent = ImportProgressEvent;
 export type DetailParseStepLogEntry = ImportStepLogEntry;
+
+// ─── waive 生成进度事件类型（与 detail-progress 同结构） ─────────
+
+export type WaiveProgressEvent = ImportProgressEvent;
+export type WaiveStepLogEntry = ImportStepLogEntry;
