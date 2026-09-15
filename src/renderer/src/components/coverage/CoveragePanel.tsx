@@ -11,13 +11,14 @@ import {
   Loader2, BarChart3, Upload, ChevronRight,
   Target as TargetIcon, AlertTriangle, ShieldBan, GitCompare, Trash2, Plus,
   Activity, Square, Download, FolderOpen, Bug, X,
-  Trophy, EyeOff, CheckCircle2, Clock, Zap, Layers,
+  Trophy, EyeOff, CheckCircle2, Clock, Zap, Layers, ShieldCheck,
 } from 'lucide-react';
 import {
   useCoverageCoreStore,
   useCoverageGapsStore,
   useCoverageClosureStore,
   useCoverageExportStore,
+  useCoverageWaiveStore,
 } from '@renderer/stores/coverage';
 import { useProjectStore } from '@renderer/stores/project';
 import { cn } from '@renderer/lib/utils';
@@ -31,6 +32,7 @@ import { CoverageTreeTable } from './CoverageTreeTable';
 import { CoverageDashboard } from './CoverageDashboard';
 import { ClosureDetailPage } from './ClosureDetailPage';
 import { TargetsSection, METRIC_LABELS } from './TargetsSection';
+import { WaiveSection } from './WaiveSection';
 
 const EDA_TOOL_OPTIONS: Array<{ value: EdaTool; label: string }> = [
   { value: 'imc', label: 'Cadence IMC' },
@@ -53,7 +55,7 @@ const TRIAGE_CONFIDENCES: Array<{ value: TriageConfidence; label: string }> = [
   { value: 'low', label: '低' },
 ];
 
-type Tab = 'targets' | 'gaps' | 'exclusions' | 'delta' | 'grade' | 'uncovered';
+type Tab = 'targets' | 'gaps' | 'exclusions' | 'delta' | 'grade' | 'uncovered' | 'waive';
 
 const TABS: Array<{ id: Tab; label: string; icon: typeof BarChart3 }> = [
   { id: 'targets', label: '目标', icon: TargetIcon },
@@ -62,6 +64,7 @@ const TABS: Array<{ id: Tab; label: string; icon: typeof BarChart3 }> = [
   { id: 'delta', label: '对比', icon: GitCompare },
   { id: 'grade', label: '贡献度', icon: Trophy },
   { id: 'uncovered', label: '未覆盖', icon: EyeOff },
+  { id: 'waive', label: 'Waive', icon: ShieldCheck },
 ];
 
 export function CoveragePanel() {
@@ -128,6 +131,11 @@ export function CoveragePanel() {
   const registerClosureEventListener = useCoverageClosureStore((s) => s.registerClosureEventListener);
   const loadClosures = useCoverageClosureStore((s) => s.loadClosures);
   const abortClosure = useCoverageClosureStore((s) => s.abortClosure);
+
+  // ─── Waive 生成（waive store，工具栏快速入口） ──────────────
+  const waiveGenerating = useCoverageWaiveStore((s) => s.generating);
+  const generateWaive = useCoverageWaiveStore((s) => s.generateWaive);
+  const registerWaiveProgressListener = useCoverageWaiveStore((s) => s.registerProgressListener);
 
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
 
@@ -211,6 +219,16 @@ export function CoveragePanel() {
     if (!currentProjectId || !currentSessionId) return;
     await parseDetailMetrics(currentProjectId, currentSessionId);
   };
+
+  const handleGenerateWaive = async () => {
+    if (!currentProjectId || !currentSessionId) return;
+    await generateWaive(currentProjectId, currentSessionId);
+  };
+
+  // 注册 coverage:waive-progress IPC 监听器（幂等，全局一次）
+  useEffect(() => {
+    registerWaiveProgressListener();
+  }, [registerWaiveProgressListener]);
 
   if (loading && !tree) {
     return (
@@ -485,6 +503,22 @@ export function CoveragePanel() {
           </button>
         )}
         {currentSessionId && detailMetricsParsed && (
+          <button
+            onClick={handleGenerateWaive}
+            disabled={waiveGenerating}
+            className="flex items-center gap-1 rounded border border-primary/50 bg-primary/10 px-2 py-1 text-xs text-primary hover:bg-primary/20 disabled:opacity-50"
+            data-testid="coverage-generate-waive-button"
+            title="静态分析 RTL 生成 .vRefine 覆盖率排除文件（可重复生成，历史在 Waive Tab 查看）"
+          >
+            {waiveGenerating ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <ShieldCheck className="h-3 w-3" />
+            )}
+            {waiveGenerating ? '生成 waive 中...' : '生成 waive'}
+          </button>
+        )}
+        {currentSessionId && detailMetricsParsed && (
           <span className="flex items-center gap-1 text-[10px] text-primary" data-testid="coverage-detail-metrics-parsed">
             <CheckCircle2 className="h-3 w-3" />
             detail 已解析
@@ -697,6 +731,7 @@ export function CoveragePanel() {
               {tab === 'delta' && <DeltaSection currentProjectId={currentProjectId} sessions={sessions} />}
               {tab === 'grade' && <GradeSection currentProjectId={currentProjectId} currentSessionId={currentSessionId} />}
               {tab === 'uncovered' && <UncoveredSection currentProjectId={currentProjectId} currentSessionId={currentSessionId} />}
+              {tab === 'waive' && <WaiveSection currentProjectId={currentProjectId} currentSessionId={currentSessionId} />}
             </>
           )}
         </>
